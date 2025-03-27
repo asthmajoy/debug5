@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
 import { PROPOSAL_STATES, PROPOSAL_TYPES } from '../utils/constants';
 import { formatRelativeTime, formatBigNumber, formatAddress, formatTime } from '../utils/formatters';
+import { addressesEqual, diagnoseMismatchedAddresses } from '../utils/addressUtils'; // Import our new utility
 import Loader from './Loader';
 import { ChevronDown, ChevronUp, Copy, Check, AlertTriangle } from 'lucide-react';
 
@@ -1079,7 +1080,7 @@ const ProposalsTab = ({
     );
   };
 
-  // FIXED VERSION: Enhanced function to check if a user can claim a refund with verbose debugging
+  // FIXED VERSION: Enhanced function to check if a user can claim a refund with proper address comparison
   const canClaimRefund = (proposal) => {
     // Log that the function is being called
     console.debug(`REFUND CHECK: Started check for proposal #${proposal?.id || 'unknown'}`);
@@ -1096,13 +1097,20 @@ const ProposalsTab = ({
       return false;
     }
     
-    // Normalize addresses for comparison - extra careful with formatting
-    const userAddress = account.toLowerCase().trim();
-    const proposerAddress = proposal.proposer.toLowerCase().trim();
+    // Use our address utility functions for robust address comparison
+    // Check if addresses are equal using our utility
+    const isProposer = addressesEqual(account, proposal.proposer);
     
-    // Check if the user is the proposer of this proposal
-    const isProposer = userAddress === proposerAddress;
-    console.debug(`REFUND CHECK: User address: ${userAddress}, Proposer: ${proposerAddress}, isProposer: ${isProposer}`);
+    // For debugging, log the detailed diagnostics about the addresses
+    const addressDiagnostics = diagnoseMismatchedAddresses({
+      address1: account,
+      address2: proposal.proposer,
+      label1: 'userAddress',
+      label2: 'proposerAddress'
+    });
+    
+    console.debug('REFUND CHECK: Address comparison details:', addressDiagnostics);
+    console.debug(`REFUND CHECK: Is proposer: ${isProposer}`);
     
     if (!isProposer) {
       console.debug('REFUND CHECK: User is not the proposer, returning false');
@@ -1130,27 +1138,39 @@ const ProposalsTab = ({
       EXPIRED: PROPOSAL_STATES.EXPIRED
     });
     
-    // Convert state to a number for accurate comparison
-    const proposalState = Number(proposal.state);
+    // Multiple approaches to check if the state is refundable
     
-    console.debug(`REFUND CHECK: Proposal state: ${proposalState}, stateLabel: ${proposal.stateLabel}`);
-    console.debug(`REFUND CHECK: Refundable states: ${refundableStates.join(', ')}`);
-    console.debug(`REFUND CHECK: Is in refundable state: ${refundableStates.includes(proposalState)}`);
-    
-    const result = refundableStates.includes(proposalState);
-    console.debug(`REFUND CHECK: Final result: ${result}`);
-    
-    // Force a true return for testing if result is false but conditions seem right
-    // Uncomment to test if the button appears with forced true return
-    /*
-    if (!result && isProposer && !proposal.stakeRefunded && 
-        (proposal.stateLabel.toLowerCase() === 'defeated' || 
-         proposal.stateLabel.toLowerCase() === 'canceled' || 
-         proposal.stateLabel.toLowerCase() === 'expired')) {
-      console.debug('REFUND CHECK: Forcing true for testing!');
-      return true;
+    // Approach 1: Check using the raw state number
+    let proposalState;
+    try {
+      // Handle various input types for state
+      if (typeof proposal.state === 'object' && proposal.state._isBigNumber) {
+        // Handle ethers.js BigNumber
+        proposalState = proposal.state.toNumber();
+      } else {
+        proposalState = Number(proposal.state);
+      }
+      console.debug(`REFUND CHECK: Converted proposal state: ${proposalState} (${typeof proposalState})`);
+    } catch (err) {
+      console.error('REFUND CHECK: Error converting state to number:', err);
+      proposalState = -1; // Invalid state that won't match
     }
-    */
+    
+    const isStateRefundable = refundableStates.includes(proposalState);
+    console.debug(`REFUND CHECK: Numeric state check: ${proposalState} in [${refundableStates.join(', ')}] = ${isStateRefundable}`);
+    
+    // Approach 2: Check using the state label (more reliable)
+    const stateLabelLower = (proposal.stateLabel || '').toLowerCase().trim();
+    const isLabelRefundable = ['defeated', 'canceled', 'expired'].includes(stateLabelLower);
+    console.debug(`REFUND CHECK: Label state check: "${stateLabelLower}" in ["defeated", "canceled", "expired"] = ${isLabelRefundable}`);
+    
+    // Use either approach, preferring the label check as it's less prone to bugs
+    const isRefundable = isStateRefundable || isLabelRefundable;
+    console.debug(`REFUND CHECK: Final refundable state determination: ${isRefundable}`);
+    
+    // Final check with all conditions
+    const result = isProposer && isRefundable && !proposal.stakeRefunded;
+    console.debug(`REFUND CHECK: Final result (all conditions): ${result} (isProposer && isRefundable && !stakeRefunded)`);
     
     return result;
   };
@@ -1399,15 +1419,17 @@ const ProposalsTab = ({
                   )}
                 </button>
                 
-                {proposal.state === PROPOSAL_STATES.ACTIVE && (
-                  <button 
-                    className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-md text-sm"
-                    onClick={() => handleProposalAction(cancelProposal, proposal.id, 'cancelling')}
-                    disabled={loading}
-                  >
-                    Cancel
-                  </button>
-                )}
+                {proposal.state === PROPOSAL_STATES.ACTIVE && 
+ addressesEqual(account, proposal.proposer) && 
+ (!proposal.hasVotes) && (
+  <button 
+    className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-md text-sm"
+    onClick={() => handleProposalAction(cancelProposal, proposal.id, 'cancelling')}
+    disabled={loading}
+  >
+    Cancel
+  </button>
+)}
                 
                 {/* Show Queue button only for SUCCEEDED proposals that haven't been queued yet */}
                 {proposal.state === PROPOSAL_STATES.SUCCEEDED && !proposal.isQueued && (
@@ -1433,48 +1455,150 @@ const ProposalsTab = ({
                 
                 {/* FIXED: Display claim stake button for defeated/canceled/expired proposals */}
                 {(() => {
-                  // Run eligibility check with extensive logging
-                  const canClaim = canClaimRefund(proposal);
-                  
-                  // Also check manually for debugging purposes
-                  const isProposer = account && proposal.proposer && 
-                                     account.toLowerCase().trim() === proposal.proposer.toLowerCase().trim();
-                  
-                  const isRefundableState = proposal.stateLabel && 
-                                           ['defeated', 'canceled', 'expired'].includes(proposal.stateLabel.toLowerCase());
-                  
-                  // Log additional Debug info
-                  if (isProposer && isRefundableState) {
-                    console.debug(`RENDER CHECK: Proposal #${proposal.id} - isProposer:${isProposer}, refundableState:${isRefundableState}, stakeRefunded:${proposal.stakeRefunded}, canClaim:${canClaim}`);
-                  }
-                  
-                  // Show button if the main check passed OR if we detect it should qualify
-                  const shouldShowButton = canClaim || (isProposer && isRefundableState && !proposal.stakeRefunded);
-                  
-                  return shouldShowButton ? (
-                    <button 
-                      className="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded-md text-sm flex items-center"
-                      onClick={() => handleProposalAction(claimRefund, proposal.id, 'claiming refund for')}
-                      disabled={loading}
-                    >
-                      <svg 
-                        xmlns="http://www.w3.org/2000/svg" 
-                        className="h-4 w-4 mr-1" 
-                        fill="none" 
-                        viewBox="0 0 24 24" 
-                        stroke="currentColor"
-                      >
-                        <path 
-                          strokeLinecap="round" 
-                          strokeLinejoin="round" 
-                          strokeWidth={2} 
-                          d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" 
-                        />
-                      </svg>
-                      Claim Stake Refund
-                    </button>
-                  ) : null;
-                })()}
+  // Step 1: Log ALL possible data for debugging
+  console.log(`CLAIM BUTTON DATA - Proposal #${proposal.id}:`, {
+    proposalData: proposal,
+    userAccount: account,
+    proposerAddress: proposal.proposer,
+    proposalState: proposal.state, 
+    stateLabel: proposal.stateLabel,
+    stakeRefunded: proposal.stakeRefunded
+  });
+  
+  // Step 2: Super-normalize both addresses for comparison
+  const normUser = (account || '').toString().toLowerCase().replace(/\s+/g, '');
+  const normProposer = (proposal.proposer || '').toString().toLowerCase().replace(/\s+/g, '');
+  
+  // If they have 0x prefixes, compare without them too
+  const normUserNoPrefix = normUser.startsWith('0x') ? normUser.slice(2) : normUser;
+  const normProposerNoPrefix = normProposer.startsWith('0x') ? normProposer.slice(2) : normProposer;
+  
+  // Try multiple comparison strategies 
+  const addressesMatch = (
+    normUser === normProposer ||                  // Regular comparison
+    normUserNoPrefix === normProposerNoPrefix ||  // No prefix comparison
+    normUser.includes(normProposerNoPrefix) ||    // Partial inclusion
+    normProposer.includes(normUserNoPrefix)       // Partial inclusion (reverse)
+  );
+  
+  // Step 3: Check refundable state using multiple methods
+  // Method 1: Using numeric state
+  const refundableStates = [
+    PROPOSAL_STATES.DEFEATED,  // 2 
+    PROPOSAL_STATES.CANCELED,  // 1
+    PROPOSAL_STATES.EXPIRED    // 6
+  ];
+  
+  let proposalState = -1;
+  try {
+    // Handle various input types for state
+    if (typeof proposal.state === 'object' && proposal.state._isBigNumber) {
+      // Handle ethers.js BigNumber
+      proposalState = proposal.state.toNumber();
+    } else {
+      proposalState = Number(proposal.state);
+    }
+  } catch (err) {
+    console.error('Error converting state:', err);
+  }
+  
+  const isRefundableByState = refundableStates.includes(proposalState);
+  
+  // Method 2: Using string state label (more reliable)
+  const stateLabelLower = (proposal.stateLabel || '').toString().toLowerCase().trim();
+  const isRefundableByLabel = ['defeated', 'canceled', 'expired'].includes(stateLabelLower);
+  
+  // Combined check
+  const isRefundableState = isRefundableByState || isRefundableByLabel;
+  
+  // Step 4: Check if stake has already been refunded
+  const notYetRefunded = !proposal.stakeRefunded;
+  
+  // Step 5: Log all comparison results
+  console.log(`CLAIM BUTTON COMPARISON - Proposal #${proposal.id}:`, {
+    addressComparison: {
+      normUser,
+      normProposer,
+      normUserNoPrefix,
+      normProposerNoPrefix,
+      addressesMatch
+    },
+    stateComparison: {
+      proposalState,
+      stateLabelLower,
+      isRefundableByState,
+      isRefundableByLabel,
+      isRefundableState
+    },
+    refundStatus: {
+      stakeRefunded: proposal.stakeRefunded,
+      notYetRefunded
+    }
+  });
+  
+  // Final eligibility check - standard approach
+  const normalShouldShowButton = addressesMatch && isRefundableState && notYetRefunded;
+  
+  // ========== EMERGENCY OVERRIDE OPTIONS ==========
+  // Option 1: Force button to show for all refundable, not-yet-refunded proposals 
+  // Uncomment to use this option
+  const forceShowAll = false; // Set to true to force button for all refundable proposals
+  
+  // Option 2: Force button to show for specific proposal IDs
+  // Uncomment and add IDs to use this option
+  const targetProposalIds = []; // e.g. [1, 5, 7] for proposals #1, #5, and #7
+  const forceShowForIds = targetProposalIds.includes(proposal.id);
+  
+  // Option 3: Manually enter the address that should see the button
+  // Replace with your actual wallet address to force-enable the button
+  const yourRealAddress = ''; // e.g. '0x123abc...'
+  const forceShowForAddress = normUser === yourRealAddress.toLowerCase();
+  
+  // Combined force override
+  const forceShowButton = forceShowAll || forceShowForIds || forceShowForAddress;
+  
+  // Final decision: show if normal check passed OR if force override is active
+  const shouldShowButton = normalShouldShowButton || 
+    (forceShowButton && isRefundableState && notYetRefunded);
+  
+  // Log the final decision
+  console.log(`CLAIM BUTTON DECISION - Proposal #${proposal.id}: ${shouldShowButton ? 'SHOW' : 'HIDE'}`);
+  
+  // ========== VISIBLE DEBUG INFO ==========
+  // This adds a visible debug panel to the UI
+  const showDebugInfo = isRefundableState && notYetRefunded;
+  
+  return (
+    <>
+     
+    
+      {/* The actual claim button */}
+      {shouldShowButton && (
+        <button 
+          className="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded-md text-sm flex items-center"
+          onClick={() => handleProposalAction(claimRefund, proposal.id, 'claiming refund for')}
+          disabled={loading}
+        >
+          <svg 
+            xmlns="http://www.w3.org/2000/svg" 
+            className="h-4 w-4 mr-1" 
+            fill="none" 
+            viewBox="0 0 24 24" 
+            stroke="currentColor"
+          >
+            <path 
+              strokeLinecap="round" 
+              strokeLinejoin="round" 
+              strokeWidth={2} 
+              d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" 
+            />
+          </svg>
+          Claim Stake Refund
+        </button>
+      )}
+    </>
+  );
+})()}
               </div>
             </div>
           ))

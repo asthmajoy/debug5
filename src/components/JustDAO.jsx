@@ -257,6 +257,8 @@ const JustDAODashboard = () => {
       balance: formatTokenAmount(userData.balance)
     }}
     contracts={contracts} // Make sure this line exists
+    account={account} // Add this line to pass the account
+    fetchProposals={proposalsHook.fetchProposals} // Add this line for the fetchProposals function
   />
 )}
         
