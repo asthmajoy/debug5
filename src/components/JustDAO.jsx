@@ -1,4 +1,3 @@
-// src/components/JustDAO.jsx - Fixed import line and references
 import React, { useState, useEffect } from 'react';
 import { useWeb3 } from '../contexts/Web3Context';
 import { useAuth } from '../contexts/AuthContext';
@@ -12,6 +11,7 @@ import SecuritySettingsTab from './SecuritySettingsTab';
 import RoleManagementTab from './RoleManagementTab';
 import TimelockSettingsTab from './TimelockSettingsTab';
 import EmergencyControlsTab from './EmergencyControlsTab';
+import PendingTransactionsTab from './PendingTransactionsTab'; // Import new component
 import ProposalsTab from './ProposalsTab';
 import VoteTab from './VoteTab';
 import DelegationTab from './DelegationTab';
@@ -30,7 +30,7 @@ const JustDAODashboard = () => {
   const [activeTab, setActiveTab] = useState('dashboard');
   
   // State for active security subtab
-  const [securitySubtab, setSecuritySubtab] = useState('general');
+  const [securitySubtab, setSecuritySubtab] = useState('emergency');
   
   // Web3 context for blockchain connection
   const { account, isConnected, connectWallet, disconnectWallet, contracts } = useWeb3();
@@ -122,16 +122,16 @@ const JustDAODashboard = () => {
   // Render security subcomponent based on securitySubtab state
   const renderSecuritySubtab = () => {
     switch (securitySubtab) {
-      case 'general':
-        return <SecuritySettingsTab contracts={contracts} />;
+      case 'emergency':
+        return <EmergencyControlsTab contracts={contracts} account={account} hasRole={hasRole} />;
       case 'roles':
         return <RoleManagementTab contracts={contracts} />;
       case 'timelock':
         return <TimelockSettingsTab contracts={contracts} />;
-      case 'emergency':
-        return <EmergencyControlsTab contracts={contracts} account={account} hasRole={hasRole} />;
+      case 'pending':
+        return <PendingTransactionsTab contracts={contracts} account={account} />;
       default:
-        return <SecuritySettingsTab contracts={contracts} />;
+        return <EmergencyControlsTab contracts={contracts} account={account} hasRole={hasRole} />;
     }
   };
 
@@ -190,7 +190,7 @@ const JustDAODashboard = () => {
               <div className="text-sm text-gray-700">
                 <div>{formatAddress(account)}</div>
                 <div className="flex gap-2">
-                  <span>{formatTokenForHeader(userData.balance)} JUST</span>
+                  <span>{formatTokenForHeader(userData.balance)} JST</span>
                   <span>|</span>
                   {/* Use the improved voting power calculation function */}
                   <span>{formatTokenForHeader(getCorrectVotingPower())} Voting Power</span>
@@ -201,15 +201,6 @@ const JustDAODashboard = () => {
             )}
             {isConnected ? (
               <div className="flex gap-2">
-                <button 
-                  className="bg-gray-200 hover:bg-gray-300 text-gray-700 p-2 rounded-md"
-                  onClick={handleRefresh}
-                  title="Refresh data"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clipRule="evenodd" />
-                  </svg>
-                </button>
                 <button 
                   className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md"
                   onClick={disconnectWallet}
@@ -279,7 +270,7 @@ const JustDAODashboard = () => {
                 className={`py-4 px-6 cursor-pointer border-b-2 ${activeTab === 'security' ? 'border-indigo-500 text-indigo-600' : 'border-transparent hover:text-gray-700 hover:border-gray-300'}`}
                 onClick={() => {
                   setActiveTab('security');
-                  setSecuritySubtab('general');
+                  setSecuritySubtab('emergency');
                 }}
                 data-tab="security"
               >
@@ -333,17 +324,13 @@ const JustDAODashboard = () => {
             }))}
             createProposal={proposalsHook.createProposal}
             cancelProposal={proposalsHook.cancelProposal}
-            queueProposalWithThreatLevel={proposalsHook.queueProposalWithThreatLevel}
+            queueProposal={proposalsHook.queueProposal}
             executeProposal={proposalsHook.executeProposal}
             claimRefund={proposalsHook.claimRefund}
             loading={proposalsHook.loading}
-            user={{
-              ...userData,
-              balance: formatTokenAmount(userData.balance)
-            }}
-            contracts={contracts} // Make sure this line exists
-            account={account} // Add this line to pass the account
-            fetchProposals={proposalsHook.fetchProposals} // Add this line for the fetchProposals function
+            contracts={contracts}
+            account={account}
+            fetchProposals={proposalsHook.fetchProposals}
           />
         )}
         
@@ -403,37 +390,37 @@ const JustDAODashboard = () => {
             <div className="bg-white p-4 rounded-lg shadow mb-6">
               <div className="flex flex-wrap gap-2">
                 <button
-                  className={`px-3 py-1 rounded-full text-sm ${securitySubtab === 'general' ? 'bg-indigo-100 text-indigo-800' : 'bg-gray-100 text-gray-800'}`}
-                  onClick={() => setSecuritySubtab('general')}
+                  className={`px-3 py-1 rounded-full text-sm ${securitySubtab === 'emergency' ? 'bg-indigo-100 text-indigo-800' : 'bg-gray-100 text-gray-800'}`}
+                  onClick={() => setSecuritySubtab('emergency')}
                 >
-                  General Security
+                  Emergency Controls
                 </button>
                 
-                {hasRole('admin') && (
-                  <button
-                    className={`px-3 py-1 rounded-full text-sm ${securitySubtab === 'roles' ? 'bg-indigo-100 text-indigo-800' : 'bg-gray-100 text-gray-800'}`}
-                    onClick={() => setSecuritySubtab('roles')}
-                  >
-                    Role Management
-                  </button>
-                )}
+                {/* Pending Transactions tab - visible to both admin and guardian roles */}
+                <button
+                  className={`px-3 py-1 rounded-full text-sm ${securitySubtab === 'pending' ? 'bg-indigo-100 text-indigo-800' : 'bg-gray-100 text-gray-800'}`}
+                  onClick={() => setSecuritySubtab('pending')}
+                >
+                  Pending Transactions
+                </button>
                 
+                {/* These tabs are only visible to admin roles */}
                 {hasRole('admin') && (
-                  <button
-                    className={`px-3 py-1 rounded-full text-sm ${securitySubtab === 'timelock' ? 'bg-indigo-100 text-indigo-800' : 'bg-gray-100 text-gray-800'}`}
-                    onClick={() => setSecuritySubtab('timelock')}
-                  >
-                    Timelock
-                  </button>
-                )}
-                
-                {(hasRole('admin') || hasRole('guardian')) && (
-                  <button
-                    className={`px-3 py-1 rounded-full text-sm ${securitySubtab === 'emergency' ? 'bg-indigo-100 text-indigo-800' : 'bg-gray-100 text-gray-800'}`}
-                    onClick={() => setSecuritySubtab('emergency')}
-                  >
-                    Emergency Controls
-                  </button>
+                  <>
+                    <button
+                      className={`px-3 py-1 rounded-full text-sm ${securitySubtab === 'roles' ? 'bg-indigo-100 text-indigo-800' : 'bg-gray-100 text-gray-800'}`}
+                      onClick={() => setSecuritySubtab('roles')}
+                    >
+                      Role Management
+                    </button>
+                    
+                    <button
+                      className={`px-3 py-1 rounded-full text-sm ${securitySubtab === 'timelock' ? 'bg-indigo-100 text-indigo-800' : 'bg-gray-100 text-gray-800'}`}
+                      onClick={() => setSecuritySubtab('timelock')}
+                    >
+                      Timelock Settings
+                    </button>
+                  </>
                 )}
               </div>
             </div>

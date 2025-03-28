@@ -162,8 +162,7 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
           disabled={isRefreshing || loading}
           className="flex items-center text-sm text-gray-600 hover:text-indigo-600 disabled:text-gray-400"
         >
-          <RefreshCw className={`h-4 w-4 mr-1 ${isRefreshing ? 'animate-spin' : ''}`} />
-          {isRefreshing ? 'Refreshing...' : 'Refresh Data'}
+        
         </button>
       </div>
       

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Shield, PlusCircle, Trash2 } from 'lucide-react';
-import Loader from '../components/Loader';
+import Loader from './Loader';
 
 const RoleManagementTab = ({ contracts }) => {
   const [roles, setRoles] = useState([]);
@@ -14,56 +14,89 @@ const RoleManagementTab = ({ contracts }) => {
   const [transactionLoading, setTransactionLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
-  // Available roles
+  // Available roles based on the actual contracts
   const availableRoles = [
     { id: 'admin', name: 'Admin', description: 'Full administrative control over the DAO' },
+    { id: 'guardian', name: 'Guardian', description: 'Emergency response capabilities including pause/unpause' },
     { id: 'analytics', name: 'Analytics', description: 'Access to analytics and reporting data' },
-    { id: 'guardian', name: 'Guardian', description: 'Emergency response capabilities' },
-    { id: 'proposer', name: 'Proposer', description: 'Can create proposals without threshold' },
-    { id: 'timelock', name: 'Timelock Manager', description: 'Can manage timelock operations' },
-    { id: 'executor', name: 'Executor', description: 'Can execute passed proposals' },
+    { id: 'proposer', name: 'Proposer', description: 'Can create proposals in the timelock' },
+    { id: 'executor', name: 'Executor', description: 'Can execute passed proposals in the timelock' },
+    { id: 'canceller', name: 'Canceller', description: 'Can cancel queued transactions in the timelock' },
+    { id: 'governance', name: 'Governance', description: 'Special role for governance operations' },
+    { id: 'minter', name: 'Minter', description: 'Can mint new tokens' },
     { id: 'custom', name: 'Custom Role', description: 'Define a custom role' }
   ];
+
+  // Role byte32 hashes for contract interaction
+  const roleHashes = {
+    admin: '0xd0b7542f66b44067c25524298865c94b7d42a42a7e08177fd482a14eee469dbf', // ADMIN_ROLE
+    guardian: '0x964d976a856d5d2ae0dd75615803d9eab5f16a935919603edacadbe9649f1da4', // GUARDIAN_ROLE
+    analytics: '0x8f2157482fb2bf7ba9a48d0daf4a0d28ce79f04a471517936083435cf5943366', // ANALYTICS_ROLE
+    proposer: '0xb923c69a54657b9dbaf776310c008e80b6f272711895f60f84f24b949fefd194', // PROPOSER_ROLE
+    executor: '0x7a9ac023163a81858ee74272cc1c75623b6237e15b9ced95c3d14a32c3ba2a3a', // EXECUTOR_ROLE
+    canceller: '0x7b28a0c553dedd0dfa7fdd19446dc69f3a36a935a9aadc98b005e4cfb7d059b2', // CANCELLER_ROLE
+    governance: '0xee8df5d85e85c80c591fdc921a5a8ee35fac398ad77f8a36e75acab202b4a73f', // GOVERNANCE_ROLE
+    minter: '0x9f2df0fed2c77648de5860a4cc508cd0818c85b8b8a1ab4ceeef8d981c8956a6', // MINTER_ROLE
+  };
 
   // Load roles data
   useEffect(() => {
     const loadRoles = async () => {
-      if (!contracts.roleManager) {
+      if (!contracts.governance) {
         setLoading(false);
         return;
       }
 
       setLoading(true);
       try {
-        // Get all role assignments
-        const roleEvents = await contracts.roleManager.queryFilter(contracts.roleManager.filters.RoleGranted());
-        const revokedEvents = await contracts.roleManager.queryFilter(contracts.roleManager.filters.RoleRevoked());
+        // Build a list of all roles to check
+        const allRoles = [];
         
-        // Process events to get current role assignments
-        const revokedRoles = new Set();
-        revokedEvents.forEach(event => {
-          const key = `${event.args.role}-${event.args.account}`;
-          revokedRoles.add(key);
-        });
-        
-        const currentRoles = [];
-        for (const event of roleEvents) {
-          const key = `${event.args.role}-${event.args.account}`;
-          if (!revokedRoles.has(key)) {
-            // Check if this is a known role or custom
-            const roleName = getRoleName(event.args.role);
-            
-            currentRoles.push({
-              address: event.args.account,
-              role: event.args.role,
-              displayName: roleName,
-              grantedAt: new Date(event.blockTimestamp * 1000).toLocaleDateString(),
-              txHash: event.transactionHash
-            });
+        // For each role type and contract, check if the contract has that role
+        for (const [roleId, roleHash] of Object.entries(roleHashes)) {
+          // Try to get role members from each contract that might have roles
+          const possibleContracts = [
+            'governance', 'token', 'timelock', 'analyticsHelper', 'daoHelper'
+          ];
+          
+          for (const contractName of possibleContracts) {
+            if (contracts[contractName]) {
+              try {
+                const roleCount = await contracts[contractName].getRoleMemberCount(roleHash);
+                
+                // If this role exists in this contract, get all members
+                for (let i = 0; i < roleCount; i++) {
+                  const account = await contracts[contractName].getRoleMember(roleHash, i);
+                  
+                  allRoles.push({
+                    address: account,
+                    role: roleHash,
+                    displayName: availableRoles.find(r => r.id === roleId)?.name || 'Custom Role',
+                    contractName: contractName,
+                    grantedAt: 'N/A' // We don't have this info without events
+                  });
+                }
+              } catch (error) {
+                // This contract might not have this role - just continue
+                console.log(`Role ${roleId} may not exist in ${contractName}`);
+              }
+            }
           }
         }
         
-        setRoles(currentRoles);
+        // Remove duplicates (same address with same role)
+        const uniqueRoles = [];
+        const seen = new Set();
+        
+        for (const role of allRoles) {
+          const key = `${role.role}-${role.address}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            uniqueRoles.push(role);
+          }
+        }
+        
+        setRoles(uniqueRoles);
       } catch (error) {
         console.error("Error loading roles:", error);
       } finally {
@@ -72,23 +105,7 @@ const RoleManagementTab = ({ contracts }) => {
     };
 
     loadRoles();
-  }, [contracts.roleManager]);
-
-  // Helper function to get readable role name from role hash
-  const getRoleName = (roleHash) => {
-    // Check against known role hashes
-    const knownRoles = {
-      '0x0000000000000000000000000000000000000000000000000000000000000000': 'Default Admin',
-      '0xd0b7542f66b44067c25524298865c94b7d42a42a7e08177fd482a14eee469dbf': 'Admin',
-      '0x964d976a856d5d2ae0dd75615803d9eab5f16a935919603edacadbe9649f1da4': 'Guardian',
-      '0x8f2157482fb2bf7ba9a48d0daf4a0d28ce79f04a471517936083435cf5943366': 'Analytics',
-      '0xb923c69a54657b9dbaf776310c008e80b6f272711895f60f84f24b949fefd194': 'Proposer',
-      '0xb6046f344147d0b1496229c76f12a9b631e32c7b6dc5388a71f365232bcf150c': 'Timelock Manager',
-      '0x7a9ac023163a81858ee74272cc1c75623b6237e15b9ced95c3d14a32c3ba2a3a': 'Executor'
-    };
-    
-    return knownRoles[roleHash] || 'Custom Role';
-  };
+  }, [contracts]);
 
   // Handle granting new role
   const handleGrantRole = async () => {
@@ -99,22 +116,68 @@ const RoleManagementTab = ({ contracts }) => {
       return;
     }
     
-    const roleId = newRoleData.role === 'custom' ? newRoleData.customRole : newRoleData.role;
+    // Determine role hash
+    let roleHash;
+    if (newRoleData.role === 'custom') {
+      if (!newRoleData.customRole) {
+        setErrorMessage('Please enter a custom role hash');
+        return;
+      }
+      roleHash = newRoleData.customRole;
+    } else {
+      roleHash = roleHashes[newRoleData.role];
+      if (!roleHash) {
+        setErrorMessage('Invalid role selected');
+        return;
+      }
+    }
+    
+    // Determine which contract to use (governance by default)
+    let targetContract = contracts.governance;
+    
+    // For certain roles, use specific contracts
+    if (['proposer', 'executor', 'canceller'].includes(newRoleData.role)) {
+      targetContract = contracts.timelock;
+    } else if (newRoleData.role === 'analytics') {
+      targetContract = contracts.analyticsHelper || contracts.governance;
+    } else if (newRoleData.role === 'minter') {
+      targetContract = contracts.token;
+    }
+    
+    if (!targetContract) {
+      setErrorMessage('Target contract not available');
+      return;
+    }
     
     setTransactionLoading(true);
     try {
-      // Grant the role
-      const tx = await contracts.roleManager.grantRole(roleId, newRoleData.address);
+      // Grant the role using the appropriate function based on contract
+      let tx;
+      if (targetContract.grantContractRole) {
+        // JustGovernance and other contracts have this function
+        tx = await targetContract.grantContractRole(roleHash, newRoleData.address);
+      } else if (targetContract.grantRole) {
+        // Standard OpenZeppelin AccessControl
+        tx = await targetContract.grantRole(roleHash, newRoleData.address);
+      } else {
+        throw new Error('Contract does not support role management');
+      }
+      
       await tx.wait();
       
       // Update UI
       setRoles([...roles, {
         address: newRoleData.address,
-        role: roleId,
-        displayName: getRoleName(roleId),
-        grantedAt: new Date().toLocaleDateString(),
-        txHash: tx.hash
-      }]);
+        role: roleHash,
+        displayName: newRoleData.role === 'custom' ? 'Custom Role' : 
+                     availableRoles.find(r => r.id === newRoleData.role)?.name,
+        contractName: targetContract === contracts.governance ? 'governance' :
+                      targetContract === contracts.timelock ? 'timelock' :
+                      targetContract === contracts.token ? 'token' :
+                      targetContract === contracts.analyticsHelper ? 'analyticsHelper' :
+                      'unknown',
+                      grantedAt: new Date().toISOString().split('T')[0]
+                    }]);
       
       // Close modal and reset form
       setShowAddRoleModal(false);
@@ -132,13 +195,51 @@ const RoleManagementTab = ({ contracts }) => {
   };
 
   // Handle revoking a role
-  const handleRevokeRole = async (roleHash, address) => {
+  const handleRevokeRole = async (roleHash, address, contractName) => {
     if (!window.confirm(`Are you sure you want to revoke this role from ${address}?`)) {
       return;
     }
     
+    // Determine which contract to use based on the contractName
+    let targetContract;
+    switch (contractName) {
+      case 'governance':
+        targetContract = contracts.governance;
+        break;
+      case 'token':
+        targetContract = contracts.token;
+        break;
+      case 'timelock':
+        targetContract = contracts.timelock;
+        break;
+      case 'analyticsHelper':
+        targetContract = contracts.analyticsHelper;
+        break;
+      case 'daoHelper':
+        targetContract = contracts.daoHelper;
+        break;
+      default:
+        targetContract = contracts.governance;
+    }
+    
+    if (!targetContract) {
+      setErrorMessage(`Contract ${contractName} not available`);
+      return;
+    }
+    
     try {
-      const tx = await contracts.roleManager.revokeRole(roleHash, address);
+      // Revoke the role using the appropriate function based on contract
+      let tx;
+      if (targetContract.revokeContractRole) {
+        // JustGovernance and other contracts have this function
+        tx = await targetContract.revokeContractRole(roleHash, address);
+      } else if (targetContract.revokeRole) {
+        // Standard OpenZeppelin AccessControl
+        tx = await targetContract.revokeRole(roleHash, address);
+      } else {
+        throw new Error('Contract does not support role revocation');
+      }
+      
       await tx.wait();
       
       // Update UI by removing the revoked role
@@ -154,7 +255,7 @@ const RoleManagementTab = ({ contracts }) => {
       <div className="flex justify-between items-center mb-6">
         <div>
           <h2 className="text-xl font-semibold">Role Management</h2>
-          <p className="text-gray-500">Assign and manage roles for DAO participants</p>
+          <p className="text-gray-500">Assign and manage roles</p>
         </div>
         <button 
           className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md flex items-center"
@@ -184,7 +285,7 @@ const RoleManagementTab = ({ contracts }) => {
                 <tr>
                   <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
                   <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Address</th>
-                  <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Granted On</th>
+                  <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Contract</th>
                   <th className="px-6 py-3 bg-gray-50 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                 </tr>
               </thead>
@@ -201,12 +302,12 @@ const RoleManagementTab = ({ contracts }) => {
                       {role.address}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {role.grantedAt}
+                      {role.contractName}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                       <button 
                         className="text-red-600 hover:text-red-900 flex items-center ml-auto"
-                        onClick={() => handleRevokeRole(role.role, role.address)}
+                        onClick={() => handleRevokeRole(role.role, role.address, role.contractName)}
                       >
                         <Trash2 className="w-4 h-4 mr-1" />
                         Revoke

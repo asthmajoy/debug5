@@ -1,129 +1,277 @@
-import React, { useState, useEffect } from 'react';
-import { AlertTriangle, Shield, AlertCircle, Lock, X, Check } from 'lucide-react';
-import Loader from '../components/Loader';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { AlertTriangle, Shield, AlertCircle, Lock, X, Check, Wallet, Ban, RefreshCw } from 'lucide-react';
+import Loader from './Loader';
 
 const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
-  // Your component code here
-  const [emergencyStatus, setEmergencyStatus] = useState({
-    paused: false,
-    pauseExpiry: null,
-    lastPausedBy: '',
-    lastPausedAt: null,
-    pauseCount: 0,
-    activeThreatLevel: 0
+  const [contractStatus, setContractStatus] = useState({
+    governance: {
+      paused: false,
+      lastPausedBy: '',
+      lastPauseTimestamp: null
+    },
+    token: {
+      paused: false,
+      lastPausedBy: '',
+      lastPauseTimestamp: null
+    },
+    timelock: {
+      paused: false,
+      lastPausedBy: '',
+      lastPauseTimestamp: null
+    }
   });
+  
   const [emergencyLog, setEmergencyLog] = useState([]);
   const [loading, setLoading] = useState(true);
   const [transactionLoading, setTransactionLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
-  
-  // Pause duration options
-  const pauseDurations = [
-    { value: 3600, label: '1 hour' },
-    { value: 86400, label: '1 day' },
-    { value: 259200, label: '3 days' },
-    { value: 604800, label: '1 week' }
-  ];
-  const [selectedPauseDuration, setSelectedPauseDuration] = useState(pauseDurations[0].value);
   const [pauseReason, setPauseReason] = useState('');
+  const [selectedContract, setSelectedContract] = useState('');
+  const [tokenOperationsExpanded, setTokenOperationsExpanded] = useState(true);
+  const [governanceOperationsExpanded, setGovernanceOperationsExpanded] = useState(true);
+  const [timelockOperationsExpanded, setTimelockOperationsExpanded] = useState(true);
   
-  // Threat levels
-  const threatLevels = [
-    { level: 0, label: 'None', color: 'bg-green-100 text-green-800' },
-    { level: 1, label: 'Low', color: 'bg-blue-100 text-blue-800' },
-    { level: 2, label: 'Medium', color: 'bg-yellow-100 text-yellow-800' },
-    { level: 3, label: 'High', color: 'bg-orange-100 text-orange-800' },
-    { level: 4, label: 'Critical', color: 'bg-red-100 text-red-800' }
-  ];
+  // Use ref to track mount state
+  const isMounted = useRef(true);
+  const dataLoaded = useRef(false);
   
-  // Load emergency status
+  // Debug contracts - only run once when component mounts
   useEffect(() => {
+    console.log("Contracts received:", contracts);
+    console.log("Contract keys:", Object.keys(contracts || {}));
+    
+    // Cleanup function
+    return () => {
+      isMounted.current = false;
+    };
+  }, [contracts]);
+  
+  // Get contract references with fallbacks for different naming conventions
+  const getContractRefs = useCallback(() => {
+    if (!contracts) return { governance: null, token: null, timelock: null };
+    
+    return {
+      governance: contracts.governance || contracts.justGovernance || contracts.JustGovernanceUpgradeable,
+      token: contracts.token || contracts.justToken || contracts.JustTokenUpgradeable,
+      timelock: contracts.timelock || contracts.justTimelock || contracts.JustTimelockUpgradeable
+    };
+  }, [contracts]);
+
+  // Helper function to update paused status without triggering re-renders
+  const updatePausedStatus = useCallback(async () => {
+    if (!isMounted.current) return;
+    
+    const contractRefs = getContractRefs();
+    
+    const newStatus = { ...contractStatus };
+    let hasChanges = false;
+    
+    if (contractRefs.governance) {
+      try {
+        const isPaused = await contractRefs.governance.paused();
+        if (newStatus.governance.paused !== isPaused) {
+          newStatus.governance.paused = isPaused;
+          hasChanges = true;
+        }
+      } catch (error) {
+        console.error("Error checking governance pause status:", error);
+      }
+    }
+    
+    if (contractRefs.token) {
+      try {
+        const isPaused = await contractRefs.token.paused();
+        if (newStatus.token.paused !== isPaused) {
+          newStatus.token.paused = isPaused;
+          hasChanges = true;
+        }
+      } catch (error) {
+        console.error("Error checking token pause status:", error);
+      }
+    }
+    
+    if (contractRefs.timelock) {
+      try {
+        const isPaused = await contractRefs.timelock.paused();
+        if (newStatus.timelock.paused !== isPaused) {
+          newStatus.timelock.paused = isPaused;
+          hasChanges = true;
+        }
+      } catch (error) {
+        console.error("Error checking timelock pause status:", error);
+      }
+    }
+    
+    if (hasChanges && isMounted.current) {
+      setContractStatus(newStatus);
+    }
+  }, [getContractRefs, contractStatus]);
+
+  // Load contract statuses - but only once and with proper dependencies
+  useEffect(() => {
+    if (dataLoaded.current) return;
+    
     const loadEmergencyStatus = async () => {
-      if (!contracts.emergencyManager) {
+      const contractRefs = getContractRefs();
+      
+      if (!contractRefs.governance && !contractRefs.token && !contractRefs.timelock) {
+        console.warn("No contracts available:", contracts);
         setLoading(false);
         return;
       }
       
       setLoading(true);
       try {
-        // Get current emergency status
-        const isPaused = await contracts.emergencyManager.paused();
-        let pauseExpiry = null;
-        let lastPausedBy = '';
-        let lastPausedAt = null;
-        let pauseCount = 0;
-        let activeThreatLevel = 0;
+        // Create a copy of the current status
+        const newStatus = { ...contractStatus };
         
-        if (isPaused) {
-          pauseExpiry = await contracts.emergencyManager.pauseExpiry();
-          lastPausedBy = await contracts.emergencyManager.lastPausedBy();
-          const lastPausedTimestamp = await contracts.emergencyManager.lastPausedAt();
-          lastPausedAt = new Date(lastPausedTimestamp.toNumber() * 1000);
+        // Check governance status
+        if (contractRefs.governance) {
+          try {
+            const isPaused = await contractRefs.governance.paused();
+            newStatus.governance.paused = isPaused;
+          } catch (error) {
+            console.error("Error checking governance pause status:", error);
+          }
         }
         
-        pauseCount = (await contracts.emergencyManager.pauseCount()).toNumber();
-        
-        // Get threat level if available
-        if (contracts.securityManager) {
-          activeThreatLevel = (await contracts.securityManager.activeThreatLevel()).toNumber();
+        // Check token status
+        if (contractRefs.token) {
+          try {
+            const isPaused = await contractRefs.token.paused();
+            newStatus.token.paused = isPaused;
+          } catch (error) {
+            console.error("Error checking token pause status:", error);
+          }
         }
         
-        setEmergencyStatus({
-          paused: isPaused,
-          pauseExpiry: pauseExpiry ? new Date(pauseExpiry.toNumber() * 1000) : null,
-          lastPausedBy,
-          lastPausedAt,
-          pauseCount,
-          activeThreatLevel
-        });
+        // Check timelock status
+        if (contractRefs.timelock) {
+          try {
+            const isPaused = await contractRefs.timelock.paused();
+            newStatus.timelock.paused = isPaused;
+          } catch (error) {
+            console.error("Error checking timelock pause status:", error);
+          }
+        }
         
-        // Get emergency log
-        await loadEmergencyLog();
+        if (isMounted.current) {
+          setContractStatus(newStatus);
+          
+          // Get emergency logs for all contracts
+          await loadEmergencyLog();
+          dataLoaded.current = true;
+        }
       } catch (error) {
         console.error("Error loading emergency status:", error);
-        setErrorMessage("Failed to load emergency status");
+        if (isMounted.current) {
+          setErrorMessage("Failed to load emergency status");
+        }
       } finally {
-        setLoading(false);
+        if (isMounted.current) {
+          setLoading(false);
+        }
       }
     };
-    
+
     const loadEmergencyLog = async () => {
       try {
-        // Get emergency events
-        const pauseEvents = await contracts.emergencyManager.queryFilter(contracts.emergencyManager.filters.Paused());
-        const unpauseEvents = await contracts.emergencyManager.queryFilter(contracts.emergencyManager.filters.Unpaused());
+        const allEvents = [];
+        const contractRefs = getContractRefs();
         
-        // Combine and sort events
-        const allEvents = [
-          ...pauseEvents.map(e => ({
-            type: 'pause',
-            by: e.args.account,
-            reason: e.args.reason || 'No reason provided',
-            timestamp: e.args.timestamp ? new Date(e.args.timestamp.toNumber() * 1000) : new Date(e.blockTimestamp * 1000),
-            txHash: e.transactionHash
-          })),
-          ...unpauseEvents.map(e => ({
-            type: 'unpause',
-            by: e.args ? e.args.account : account,
-            timestamp: e.args && e.args.timestamp ? new Date(e.args.timestamp.toNumber() * 1000) : new Date(e.blockTimestamp * 1000),
-            txHash: e.transactionHash
-          }))
-        ].sort((a, b) => b.timestamp - a.timestamp);
+        // Get pause/unpause events from all contracts
+        const contractNames = ['governance', 'token', 'timelock'];
         
-        setEmergencyLog(allEvents);
+        for (const contractName of contractNames) {
+          const contract = contractRefs[contractName];
+          if (contract) {
+            try {
+              // Get Paused events
+              const paused = await contract.queryFilter(contract.filters.Paused());
+              allEvents.push(...paused.map(e => ({
+                type: 'pause',
+                contract: contractName,
+                by: e.args && e.args.account ? e.args.account : account,
+                reason: `${contractName.charAt(0).toUpperCase() + contractName.slice(1)} paused`,
+                timestamp: new Date(e.blockTimestamp * 1000),
+                txHash: e.transactionHash
+              })));
+              
+              // Get Unpaused events
+              const unpaused = await contract.queryFilter(contract.filters.Unpaused());
+              allEvents.push(...unpaused.map(e => ({
+                type: 'unpause',
+                contract: contractName,
+                by: e.args && e.args.account ? e.args.account : account,
+                reason: `${contractName.charAt(0).toUpperCase() + contractName.slice(1)} unpaused`,
+                timestamp: new Date(e.blockTimestamp * 1000),
+                txHash: e.transactionHash
+              })));
+              
+              // If we found a most recent pause event, update the last paused by
+              const contractPauseEvents = paused.sort((a, b) => 
+                b.blockTimestamp - a.blockTimestamp
+              );
+              
+              if (contractPauseEvents.length > 0 && isMounted.current) {
+                const lastEvent = contractPauseEvents[0];
+                const pausedBy = lastEvent.args && lastEvent.args.account ? 
+                  lastEvent.args.account : 'Unknown';
+                
+                setContractStatus(prev => ({
+                  ...prev,
+                  [contractName]: {
+                    ...prev[contractName],
+                    lastPausedBy: pausedBy,
+                    lastPauseTimestamp: new Date(lastEvent.blockTimestamp * 1000)
+                  }
+                }));
+              }
+            } catch (error) {
+              console.error(`Error fetching ${contractName} events:`, error);
+            }
+          }
+        }
+        
+        // Sort events by timestamp (newest first)
+        allEvents.sort((a, b) => b.timestamp - a.timestamp);
+        
+        if (isMounted.current) {
+          setEmergencyLog(allEvents);
+        }
       } catch (error) {
         console.error("Error loading emergency logs:", error);
       }
     };
     
     loadEmergencyStatus();
-  }, [contracts.emergencyManager, contracts.securityManager, account]);
-  
-  // Pause governance
-  const pauseGovernance = async () => {
-    if (!pauseReason.trim()) {
+    
+    // Periodic updates for status
+    const intervalId = setInterval(() => {
+      if (isMounted.current && !loading) {
+        updatePausedStatus();
+      }
+    }, 15000); // Update every 15 seconds instead of on every render
+    
+    // Cleanup
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [account, contracts, getContractRefs, updatePausedStatus, loading]); // Remove contractStatus from dependencies
+
+  // Pause a contract
+  const pauseContract = async (contractName) => {
+    if (!pauseReason.trim() && contractName === selectedContract) {
       setErrorMessage('Please provide a reason for the pause');
+      return;
+    }
+    
+    const contractRefs = getContractRefs();
+    const contract = contractRefs[contractName];
+    
+    if (!contract) {
+      setErrorMessage(`${contractName} contract not available`);
       return;
     }
     
@@ -132,124 +280,190 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
     setTransactionLoading(true);
     
     try {
-      // Calculate expiry timestamp
-      const now = Math.floor(Date.now() / 1000);
-      const expiryTime = now + selectedPauseDuration;
+      // Check if already paused to avoid unnecessary transactions
+      const isPaused = await contract.paused();
+      if (isPaused) {
+        setErrorMessage(`${contractName.charAt(0).toUpperCase() + contractName.slice(1)} is already paused.`);
+        setTransactionLoading(false);
+        return;
+      }
       
-      // Pause governance
-      const tx = await contracts.emergencyManager.pause(expiryTime, pauseReason);
+      let tx;
+      
+      // Set extra options with gas limit to avoid estimation errors
+      const options = {
+        gasLimit: 300000 // Manual gas limit
+      };
+      
+      // Call the appropriate pause function based on contract type
+      if (contractName === 'timelock') {
+        console.log(`Calling setPaused(true) on ${contractName} contract`);
+        tx = await contract.setPaused(true, options);
+      } else {
+        console.log(`Calling pause() on ${contractName} contract`);
+        tx = await contract.pause(options);
+      }
+      
+      console.log(`Transaction submitted: ${tx.hash}`);
       await tx.wait();
+      console.log(`Transaction confirmed`);
       
-      // Update state
-      setEmergencyStatus({
-        ...emergencyStatus,
-        paused: true,
-        pauseExpiry: new Date(expiryTime * 1000),
-        lastPausedBy: account,
-        lastPausedAt: new Date(),
-        pauseCount: emergencyStatus.pauseCount + 1
-      });
+      // Update status after successful transaction
+      updatePausedStatus();
+      
+      // Update UI
+      setContractStatus(prev => ({
+        ...prev,
+        [contractName]: {
+          ...prev[contractName],
+          paused: true,
+          lastPausedBy: account,
+          lastPauseTimestamp: new Date()
+        }
+      }));
       
       // Add to log
-      setEmergencyLog([
+      setEmergencyLog(prevLog => [
         {
           type: 'pause',
+          contract: contractName,
           by: account,
-          reason: pauseReason,
+          reason: pauseReason.trim() || `${contractName.charAt(0).toUpperCase() + contractName.slice(1)} emergency pause`,
           timestamp: new Date(),
           txHash: tx.hash
         },
-        ...emergencyLog
+        ...prevLog
       ]);
       
-      setSuccessMessage('Governance paused successfully');
-      setPauseReason('');
+      setSuccessMessage(`${contractName.charAt(0).toUpperCase() + contractName.slice(1)} paused successfully`);
+      
+      if (contractName === selectedContract) {
+        setPauseReason('');
+      }
       
       // Clear success message after 3 seconds
       setTimeout(() => {
-        setSuccessMessage('');
+        if (isMounted.current) {
+          setSuccessMessage('');
+        }
       }, 3000);
     } catch (error) {
-      console.error("Error pausing governance:", error);
-      setErrorMessage(error.message || 'Failed to pause governance');
+      console.error(`Error pausing ${contractName}:`, error);
+      
+      // Handle specific error cases with more informative messages
+      if (error.message.includes("execution reverted")) {
+        if (error.data) {
+          setErrorMessage(`Transaction reverted: you may not have the required role to pause this contract.`);
+        } else {
+          setErrorMessage(`Transaction reverted: this could be due to missing permissions or the contract is already paused.`);
+        }
+      } else if (error.message.includes("user rejected")) {
+        setErrorMessage(`Transaction was rejected by the user.`);
+      } else {
+        setErrorMessage(error.message || `Failed to pause ${contractName}`);
+      }
     } finally {
-      setTransactionLoading(false);
+      if (isMounted.current) {
+        setTransactionLoading(false);
+      }
     }
   };
   
-  // Unpause governance
-  const unpauseGovernance = async () => {
+  // Unpause a contract
+  const unpauseContract = async (contractName) => {
+    const contractRefs = getContractRefs();
+    const contract = contractRefs[contractName];
+    
+    if (!contract) {
+      setErrorMessage(`${contractName} contract not available`);
+      return;
+    }
+    
     setErrorMessage('');
     setSuccessMessage('');
     setTransactionLoading(true);
     
     try {
-      // Unpause governance
-      const tx = await contracts.emergencyManager.unpause();
-      await tx.wait();
+      // Check if already unpaused to avoid unnecessary transactions
+      const isPaused = await contract.paused();
+      if (!isPaused) {
+        setErrorMessage(`${contractName.charAt(0).toUpperCase() + contractName.slice(1)} is already active.`);
+        setTransactionLoading(false);
+        return;
+      }
       
-      // Update state
-      setEmergencyStatus({
-        ...emergencyStatus,
-        paused: false,
-        pauseExpiry: null
-      });
+      let tx;
+      
+      // Set extra options with gas limit to avoid estimation errors
+      const options = {
+        gasLimit: 300000 // Manual gas limit
+      };
+      
+      // Call the appropriate unpause function based on contract type
+      if (contractName === 'timelock') {
+        console.log(`Calling setPaused(false) on ${contractName} contract`);
+        tx = await contract.setPaused(false, options);
+      } else {
+        console.log(`Calling unpause() on ${contractName} contract`);
+        tx = await contract.unpause(options);
+      }
+      
+      console.log(`Transaction submitted: ${tx.hash}`);
+      await tx.wait();
+      console.log(`Transaction confirmed`);
+      
+      // Update status after successful transaction
+      updatePausedStatus();
+      
+      // Update UI immediately
+      setContractStatus(prev => ({
+        ...prev,
+        [contractName]: {
+          ...prev[contractName],
+          paused: false
+        }
+      }));
       
       // Add to log
-      setEmergencyLog([
+      setEmergencyLog(prevLog => [
         {
           type: 'unpause',
+          contract: contractName,
           by: account,
+          reason: `${contractName.charAt(0).toUpperCase() + contractName.slice(1)} unpaused`,
           timestamp: new Date(),
           txHash: tx.hash
         },
-        ...emergencyLog
+        ...prevLog
       ]);
       
-      setSuccessMessage('Governance unpaused successfully');
+      setSuccessMessage(`${contractName.charAt(0).toUpperCase() + contractName.slice(1)} unpaused successfully`);
       
       // Clear success message after 3 seconds
       setTimeout(() => {
-        setSuccessMessage('');
+        if (isMounted.current) {
+          setSuccessMessage('');
+        }
       }, 3000);
     } catch (error) {
-      console.error("Error unpausing governance:", error);
-      setErrorMessage(error.message || 'Failed to unpause governance');
+      console.error(`Error unpausing ${contractName}:`, error);
+      
+      // Handle specific error cases with more informative messages
+      if (error.message.includes("execution reverted")) {
+        if (error.data) {
+          setErrorMessage(`Transaction reverted: you may not have the required role to unpause this contract.`);
+        } else {
+          setErrorMessage(`Transaction reverted: this could be due to missing permissions or the contract is already active.`);
+        }
+      } else if (error.message.includes("user rejected")) {
+        setErrorMessage(`Transaction was rejected by the user.`);
+      } else {
+        setErrorMessage(error.message || `Failed to unpause ${contractName}`);
+      }
     } finally {
-      setTransactionLoading(false);
-    }
-  };
-  
-  // Update threat level
-  const updateThreatLevel = async (level) => {
-    if (!contracts.securityManager) return;
-    
-    setErrorMessage('');
-    setSuccessMessage('');
-    setTransactionLoading(true);
-    
-    try {
-      // Update threat level
-      const tx = await contracts.securityManager.setActiveThreatLevel(level);
-      await tx.wait();
-      
-      // Update state
-      setEmergencyStatus({
-        ...emergencyStatus,
-        activeThreatLevel: level
-      });
-      
-      setSuccessMessage(`Threat level updated to ${threatLevels[level].label}`);
-      
-      // Clear success message after 3 seconds
-      setTimeout(() => {
-        setSuccessMessage('');
-      }, 3000);
-    } catch (error) {
-      console.error("Error updating threat level:", error);
-      setErrorMessage(error.message || 'Failed to update threat level');
-    } finally {
-      setTransactionLoading(false);
+      if (isMounted.current) {
+        setTransactionLoading(false);
+      }
     }
   };
   
@@ -264,22 +478,7 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
     if (!address) return 'N/A';
     return `${address.substring(0, 6)}...${address.substring(address.length - 4)}`;
   };
-  
-  // Format time remaining
-  const formatTimeRemaining = (expiry) => {
-    if (!expiry) return 'N/A';
-    const now = new Date();
-    if (now > expiry) return 'Expired';
-    
-    const diffMs = expiry - now;
-    const diffSecs = Math.floor(diffMs / 1000);
-    
-    if (diffSecs < 60) return `${diffSecs} seconds`;
-    if (diffSecs < 3600) return `${Math.floor(diffSecs / 60)} minutes`;
-    if (diffSecs < 86400) return `${Math.floor(diffSecs / 3600)} hours`;
-    return `${Math.floor(diffSecs / 86400)} days`;
-  };
-  
+
   return (
     <div>
       <div className="mb-6">
@@ -312,128 +511,364 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
         </div>
       ) : (
         <>
-          {/* Emergency Status */}
-          <div className="bg-white p-6 rounded-lg shadow mb-6">
-            <div className="flex items-center mb-4">
-              <Shield className="w-5 h-5 text-indigo-500 mr-2" />
-              <h3 className="text-lg font-medium text-gray-900">Emergency Status</h3>
+          {/* Display contract availability information */}
+          {(!getContractRefs().governance && !getContractRefs().token && !getContractRefs().timelock) && (
+            <div className="bg-yellow-100 border border-yellow-400 text-yellow-800 px-4 py-3 rounded mb-4">
+              <h3 className="font-bold mb-2">Contract Connection Information</h3>
+              <p>No contracts are currently connected. Contract references received:</p>
+              <pre className="bg-yellow-50 p-2 mt-2 text-xs overflow-auto">
+                {JSON.stringify(contracts, null, 2)}
+              </pre>
             </div>
-            
-            <div className="flex items-center mb-4">
-              <div className={`py-1 px-3 rounded-full text-sm ${emergencyStatus.paused ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>
-                {emergencyStatus.paused ? 'Governance Paused' : 'Governance Active'}
-              </div>
-              
-              {emergencyStatus.paused && (
-                <div className="ml-4 text-sm">
-                  <span className="text-gray-500">Expires in:</span> {formatTimeRemaining(emergencyStatus.pauseExpiry)}
-                </div>
-              )}
-              
-              {contracts.securityManager && (
-                <div className={`ml-4 py-1 px-3 rounded-full text-sm ${threatLevels[emergencyStatus.activeThreatLevel].color}`}>
-                  Threat Level: {threatLevels[emergencyStatus.activeThreatLevel].label}
-                </div>
-              )}
-            </div>
-            
-            {emergencyStatus.paused && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4 text-sm">
-                <div>
-                  <p className="text-gray-500">Paused By</p>
-                  <p>{formatAddress(emergencyStatus.lastPausedBy)}</p>
-                </div>
-                <div>
-                  <p className="text-gray-500">Paused At</p>
-                  <p>{formatDate(emergencyStatus.lastPausedAt)}</p>
-                </div>
-              </div>
-            )}
-            
-            <p className="text-sm text-gray-600 mb-4">Total pause count: {emergencyStatus.pauseCount}</p>
-            
-            {/* Emergency Controls */}
-            {(hasRole('admin') || hasRole('guardian')) && (
-              <div className="border-t border-gray-200 pt-4">
-                {emergencyStatus.paused ? (
-                  <button
-                    className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-md disabled:bg-green-300"
-                    onClick={unpauseGovernance}
-                    disabled={transactionLoading}
-                  >
-                    Unpause Governance
-                  </button>
-                ) : (
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Pause Duration</label>
-                      <select
-                        className="w-full md:w-auto rounded-md border border-gray-300 p-2"
-                        value={selectedPauseDuration}
-                        onChange={(e) => setSelectedPauseDuration(parseInt(e.target.value))}
-                      >
-                        {pauseDurations.map(option => (
-                          <option key={option.value} value={option.value}>{option.label}</option>
-                        ))}
-                      </select>
-                    </div>
-                    
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Reason for Pause</label>
-                      <textarea
-                        className="w-full rounded-md border border-gray-300 p-2"
-                        rows="2"
-                        value={pauseReason}
-                        onChange={(e) => setPauseReason(e.target.value)}
-                        placeholder="Provide a reason for pausing governance"
-                      ></textarea>
-                    </div>
-                    
-                    <button
-                      className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-md disabled:bg-red-300"
-                      onClick={pauseGovernance}
-                      disabled={transactionLoading}
-                    >
-                      Pause Governance
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          )}
           
-          {/* Threat Level Controls */}
-          {(hasRole('admin') || hasRole('guardian')) && contracts.securityManager && (
+          {/* Governance Operations Panel */}
+          {getContractRefs().governance && (
+            <div className="bg-white p-6 rounded-lg shadow mb-6">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center">
+                  <Shield className="w-5 h-5 text-indigo-500 mr-2" />
+                  <h3 className="text-lg font-medium text-gray-900">Governance Emergency Controls</h3>
+                </div>
+                <button 
+                  className="text-gray-500 hover:text-gray-700"
+                  onClick={() => setGovernanceOperationsExpanded(!governanceOperationsExpanded)}
+                >
+                  {governanceOperationsExpanded ? (
+                    <X className="w-5 h-5" />
+                  ) : (
+                    <RefreshCw className="w-5 h-5" />
+                  )}
+                </button>
+              </div>
+
+              {governanceOperationsExpanded && (
+                <>
+                  <div className="text-sm text-gray-600 mb-4">
+                    <p className="mb-2">
+                      <strong>Warning:</strong> Pausing the governance contract will prevent all proposal submissions, voting, and execution.
+                      This should only be used in emergency situations such as:
+                    </p>
+                    <ul className="list-disc pl-5 mb-3">
+                      <li>Governance attack in progress</li>
+                      <li>Critical vulnerability detected</li>
+                      <li>Protocol upgrade emergency</li>
+                      <li>Malicious proposal detection</li>
+                    </ul>
+                    <p>Ongoing votes may be affected and proposal execution will be blocked while governance is paused.</p>
+                  </div>
+
+                  <div className="bg-gray-100 p-4 rounded-lg mb-4">
+                    <div className="flex items-center mb-2">
+                      <h4 className="font-medium">Current Governance Status:</h4>
+                      <div className={`ml-3 py-1 px-3 inline-block rounded-full text-sm ${contractStatus.governance.paused ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>
+                        {contractStatus.governance.paused ? 'PAUSED' : 'ACTIVE'}
+                      </div>
+                    </div>
+                    
+                    {contractStatus.governance.paused && contractStatus.governance.lastPausedBy && (
+                      <div className="text-sm">
+                        <p className="text-gray-600">Paused By: {formatAddress(contractStatus.governance.lastPausedBy)}</p>
+                        {contractStatus.governance.lastPauseTimestamp && (
+                          <p className="text-gray-600">Paused At: {formatDate(contractStatus.governance.lastPauseTimestamp)}</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {(hasRole('admin') || hasRole('guardian')) && (
+                    <div className="flex justify-between items-center">
+                      <div>
+                        {contractStatus.governance.paused ? (
+                          hasRole('admin') ? (
+                            <button
+                              className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-md font-medium disabled:bg-green-300 flex items-center"
+                              onClick={() => unpauseContract('governance')}
+                              disabled={transactionLoading}
+                            >
+                              <Check className="w-4 h-4 mr-2" />
+                              Unpause Governance
+                            </button>
+                          ) : (
+                            <div className="text-amber-700 bg-amber-50 px-4 py-2 rounded-md border border-amber-200 flex items-center">
+                              <AlertTriangle className="w-4 h-4 mr-2" />
+                              Only Admin can unpause
+                            </div>
+                          )
+                        ) : (
+                          <button
+                            className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-md font-medium disabled:bg-red-300 flex items-center"
+                            onClick={() => {
+                              setSelectedContract('governance');
+                              setPauseReason('');
+                            }}
+                            disabled={transactionLoading}
+                          >
+                            <Ban className="w-4 h-4 mr-2" />
+                            Pause Governance
+                          </button>
+                        )}
+                      </div>
+                      
+                      {!contractStatus.governance.paused && (
+                        <div className="text-sm text-gray-500">
+                          <p>Pausing requires {hasRole('guardian') ? 'Guardian or Admin' : 'Admin'} role</p>
+                          <p>Unpausing requires Admin role</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+          
+          {/* Token Operations Panel */}
+          {getContractRefs().token && (
+            <div className="bg-white p-6 rounded-lg shadow mb-6">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center">
+                  <Wallet className="w-5 h-5 text-indigo-500 mr-2" />
+                  <h3 className="text-lg font-medium text-gray-900">Token Emergency Controls</h3>
+                </div>
+                <button 
+                  className="text-gray-500 hover:text-gray-700"
+                  onClick={() => setTokenOperationsExpanded(!tokenOperationsExpanded)}
+                >
+                  {tokenOperationsExpanded ? (
+                    <X className="w-5 h-5" />
+                  ) : (
+                    <RefreshCw className="w-5 h-5" />
+                  )}
+                </button>
+              </div>
+
+              {tokenOperationsExpanded && (
+                <>
+                  <div className="text-sm text-gray-600 mb-4">
+                    <p className="mb-2">
+                      <strong>Warning:</strong> Pausing the token contract will prevent all token transfers, minting, and burning operations.
+                      This should only be used in emergency situations such as:
+                    </p>
+                    <ul className="list-disc pl-5 mb-3">
+                      <li>Detected security vulnerabilities</li>
+                      <li>Suspicious transaction patterns</li>
+                      <li>Governance attacks</li>
+                      <li>DAO emergency maintenance</li>
+                    </ul>
+                    <p>Token holders will be unable to transfer their tokens while the contract is paused.</p>
+                  </div>
+
+                  <div className="bg-gray-100 p-4 rounded-lg mb-4">
+                    <div className="flex items-center mb-2">
+                      <h4 className="font-medium">Current Token Status:</h4>
+                      <div className={`ml-3 py-1 px-3 inline-block rounded-full text-sm ${contractStatus.token.paused ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>
+                        {contractStatus.token.paused ? 'PAUSED' : 'ACTIVE'}
+                      </div>
+                    </div>
+                    
+                    {contractStatus.token.paused && contractStatus.token.lastPausedBy && (
+                      <div className="text-sm">
+                        <p className="text-gray-600">Paused By: {formatAddress(contractStatus.token.lastPausedBy)}</p>
+                        {contractStatus.token.lastPauseTimestamp && (
+                          <p className="text-gray-600">Paused At: {formatDate(contractStatus.token.lastPauseTimestamp)}</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {(hasRole('admin') || hasRole('guardian')) && (
+                    <div className="flex justify-between items-center">
+                      <div>
+                        {contractStatus.token.paused ? (
+                          hasRole('admin') ? (
+                            <button
+                              className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-md font-medium disabled:bg-green-300 flex items-center"
+                              onClick={() => unpauseContract('token')}
+                              disabled={transactionLoading}
+                            >
+                              <Check className="w-4 h-4 mr-2" />
+                              Unpause Token Operations
+                            </button>
+                          ) : (
+                            <div className="text-amber-700 bg-amber-50 px-4 py-2 rounded-md border border-amber-200 flex items-center">
+                              <AlertTriangle className="w-4 h-4 mr-2" />
+                              Only Admin can unpause
+                            </div>
+                          )
+                        ) : (
+                          <button
+                            className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-md font-medium disabled:bg-red-300 flex items-center"
+                            onClick={() => {
+                              setSelectedContract('token');
+                              setPauseReason('');
+                            }}
+                            disabled={transactionLoading}
+                          >
+                            <Ban className="w-4 h-4 mr-2" />
+                            Pause Token Operations
+                          </button>
+                        )}
+                      </div>
+                      
+                      {!contractStatus.token.paused && (
+                        <div className="text-sm text-gray-500">
+                          <p>Pausing requires {hasRole('guardian') ? 'Guardian or Admin' : 'Admin'} role</p>
+                          <p>Unpausing requires Admin role</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+          
+          {/* Timelock Operations Panel */}
+          {getContractRefs().timelock && (
+            <div className="bg-white p-6 rounded-lg shadow mb-6">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center">
+                  <Lock className="w-5 h-5 text-indigo-500 mr-2" />
+                  <h3 className="text-lg font-medium text-gray-900">Timelock Emergency Controls</h3>
+                </div>
+                <button 
+                  className="text-gray-500 hover:text-gray-700"
+                  onClick={() => setTimelockOperationsExpanded(!timelockOperationsExpanded)}
+                >
+                  {timelockOperationsExpanded ? (
+                    <X className="w-5 h-5" />
+                  ) : (
+                    <RefreshCw className="w-5 h-5" />
+                  )}
+                </button>
+              </div>
+
+              {timelockOperationsExpanded && (
+                <>
+                  <div className="text-sm text-gray-600 mb-4">
+                    <p className="mb-2">
+                      <strong>Warning:</strong> Pausing the timelock contract will prevent the execution of any queued transactions.
+                      This should only be used in emergency situations such as:
+                    </p>
+                    <ul className="list-disc pl-5 mb-3">
+                      <li>Malicious proposal in timelock queue</li>
+                      <li>Critical security issue detected</li>
+                      <li>Protocol upgrade complication</li>
+                      <li>System-wide emergency</li>
+                    </ul>
+                    <p>Transactions in the timelock queue will be unable to be executed until the timelock is unpaused.</p>
+                  </div>
+
+                  <div className="bg-gray-100 p-4 rounded-lg mb-4">
+                    <div className="flex items-center mb-2">
+                      <h4 className="font-medium">Current Timelock Status:</h4>
+                      <div className={`ml-3 py-1 px-3 inline-block rounded-full text-sm ${contractStatus.timelock.paused ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>
+                        {contractStatus.timelock.paused ? 'PAUSED' : 'ACTIVE'}
+                      </div>
+                    </div>
+                    
+                    {contractStatus.timelock.paused && contractStatus.timelock.lastPausedBy && (
+                      <div className="text-sm">
+                        <p className="text-gray-600">Paused By: {formatAddress(contractStatus.timelock.lastPausedBy)}</p>
+                        {contractStatus.timelock.lastPauseTimestamp && (
+                          <p className="text-gray-600">Paused At: {formatDate(contractStatus.timelock.lastPauseTimestamp)}</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {(hasRole('admin') || hasRole('guardian')) && (
+                    <div className="flex justify-between items-center">
+                      <div>
+                        {contractStatus.timelock.paused ? (
+                          hasRole('admin') ? (
+                            <button
+                              className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-md font-medium disabled:bg-green-300 flex items-center"
+                              onClick={() => unpauseContract('timelock')}
+                              disabled={transactionLoading}
+                            >
+                              <Check className="w-4 h-4 mr-2" />
+                              Unpause Timelock
+                            </button>
+                          ) : (
+                            <div className="text-amber-700 bg-amber-50 px-4 py-2 rounded-md border border-amber-200 flex items-center">
+                              <AlertTriangle className="w-4 h-4 mr-2" />
+                              Only Admin can unpause
+                            </div>
+                          )
+                        ) : (
+                          <button
+                            className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-md font-medium disabled:bg-red-300 flex items-center"
+                            onClick={() => {
+                              setSelectedContract('timelock');
+                              setPauseReason('');
+                            }}
+                            disabled={transactionLoading}
+                          >
+                            <Ban className="w-4 h-4 mr-2" />
+                            Pause Timelock
+                          </button>
+                        )}
+                      </div>
+                      
+                      {!contractStatus.timelock.paused && (
+                        <div className="text-sm text-gray-500">
+                          <p>Pausing requires {hasRole('guardian') ? 'Guardian or Admin' : 'Admin'} role</p>
+                          <p>Unpausing requires Admin role</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+          
+          {/* Pause Control Panel */}
+          {selectedContract && !contractStatus[selectedContract].paused && (hasRole('admin') || hasRole('guardian')) && (
             <div className="bg-white p-6 rounded-lg shadow mb-6">
               <div className="flex items-center mb-4">
                 <AlertCircle className="w-5 h-5 text-indigo-500 mr-2" />
-                <h3 className="text-lg font-medium text-gray-900">Threat Level Controls</h3>
+                <h3 className="text-lg font-medium text-gray-900">
+                  Pause {selectedContract.charAt(0).toUpperCase() + selectedContract.slice(1)}
+                </h3>
               </div>
               
-              <p className="text-sm text-gray-600 mb-4">
-                Set the active threat level to adjust security measures and timelock delays.
-              </p>
-              
-              <div className="flex flex-wrap gap-2">
-                {threatLevels.map(threat => (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Reason for Pause</label>
+                  <textarea
+                    className="w-full rounded-md border border-gray-300 p-2"
+                    rows="2"
+                    value={pauseReason}
+                    onChange={(e) => setPauseReason(e.target.value)}
+                    placeholder={`Provide a reason for pausing ${selectedContract}`}
+                  ></textarea>
+                </div>
+                
+                <div className="flex items-center space-x-2">
                   <button
-                    key={threat.level}
-                    className={`px-4 py-2 rounded-md text-sm font-medium ${
-                      emergencyStatus.activeThreatLevel === threat.level
-                        ? 'bg-indigo-600 text-white'
-                        : threat.color
-                    }`}
-                    onClick={() => updateThreatLevel(threat.level)}
-                    disabled={transactionLoading || emergencyStatus.activeThreatLevel === threat.level}
+                    className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-md disabled:bg-red-300"
+                    onClick={() => pauseContract(selectedContract)}
+                    disabled={transactionLoading}
                   >
-                    {threat.label}
+                    {transactionLoading ? 'Pausing...' : 'Confirm Pause'}
                   </button>
-                ))}
+                  
+                  <button
+                    className="border border-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-50"
+                    onClick={() => setSelectedContract('')}
+                    disabled={transactionLoading}
+                  >
+                    Cancel
+                  </button>
+                </div>
               </div>
             </div>
           )}
           
-          {/* Emergency Log */}
+          {/* Emergency Actions Log */}
           <div className="bg-white p-6 rounded-lg shadow">
             <div className="flex items-center mb-4">
               <Lock className="w-5 h-5 text-indigo-500 mr-2" />
@@ -452,7 +887,7 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
                       ) : (
                         <Check className="w-5 h-5 text-green-500 mr-2" />
                       )}
-                      <span className="font-medium">{log.type === 'pause' ? 'Governance Paused' : 'Governance Unpaused'}</span>
+                      <span className="font-medium">{log.contract.charAt(0).toUpperCase() + log.contract.slice(1)} {log.type === 'pause' ? 'Paused' : 'Unpaused'}</span>
                       <span className="text-sm text-gray-500 ml-auto">{formatDate(log.timestamp)}</span>
                     </div>
                     <div className="text-sm">
