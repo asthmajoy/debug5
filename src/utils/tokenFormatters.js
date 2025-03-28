@@ -1,9 +1,9 @@
-// src/utils/tokenFormatters.js
+// src/utils/tokenFormatters.js - Updated with better handling for large token amounts
 import { ethers } from 'ethers';
 
 /**
  * Format a token value from wei to a user-friendly display format with 5 decimal places
- * @param {string|number} value - Token value in wei
+ * @param {string|number|object} value - Token value in wei or ether
  * @returns {string} Formatted value with 5 decimal places
  */
 export const formatTokenAmount = (value) => {
@@ -11,23 +11,37 @@ export const formatTokenAmount = (value) => {
     // Return default for empty/falsy values
     if (!value) return "0.00000";
     
+    // Handle BigNumber objects directly
+    if (value._isBigNumber) {
+      return ethers.utils.formatEther(value).substring(0, 7); // Keep 5 decimal places
+    }
+    
     // Convert the value to a string if it's not already
     const valueStr = value.toString();
     
-    // Determine if this might be a wei value (large number)
-    const isWeiValue = valueStr.length > 10 || valueStr.includes('e+');
-    
-    let etherValue;
-    if (isWeiValue) {
-      // Convert from wei to ether
-      etherValue = ethers.utils.formatEther(valueStr);
-    } else {
-      // Already in a reasonable range or pre-formatted, just parse it
-      etherValue = valueStr;
+    // If it looks like it already has decimals and is a reasonable size, it's likely already in ether
+    if (valueStr.includes('.') && valueStr.length < 20) {
+      return parseFloat(valueStr).toFixed(5);
     }
     
-    // Parse and format with 5 decimal places
-    return parseFloat(etherValue).toFixed(5);
+    // Try to determine if this is a wei value by attempting to create a BigNumber
+    try {
+      // If it's a numeric string without decimals, it might be wei
+      if (valueStr.match(/^[0-9]+$/) || valueStr.includes('e+')) {
+        const bigNum = ethers.BigNumber.from(valueStr);
+        // If it's a large value, assume it's wei
+        if (bigNum.gt(ethers.utils.parseUnits("1", 10))) { // If greater than 10^10, likely wei
+          return ethers.utils.formatEther(bigNum).substring(0, 7); // Keep 5 decimal places
+        }
+      }
+    } catch (e) {
+      // Not a valid BigNumber, continue with standard parsing
+    }
+    
+    // Default case: assume it's already in ether
+    const numValue = parseFloat(valueStr);
+    if (isNaN(numValue)) return "0.00000";
+    return numValue.toFixed(5);
   } catch (error) {
     console.error("Error formatting token amount:", error, {value});
     return "0.00000";
@@ -36,7 +50,7 @@ export const formatTokenAmount = (value) => {
 
 /**
  * Format a token value for display in header - more compact
- * @param {string|number} value - Token value in wei
+ * @param {string|number|object} value - Token value in wei or ether
  * @returns {string} Formatted value for header display
  */
 export const formatTokenForHeader = (value) => {
@@ -53,30 +67,14 @@ export const formatTokenForHeader = (value) => {
 /**
  * Format a token value to a standard format with proper ETH units, automatically 
  * determining how many decimals to show based on the value
- * @param {string|number} value - Token value in wei
+ * @param {string|number|object} value - Token value in wei or ether
  * @returns {string} Formatted value with automatic decimal precision
  */
 export const formatTokenStandard = (value) => {
   try {
-    // Return default for empty/falsy values
-    if (!value) return "0";
-    
-    // Convert the value to a string if it's not already
-    const valueStr = value.toString();
-    
-    // Handle large numbers (likely wei values)
-    const isWeiValue = valueStr.length > 10 || valueStr.includes('e+');
-    
-    let etherValue;
-    if (isWeiValue) {
-      // Convert from wei to ether
-      etherValue = ethers.utils.formatEther(valueStr);
-    } else {
-      // Already in a reasonable range, just parse it
-      etherValue = valueStr;
-    }
-    
-    const numValue = parseFloat(etherValue);
+    // Use our more robust formatTokenAmount function
+    const formatted = formatTokenAmount(value);
+    const numValue = parseFloat(formatted);
     
     // Format based on value size
     if (numValue === 0) return "0";
@@ -94,17 +92,21 @@ export const formatTokenStandard = (value) => {
 
 /**
  * Calculate how much of a value is delegated and return a formatted string
- * @param {string|number} total - Total token amount
- * @param {string|number} delegated - Delegated token amount
+ * @param {string|number|object} total - Total token amount
+ * @param {string|number|object} delegated - Delegated token amount
  * @returns {string} Formatted percentage
  */
 export const formatDelegationPercentage = (total, delegated) => {
   try {
     if (!total || !delegated) return "0%";
     
-    // Convert to numbers in ETH
-    const totalNum = parseFloat(formatTokenAmount(total));
-    const delegatedNum = parseFloat(formatTokenAmount(delegated));
+    // Get formatted values to work with
+    const totalStr = formatTokenAmount(total);
+    const delegatedStr = formatTokenAmount(delegated);
+    
+    // Convert to numbers
+    const totalNum = parseFloat(totalStr);
+    const delegatedNum = parseFloat(delegatedStr);
     
     if (totalNum === 0) return "0%";
     

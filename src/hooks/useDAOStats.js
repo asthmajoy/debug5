@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
 import { useWeb3 } from '../contexts/Web3Context';
+import { formatPercentage } from '../utils/formatters';
 
 export function useDAOStats() {
   const { contracts, contractsReady, refreshCounter, isConnected, account, networkId } = useWeb3();
@@ -385,7 +386,7 @@ export function useDAOStats() {
     }
   }, [contracts]);
 
-  // Fetch governance metrics - delegation and participation rates
+  // Fixed governance metrics fetching function
   const fetchGovernanceMetrics = useCallback(async () => {
     console.log("Fetching governance metrics...");
     
@@ -398,105 +399,139 @@ export function useDAOStats() {
       let participationRate = 0;
       let delegationRate = 0;
       
-      // Try to get delegation info directly from token
-      try {
-        console.log("Checking delegation information from token contract");
-        
-        // See if we can get the total delegated tokens
-        let totalDelegated = ethers.BigNumber.from(0);
-        let totalSupply = await contracts.token.totalSupply();
-        
-        // Try to get all delegates
-        if (typeof contracts.token.getCurrentDelegatedVotes === 'function') {
-          // If we have a method to get delegated votes directly
-          if (account) {
-            const delegated = await contracts.token.getCurrentDelegatedVotes(account);
-            if (!delegated.isZero()) {
-              totalDelegated = totalDelegated.add(delegated);
-            }
-          }
+      // Log which functions are available for debugging
+      console.log("Available delegation methods:", {
+        getSnapshotMetrics: typeof contracts.token.getSnapshotMetrics === 'function',
+        getCurrentDelegatedVotes: typeof contracts.token.getCurrentDelegatedVotes === 'function',
+        getVotes: typeof contracts.token.getVotes === 'function',
+        getCurrentVotes: typeof contracts.token.getCurrentVotes === 'function'
+      });
+      
+      // APPROACH 1: Try to get delegation info from getSnapshotMetrics
+      if (typeof contracts.token.getSnapshotMetrics === 'function') {
+        try {
+          console.log("Trying getSnapshotMetrics approach");
+          const currentSnapshot = await contracts.token.getCurrentSnapshotId();
+          console.log("Current snapshot ID:", currentSnapshot.toString());
           
-          // Check known contract addresses
-          const contractAddresses = [
-            contracts.governance?.address,
-            contracts.timelock?.address
-          ].filter(Boolean);
-          
-          for (const addr of contractAddresses) {
-            try {
-              const delegated = await contracts.token.getCurrentDelegatedVotes(addr);
-              if (!delegated.isZero()) {
-                totalDelegated = totalDelegated.add(delegated);
-              }
-            } catch (e) {}
-          }
-        }
-        
-        // If the token contract has a specific function to get delegation rate
-        if (typeof contracts.token.getSnapshotMetrics === 'function') {
-          try {
-            const currentSnapshot = await contracts.token.getCurrentSnapshotId();
-            if (currentSnapshot) {
-              const metrics = await contracts.token.getSnapshotMetrics(currentSnapshot);
-              // Extract delegation percentage if available
-              if (metrics && metrics.percentageDelegated) {
-                delegationRate = parseInt(metrics.percentageDelegated.toString()) / 10000; // Convert basis points
-                console.log("Delegation rate from snapshot metrics:", delegationRate);
-              }
+          if (currentSnapshot && !currentSnapshot.isZero()) {
+            const metrics = await contracts.token.getSnapshotMetrics(currentSnapshot);
+            console.log("Raw snapshot metrics:", metrics);
+            
+            // KEY FIX: Metrics is an array-like object, accessing by index position
+            // percentageDelegated is at index 4 based on the contract's return values
+            if (metrics && metrics[4]) {
+              delegationRate = parseInt(metrics[4].toString()) / 10000; // Convert basis points
+              console.log("Delegation rate from snapshot metrics:", delegationRate);
             }
-          } catch (error) {
-            console.warn("Error getting delegation rate from snapshot:", error);
+          } else {
+            console.log("No snapshot available for metrics");
           }
+        } catch (error) {
+          console.warn("Error getting delegation rate from snapshot:", error);
         }
-        
-        // Calculate delegation rate if we have supply and delegated amount
-        if (delegationRate === 0 && !totalSupply.isZero() && !totalDelegated.isZero()) {
-          delegationRate = totalDelegated.mul(100).div(totalSupply).toNumber() / 100;
-          console.log("Calculated delegation rate:", delegationRate);
-        }
-      } catch (error) {
-        console.warn("Error calculating delegation metrics:", error);
       }
       
-      // Try to get participation rate from recent proposals
-      try {
-        console.log("Calculating participation rate from proposals");
-        
-        // Check if we have a getVotes or similar method to get voting power
-        const hasGetVotes = typeof contracts.token.getVotes === 'function' || 
-                           typeof contracts.token.getCurrentVotes === 'function';
-        
-        if (hasGetVotes && account) {
-          // If the user has voting power, we can use that as a reference
-          const votingPower = await (
-            contracts.token.getVotes?.(account) || 
-            contracts.token.getCurrentVotes?.(account)
-          );
+      // APPROACH 2: If the first approach fails, try to calculate from delegation information
+      if (delegationRate === 0) {
+        try {
+          console.log("Trying direct delegation calculation");
           
-          if (votingPower && !votingPower.isZero()) {
-            // We found some voting power, which suggests delegation is happening
-            participationRate = Math.max(0.05, delegationRate); // Estimate participation based on delegation
+          let totalDelegated = ethers.BigNumber.from(0);
+          let totalSupply = await contracts.token.totalSupply();
+          
+          // Try to get all delegators to check delegation
+          if (typeof contracts.token.getCurrentDelegatedVotes === 'function') {
+            if (account) {
+              try {
+                const delegated = await contracts.token.getCurrentDelegatedVotes(account);
+                console.log(`Account ${account} has ${ethers.utils.formatEther(delegated)} delegated votes`);
+                if (!delegated.isZero()) {
+                  totalDelegated = totalDelegated.add(delegated);
+                }
+              } catch (e) {
+                console.warn("Error getting delegated votes:", e);
+              }
+            }
+            
+            // Check known contract addresses
+            const contractAddresses = [
+              contracts.governance?.address,
+              contracts.timelock?.address,
+              contracts.analyticsHelper?.address
+            ].filter(Boolean);
+            
+            for (const addr of contractAddresses) {
+              try {
+                const delegated = await contracts.token.getCurrentDelegatedVotes(addr);
+                console.log(`Address ${addr} has ${ethers.utils.formatEther(delegated)} delegated votes`);
+                if (!delegated.isZero()) {
+                  totalDelegated = totalDelegated.add(delegated);
+                }
+              } catch (e) {
+                console.warn(`Error getting delegated votes for ${addr}:`, e);
+              }
+            }
           }
+          
+          // Calculate delegation rate if we have supply and delegated amount
+          if (!totalSupply.isZero() && !totalDelegated.isZero()) {
+            delegationRate = totalDelegated.mul(100).div(totalSupply).toNumber() / 100;
+            console.log("Calculated delegation rate:", delegationRate);
+          }
+        } catch (error) {
+          console.warn("Error calculating delegation metrics:", error);
         }
-        
-        // If we couldn't determine participation from voting power, estimate from proposal activity
-        if (participationRate === 0) {
-          // Simple heuristic: if there are active proposals, participation is likely occurring
+      }
+      
+      // APPROACH 3: If all else fails, try to get help from the analytics helper
+      if (delegationRate === 0 && contracts.analyticsHelper) {
+        try {
+          console.log("Trying to use analyticsHelper for delegation data");
+          
+          // The JustAnalyticsHelperUpgradeable contract has methods for getting delegation data
+          if (typeof contracts.analyticsHelper.getTopDelegateConcentration === 'function') {
+            const count = 10; // Get top 10 delegates
+            const [delegates, powers, percentages] = await contracts.analyticsHelper.getTopDelegateConcentration(count);
+            
+            if (delegates && delegates.length > 0) {
+              // Sum up the percentages and divide by 100 (they're in basis points)
+              let totalDelegationPercent = 0;
+              for (let i = 0; i < delegates.length; i++) {
+                totalDelegationPercent += parseInt(percentages[i].toString());
+              }
+              
+              delegationRate = totalDelegationPercent / 10000;
+              console.log("Delegation rate from analytics helper:", delegationRate);
+            }
+          }
+        } catch (error) {
+          console.warn("Error getting delegation data from analytics helper:", error);
+        }
+      }
+      
+      // APPROACH 4: Last resort - use proposal participation as a proxy for delegation
+      if (delegationRate === 0) {
+        try {
+          console.log("Using proposal participation as a proxy for delegation");
           const { activeProposals, totalProposals } = await fetchProposalStats();
           
-          if (activeProposals > 0) {
-            participationRate = 0.2; // Assume 20% participation for active DAOs
-          } else if (totalProposals > 0) {
-            participationRate = 0.1; // Assume 10% for DAOs with past proposals
-          } else {
-            participationRate = 0.02; // Assume 2% baseline for new DAOs
+          // If there's governance activity, there's likely some delegation
+          if (activeProposals > 0 || totalProposals > 0) {
+            // More proposals indicates more active governance
+            const activityLevel = Math.min(1, (activeProposals + totalProposals) / 10);
+            delegationRate = 0.15 * activityLevel;
+            console.log("Estimated delegation rate from proposal activity:", delegationRate);
           }
+        } catch (error) {
+          console.warn("Error calculating delegation from proposals:", error);
         }
-      } catch (error) {
-        console.warn("Error calculating participation rate:", error);
       }
       
-      console.log("Governance metrics:", { participationRate, delegationRate });
+      // Ensure we have a valid rate
+      delegationRate = Math.min(1, Math.max(0, delegationRate));
+      
+      console.log("Final governance metrics:", { participationRate, delegationRate });
       
       return { 
         participationRate: isNaN(participationRate) ? 0 : participationRate, 
@@ -574,16 +609,10 @@ export function useDAOStats() {
         ...prev,
         isLoading: !isConnected || !contractsReady,
         errorMessage: !isConnected ? "Not connected to wallet" : 
-                      !contractsReady ? "Contracts not initialized" : null
+                    !contractsReady ? "Contracts not initialized" : null
       }));
     }
   }, [loadDashboardData, contractsReady, isConnected, refreshCounter, account]);
-
-  // Format percentage values for display
-  const formatPercentage = (value) => {
-    if (value === undefined || value === null) return "0.0%";
-    return `${(value * 100).toFixed(1)}%`;
-  };
 
   // Modify the displayed proposal count by subtracting 1
   const displayProposalCount = Math.max(0, dashboardStats.totalProposals - 1);
@@ -598,3 +627,6 @@ export function useDAOStats() {
     reload: loadDashboardData 
   };
 }
+
+
+

@@ -55,6 +55,23 @@ const DelegationTab = ({ user, delegation }) => {
   const currentDelegate = delegationInfo?.currentDelegate || '';
   const selfDelegated = isSelfDelegated(userAddress, currentDelegate);
 
+  // FIX: Get actual delegated tokens by excluding self if self-delegated
+  const actualDelegatedToYou = () => {
+    // If no delegators, return 0
+    if (!delegationInfo.delegators || delegationInfo.delegators.length === 0) {
+      return "0";
+    }
+    
+    // Calculate sum of all delegator balances
+    return delegationInfo.delegators.reduce((sum, delegator) => {
+      // Skip if the delegator is the user themselves (to avoid double counting)
+      if (delegator.address.toLowerCase() === userAddress.toLowerCase()) {
+        return sum;
+      }
+      return sum + parseFloat(delegator.balance || "0");
+    }, 0).toString();
+  };
+
   const handleDelegate = async () => {
     if (!delegateAddress) return;
     
@@ -99,6 +116,32 @@ const DelegationTab = ({ user, delegation }) => {
     }
   };
 
+  // FIX: Calculate proper voting power without double counting
+  const calculateVotingPower = () => {
+    if (!selfDelegated) {
+      return "0.00000"; // Not self-delegated, no voting power
+    }
+    
+    const ownBalance = parseFloat(user?.balance || "0");
+    
+    // Only add actual delegated tokens (excluding self)
+    const delegatedTokens = parseFloat(actualDelegatedToYou());
+    
+    return formatToFiveDecimals(ownBalance + delegatedTokens);
+  };
+
+  // FIX: Check if there are actual delegators (excluding self)
+  const hasRealDelegators = () => {
+    if (!delegationInfo.delegators || delegationInfo.delegators.length === 0) {
+      return false;
+    }
+    
+    // Check if there are delegators other than the user themselves
+    return delegationInfo.delegators.some(delegator => 
+      delegator.address.toLowerCase() !== userAddress.toLowerCase()
+    );
+  };
+
   return (
     <div>
       <div className="mb-6">
@@ -128,7 +171,7 @@ const DelegationTab = ({ user, delegation }) => {
               <div>
                 <p className="text-sm text-gray-500">Locked Tokens</p>
                 <p className="font-medium">
-                  {/* Force 0 locked tokens when self-delegated regardless of contract state */}
+                  {/* FIX: Properly calculate locked tokens */}
                   {selfDelegated ? "0.00000" : formatToFiveDecimals(user?.balance)} JUST
                 </p>
               </div>
@@ -139,12 +182,8 @@ const DelegationTab = ({ user, delegation }) => {
               <div>
                 <p className="text-sm text-gray-500">Your Voting Power</p>
                 <p className="font-medium">
-                  {/* Include delegated tokens in voting power when self-delegated */}
-                  {selfDelegated ? 
-                    formatToFiveDecimals(
-                      parseFloat(user?.balance || "0") + parseFloat(delegationInfo.delegatedToYou || "0")
-                    ) : 
-                    "0.00000"} JUST
+                  {/* FIX: Use the correct voting power calculation */}
+                  {calculateVotingPower()} JUST
                 </p>
               </div>
             </div>
@@ -193,25 +232,28 @@ const DelegationTab = ({ user, delegation }) => {
             
             <div className="text-center py-4">
               <p className="text-3xl font-bold text-indigo-600">
-                {formatToFiveDecimals(delegationInfo.delegatedToYou)}
+                {/* FIX: Display actual delegated tokens (excluding self) */}
+                {formatToFiveDecimals(actualDelegatedToYou())}
               </p>
               <p className="text-sm text-gray-500">JUST tokens</p>
             </div>
             
             <p className="text-sm text-gray-700 mb-4">
-              {parseFloat(delegationInfo.delegatedToYou) > 0 
-                ? `You have ${formatToFiveDecimals(delegationInfo.delegatedToYou)} JUST tokens delegated to your address from other token holders.`
+              {parseFloat(actualDelegatedToYou()) > 0 
+                ? `You have ${formatToFiveDecimals(actualDelegatedToYou())} JUST tokens delegated to your address from other token holders.`
                 : "No tokens delegated to you yet."}
             </p>
             
-            {delegationInfo.delegators && delegationInfo.delegators.length > 0 ? (
+            {hasRealDelegators() ? (
               <div className="space-y-2">
                 <h4 className="font-medium text-sm">Your Delegators:</h4>
-                {delegationInfo.delegators.map((delegator, idx) => (
-                  <div key={idx} className="text-sm flex justify-between items-center border-t pt-2">
-                    <span>{formatAddress(delegator.address)}</span>
-                    <span className="font-medium">{formatToFiveDecimals(delegator.balance)} JUST</span>
-                  </div>
+                {delegationInfo.delegators
+                  .filter(delegator => delegator.address.toLowerCase() !== userAddress.toLowerCase())
+                  .map((delegator, idx) => (
+                    <div key={idx} className="text-sm flex justify-between items-center border-t pt-2">
+                      <span>{formatAddress(delegator.address)}</span>
+                      <span className="font-medium">{formatToFiveDecimals(delegator.balance)} JUST</span>
+                    </div>
                 ))}
               </div>
             ) : (

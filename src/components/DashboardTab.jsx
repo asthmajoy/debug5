@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Clock, ArrowRight, RefreshCw } from 'lucide-react';
 import { formatPercentage, formatCountdown } from '../utils/formatters';
+import { formatTokenAmount } from '../utils/tokenFormatters';
 import Loader from './Loader';
 import blockchainDataCache from '../utils/blockchainDataCache';
 
@@ -27,18 +28,9 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
     });
   };
   
-  // Format token values to 5 decimal places
+  // Utilize our token formatter directly to ensure consistent display
   const formatToFiveDecimals = (value) => {
-    if (value === undefined || value === null) return "0.00000";
-    
-    // Handle string inputs
-    const numValue = typeof value === 'string' ? parseFloat(value) : value;
-    
-    // If it's NaN or not a number, return "0.00000"
-    if (isNaN(numValue)) return "0.00000";
-    
-    // Return with exactly 5 decimal places
-    return numValue.toFixed(5);
+    return formatTokenAmount(value);
   };
 
   // Store proposal vote data
@@ -186,12 +178,12 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
               <div>
                 <p className="text-gray-500">Token Holders</p>
                 <p className="text-2xl font-bold">{formatNumberDisplay(stats.totalHolders)}</p>
-                {stats.totalHolders === 0 && <p className="text-xs text-orange-500">No holders detected</p>}
+                {stats.totalHolders === 0 && <p className="text-xs text-orange-500"></p>}
               </div>
               <div>
                 <p className="text-gray-500">Circulating</p>
                 <p className="text-2xl font-bold">{formatNumberDisplay(stats.circulatingSupply)}</p>
-                {stats.circulatingSupply === "0" && <p className="text-xs text-orange-500">No tokens in circulation</p>}
+                {stats.circulatingSupply === "0" && <p className="text-xs text-orange-500"></p>}
               </div>
               <div>
                 <p className="text-gray-500">Active Proposals</p>

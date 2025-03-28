@@ -22,22 +22,22 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     async function fetchUserData() {
-      if (isConnected && account && contractsReady && contracts.token && contracts.governance) {
+      if (isConnected && account && contractsReady && contracts.justToken && contracts.governance) {
         try {
           setLoading(true);
           
           // Get token balance
-          const balance = await contracts.token.balanceOf(account);
+          const balance = await contracts.justToken.balanceOf(account);
           
           // Get current snapshot ID
-          const snapshotId = await contracts.token.getCurrentSnapshotId();
+          const snapshotId = await contracts.justToken.getCurrentSnapshotId();
           
           // Get voting power
-          const votingPower = await contracts.token.getEffectiveVotingPower(account, snapshotId);
+          const votingPower = await contracts.justToken.getEffectiveVotingPower(account, snapshotId);
           
           // Get delegation info
-          const delegate = await contracts.token.getDelegate(account);
-          const lockedTokens = await contracts.token.getLockedTokens(account);
+          const delegate = await contracts.justToken.getDelegate(account);
+          const lockedTokens = await contracts.justToken.getLockedTokens(account);
           
           // Check roles
           const roles = ['user'];

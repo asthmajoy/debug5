@@ -1,4 +1,4 @@
-// src/hooks/useDelegation.js - Updated to remove localStorage dependency
+// src/hooks/useDelegation.js - Updated to access justToken instead of token
 import { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
 import { useWeb3 } from '../contexts/Web3Context';
@@ -43,7 +43,7 @@ export function useDelegation() {
   // Delegate voting power to another address
   const delegate = async (delegateeAddress) => {
     if (!isConnected || !contractsReady) throw new Error("Not connected");
-    if (!contracts.token) throw new Error("Token contract not initialized");
+    if (!contracts.justToken) throw new Error("Token contract not initialized");
     if (!ethers.utils.isAddress(delegateeAddress)) throw new Error("Invalid address format");
     
     // Prevent self-delegation via regular delegate - should use resetDelegation instead
@@ -80,7 +80,7 @@ export function useDelegation() {
       }
       
       // Execute the delegation
-      const tx = await contracts.token.delegate(delegateeAddress, {
+      const tx = await contracts.justToken.delegate(delegateeAddress, {
         gasLimit: 300000 // Set a reasonable gas limit
       });
       
@@ -103,7 +103,7 @@ export function useDelegation() {
   // Reset delegation (self-delegate)
   const resetDelegation = async () => {
     if (!isConnected || !contractsReady) throw new Error("Not connected");
-    if (!contracts.token) throw new Error("Token contract not initialized");
+    if (!contracts.justToken) throw new Error("Token contract not initialized");
     
     try {
       setLoading(true);
@@ -113,14 +113,14 @@ export function useDelegation() {
       
       let tx;
       // Check if the contract has resetDelegation or if we should use delegate(self)
-      if (typeof contracts.token.resetDelegation === 'function') {
+      if (typeof contracts.justToken.resetDelegation === 'function') {
         // Use resetDelegation if available
-        tx = await contracts.token.resetDelegation({
+        tx = await contracts.justToken.resetDelegation({
           gasLimit: 200000
         });
       } else {
         // Otherwise delegate to self
-        tx = await contracts.token.delegate(account, {
+        tx = await contracts.justToken.delegate(account, {
           gasLimit: 200000
         });
       }
@@ -184,7 +184,7 @@ export function useDelegation() {
         
         // Get the next delegate in the chain
         try {
-          currentDelegate = await contracts.token.getDelegate(currentDelegate);
+          currentDelegate = await contracts.justToken.getDelegate(currentDelegate);
           
           // If the delegate is delegating to themself or not delegating, stop
           if (currentDelegate === ethers.constants.AddressZero || visited.has(currentDelegate.toLowerCase())) {

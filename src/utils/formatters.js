@@ -1,7 +1,5 @@
 import { ethers } from 'ethers';
 
-// Add this function to your src/utils/formatters.js file
-
 /**
  * Safely formats any value for rendering in React, with special handling for BigNumber objects
  * @param {any} value - The value to format
@@ -46,6 +44,7 @@ export function safeRender(value, decimals = 18) {
   // Fallback
   return String(value);
 }
+
 // Format address to truncated form (0x1234...5678)
 export function formatAddress(address, start = 6, end = 4) {
   if (!address) return '';
@@ -151,11 +150,23 @@ export function formatCountdown(timestamp) {
   }
 }
 
-// Format a number to a percentage string
-export function formatPercentage(value, decimals = 2) {
-  if (value === null || value === undefined) return '0%';
+/**
+ * Format a percentage value with proper handling of null/undefined values
+ * @param {number} value - The value to format as percentage (0-1 range)
+ * @param {number} decimals - Number of decimal places (default: 1)
+ * @returns {string} Formatted percentage string
+ */
+export function formatPercentage(value, decimals = 1) {
+  // Handle null, undefined, or NaN values
+  if (value === null || value === undefined || isNaN(value)) {
+    return '0.0%';
+  }
   
-  return `${parseFloat(value).toFixed(decimals)}%`;
+  // Ensure value is treated as a number
+  const numValue = typeof value === 'string' ? parseFloat(value) : value;
+  
+  // Format with the specified number of decimal places
+  return `${(numValue * 100).toFixed(decimals)}%`;
 }
 
 // Format a number with commas as thousands separators
@@ -203,5 +214,27 @@ export function formatTime(seconds) {
     return `${minutes} minute${minutes > 1 ? 's' : ''}`;
   } else {
     return `${seconds} second${seconds !== 1 ? 's' : ''}`;
+  }
+}
+
+/**
+ * Get a color for a percentage value gradient
+ * @param {number} value - Percentage value (0-1 range)
+ * @param {string} lowColor - Color for low values (default: red)
+ * @param {string} midColor - Color for medium values (default: yellow)
+ * @param {string} highColor - Color for high values (default: green)
+ * @returns {string} CSS color value
+ */
+export function getPercentageColor(value, lowColor = '#ef4444', midColor = '#f59e0b', highColor = '#10b981') {
+  if (value === undefined || value === null || isNaN(value)) {
+    return '#d1d5db'; // Default gray
+  }
+  
+  if (value < 0.3) {
+    return lowColor;
+  } else if (value < 0.7) {
+    return midColor;
+  } else {
+    return highColor;
   }
 }

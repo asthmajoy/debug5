@@ -32,6 +32,33 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
   const [threatLevelDelays, setThreatLevelDelays] = useState({});
   const [autoScroll, setAutoScroll] = useState(true);
   
+  // Helper function to ensure vote count consistency
+  const ensureVoteCountConsistency = (data, proposalId) => {
+    // Make a copy to avoid mutating the original
+    const result = { ...data };
+    
+    // Ensure vote counts are numbers
+    result.yesVoters = parseInt(result.yesVoters) || 0;
+    result.noVoters = parseInt(result.noVoters) || 0;
+    result.abstainVoters = parseInt(result.abstainVoters) || 0;
+    result.totalVoters = parseInt(result.totalVoters) || 0;
+    
+    // Check if we have voting power but no voters
+    if (result.yesVotingPower > 0 && result.yesVoters === 0) result.yesVoters = 1;
+    if (result.noVotingPower > 0 && result.noVoters === 0) result.noVoters = 1;
+    if (result.abstainVotingPower > 0 && result.abstainVoters === 0) result.abstainVoters = 1;
+    
+    // Ensure total matches sum
+    const calculatedTotal = result.yesVoters + result.noVoters + result.abstainVoters;
+    
+    if (calculatedTotal !== result.totalVoters) {
+      // If individual counts don't add up to total, adjust total to match sum
+      result.totalVoters = calculatedTotal;
+    }
+    
+    return result;
+  };
+  
   // Function to cycle through threat levels
   const cycleThreatLevel = (direction) => {
     setCurrentThreatLevel(prevLevel => {
@@ -147,7 +174,7 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
       const cachedData = blockchainDataCache.get(cacheKey);
       if (cachedData) {
         console.log(`Using cached data for proposal #${proposalId}`);
-        return cachedData;
+        return ensureVoteCountConsistency(cachedData, proposalId);
       }
     }
     
@@ -173,6 +200,10 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
         yesVotingPower: parseFloat(data.yesVotes || data.yesVotingPower) || 0,
         noVotingPower: parseFloat(data.noVotes || data.noVotingPower) || 0,
         abstainVotingPower: parseFloat(data.abstainVotes || data.abstainVotingPower) || 0,
+        // Take voter counts from data if available
+        yesVoters: data.yesVoters || 0,
+        noVoters: data.noVoters || 0,
+        abstainVoters: data.abstainVoters || 0,
         totalVoters: parseInt(data.totalVoters) || 0,
         fetchedAt: Date.now()
       };
@@ -189,25 +220,158 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
         processedData.noPercentage = (processedData.noVotingPower / processedData.totalVotingPower) * 100;
         processedData.abstainPercentage = (processedData.abstainVotingPower / processedData.totalVotingPower) * 100;
         
-        // Distribute voters based on voting power ratios
-        if (processedData.totalVoters > 0) {
-          processedData.yesVoters = Math.round((processedData.yesVotingPower / processedData.totalVotingPower) * processedData.totalVoters);
-          processedData.noVoters = Math.round((processedData.noVotingPower / processedData.totalVotingPower) * processedData.totalVoters);
-          processedData.abstainVoters = processedData.totalVoters - processedData.yesVoters - processedData.noVoters;
-          // Ensure non-negative values
-          processedData.abstainVoters = Math.max(0, processedData.abstainVoters);
-        } else {
-          processedData.yesVoters = 0;
-          processedData.noVoters = 0;
-          processedData.abstainVoters = 0;
+        // Estimate voter counts if they're not available but we have voting power
+        // Only do this when we have a total count but no breakdown
+        if (processedData.totalVoters > 0 && 
+           (processedData.yesVoters === 0 && processedData.noVoters === 0 && processedData.abstainVoters === 0)) {
+          console.log(`Estimating voter counts for proposal #${proposalId} based on voting power distribution`);
+          
+          // Use simple voting power distribution as estimate
+          // This is better than showing 0 voters when we know there are votes
+          processedData.yesVoters = processedData.yesVotingPower > 0 ? 
+            Math.max(1, Math.round((processedData.yesVotingPower / processedData.totalVotingPower) * processedData.totalVoters)) : 0;
+          
+          processedData.noVoters = processedData.noVotingPower > 0 ? 
+            Math.max(1, Math.round((processedData.noVotingPower / processedData.totalVotingPower) * processedData.totalVoters)) : 0;
+          
+          // Adjust abstain count to ensure total adds up correctly
+          const calculatedTotal = processedData.yesVoters + processedData.noVoters;
+          processedData.abstainVoters = Math.max(0, processedData.totalVoters - calculatedTotal);
+          
+          // If we've assigned too many voters, adjust proportionally
+          if (calculatedTotal > processedData.totalVoters) {
+            const adjustmentFactor = processedData.totalVoters / calculatedTotal;
+            processedData.yesVoters = Math.floor(processedData.yesVoters * adjustmentFactor);
+            processedData.noVoters = Math.floor(processedData.noVoters * adjustmentFactor);
+            processedData.abstainVoters = Math.max(0, processedData.totalVoters - processedData.yesVoters - processedData.noVoters);
+          }
+          
+          // Set a minimum of 1 voter if there is any voting power in that category
+          if (processedData.yesVotingPower > 0 && processedData.yesVoters === 0) processedData.yesVoters = 1;
+          if (processedData.noVotingPower > 0 && processedData.noVoters === 0) processedData.noVoters = 1;
+          if (processedData.abstainVotingPower > 0 && processedData.abstainVoters === 0) processedData.abstainVoters = 1;
+          
+          // Final adjustment to ensure the total matches
+          const finalTotal = processedData.yesVoters + processedData.noVoters + processedData.abstainVoters;
+          if (finalTotal !== processedData.totalVoters) {
+            const diff = processedData.totalVoters - finalTotal;
+            // Add or subtract the difference to the largest voter group
+            if (processedData.yesVoters >= processedData.noVoters && processedData.yesVoters >= processedData.abstainVoters) {
+              processedData.yesVoters += diff;
+            } else if (processedData.noVoters >= processedData.yesVoters && processedData.noVoters >= processedData.abstainVoters) {
+              processedData.noVoters += diff;
+            } else {
+              processedData.abstainVoters += diff;
+            }
+          }
         }
       } else {
         processedData.yesPercentage = 0;
         processedData.noPercentage = 0;
         processedData.abstainPercentage = 0;
-        processedData.yesVoters = 0;
-        processedData.noVoters = 0;
-        processedData.abstainVoters = 0;
+      }
+      
+      // Ensure vote count consistency - total voters should equal sum of individual vote counts
+      const totalCalculatedVoters = processedData.yesVoters + processedData.noVoters + processedData.abstainVoters;
+
+      if (totalCalculatedVoters !== processedData.totalVoters && processedData.totalVoters > 0) {
+        console.log(`Vote count inconsistency for proposal #${proposalId}:`, {
+          calculatedTotal: totalCalculatedVoters,
+          reportedTotal: processedData.totalVoters,
+          yes: processedData.yesVoters,
+          no: processedData.noVoters,
+          abstain: processedData.abstainVoters
+        });
+        
+        // Option 1: Adjust individual vote counts to match the total
+        if (totalCalculatedVoters < processedData.totalVoters) {
+          const missingVoters = processedData.totalVoters - totalCalculatedVoters;
+          console.log(`Need to distribute ${missingVoters} missing voters`);
+          
+          // Distribute missing voters based on voting power proportion
+          if (processedData.totalVotingPower > 0) {
+            // Determine which vote type has voting power but too few voters
+            const yesRatio = processedData.yesVotingPower / processedData.totalVotingPower;
+            const noRatio = processedData.noVotingPower / processedData.totalVotingPower;
+            const abstainRatio = processedData.abstainVotingPower / processedData.totalVotingPower;
+            
+            // Expected voters based on voting power ratio
+            const expectedYesVoters = Math.round(processedData.totalVoters * yesRatio);
+            const expectedNoVoters = Math.round(processedData.totalVoters * noRatio);
+            const expectedAbstainVoters = processedData.totalVoters - expectedYesVoters - expectedNoVoters;
+            
+            // Adjust voter counts only if we expect more voters than currently shown
+            if (expectedYesVoters > processedData.yesVoters && processedData.yesVotingPower > 0) {
+              processedData.yesVoters = expectedYesVoters;
+            }
+            
+            if (expectedNoVoters > processedData.noVoters && processedData.noVotingPower > 0) {
+              processedData.noVoters = expectedNoVoters;
+            }
+            
+            if (expectedAbstainVoters > processedData.abstainVoters && processedData.abstainVotingPower > 0) {
+              processedData.abstainVoters = expectedAbstainVoters;
+            }
+            
+            // Recalculate total and adjust if needed
+            const newTotal = processedData.yesVoters + processedData.noVoters + processedData.abstainVoters;
+            if (newTotal > processedData.totalVoters) {
+              // If we've now assigned too many voters, scale back proportionally
+              const scaleFactor = processedData.totalVoters / newTotal;
+              processedData.yesVoters = Math.floor(processedData.yesVoters * scaleFactor);
+              processedData.noVoters = Math.floor(processedData.noVoters * scaleFactor);
+              processedData.abstainVoters = processedData.totalVoters - processedData.yesVoters - processedData.noVoters;
+            } else if (newTotal < processedData.totalVoters) {
+              // If we still have missing voters, add them to the highest voting power category
+              const stillMissing = processedData.totalVoters - newTotal;
+              if (yesRatio >= noRatio && yesRatio >= abstainRatio) {
+                processedData.yesVoters += stillMissing;
+              } else if (noRatio >= yesRatio && noRatio >= abstainRatio) {
+                processedData.noVoters += stillMissing;
+              } else {
+                processedData.abstainVoters += stillMissing;
+              }
+            }
+          } else {
+            // If no voting power data, distribute missing voters evenly
+            // Add missing voters to the category that already has voters
+            if (processedData.yesVoters > 0) {
+              processedData.yesVoters += missingVoters;
+            } else if (processedData.noVoters > 0) {
+              processedData.noVoters += missingVoters;
+            } else if (processedData.abstainVoters > 0) {
+              processedData.abstainVoters += missingVoters;
+            } else {
+              // If no category has voters, add to the first one with voting power
+              if (processedData.yesVotingPower > 0) {
+                processedData.yesVoters += missingVoters;
+              } else if (processedData.noVotingPower > 0) {
+                processedData.noVoters += missingVoters;
+              } else {
+                processedData.abstainVoters += missingVoters;
+              }
+            }
+          }
+        } else if (totalCalculatedVoters > processedData.totalVoters) {
+          // Option 2: If we have more individual voters than total, adjust the total to match the sum
+          console.log(`Adjusting total voters from ${processedData.totalVoters} to ${totalCalculatedVoters}`);
+          processedData.totalVoters = totalCalculatedVoters;
+        }
+        
+        // One final check to make absolutely sure they match
+        const finalCalculatedVoters = processedData.yesVoters + processedData.noVoters + processedData.abstainVoters;
+        if (finalCalculatedVoters !== processedData.totalVoters) {
+          console.log(`Final adjustment needed, setting total to ${finalCalculatedVoters}`);
+          processedData.totalVoters = finalCalculatedVoters;
+        }
+        
+        console.log(`After adjustment:`, {
+          calculatedTotal: processedData.yesVoters + processedData.noVoters + processedData.abstainVoters,
+          reportedTotal: processedData.totalVoters,
+          yes: processedData.yesVoters,
+          no: processedData.noVoters,
+          abstain: processedData.abstainVoters
+        });
       }
       
       // Set TTL based on proposal state - use longer TTL for inactive proposals
@@ -225,7 +389,6 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
     } catch (error) {
       console.error(`Error fetching vote data for proposal ${proposalId}:`, error);
       
-      // Try to use proposal data directly if blockchain query failed
       try {
         console.log(`Constructing fallback data from direct query for #${proposalId}`);
         
@@ -251,6 +414,10 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
           yesVotingPower: parseFloat(proposal.yesVotes) || 0,
           noVotingPower: parseFloat(proposal.noVotes) || 0,
           abstainVotingPower: parseFloat(proposal.abstainVotes) || 0,
+          // Use actual voter counts as fallback
+          yesVoters: proposal.votedYes ? 1 : 0,
+          noVoters: proposal.votedNo ? 1 : 0,
+          abstainVoters: (proposal.hasVoted && !proposal.votedYes && !proposal.votedNo) ? 1 : 0,
           totalVoters: proposal.hasVoted ? 1 : 0,
           fetchedAt: Date.now()
         };
@@ -261,23 +428,22 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
           fallbackData.noVotingPower + 
           fallbackData.abstainVotingPower;
         
-        // Calculate percentages and voter counts
+        // Calculate percentages
         if (fallbackData.totalVotingPower > 0) {
           fallbackData.yesPercentage = (fallbackData.yesVotingPower / fallbackData.totalVotingPower) * 100;
           fallbackData.noPercentage = (fallbackData.noVotingPower / fallbackData.totalVotingPower) * 100;
           fallbackData.abstainPercentage = (fallbackData.abstainVotingPower / fallbackData.totalVotingPower) * 100;
           
-          // Set voter counts based on simple logic for fallback
-          fallbackData.yesVoters = proposal.votedYes ? 1 : 0;
-          fallbackData.noVoters = proposal.votedNo ? 1 : 0;
-          fallbackData.abstainVoters = (proposal.hasVoted && !proposal.votedYes && !proposal.votedNo) ? 1 : 0;
+          // If we have voting power, make sure we have at least one voter for each type
+          if (fallbackData.yesVotingPower > 0 && fallbackData.yesVoters === 0) fallbackData.yesVoters = 1;
+          if (fallbackData.noVotingPower > 0 && fallbackData.noVoters === 0) fallbackData.noVoters = 1;
+          if (fallbackData.abstainVotingPower > 0 && fallbackData.abstainVoters === 0) fallbackData.abstainVoters = 1;
+          
+          fallbackData.totalVoters = fallbackData.yesVoters + fallbackData.noVoters + fallbackData.abstainVoters;
         } else {
           fallbackData.yesPercentage = 0;
           fallbackData.noPercentage = 0;
           fallbackData.abstainPercentage = 0;
-          fallbackData.yesVoters = 0;
-          fallbackData.noVoters = 0;
-          fallbackData.abstainVoters = 0;
         }
         
         // Cache this fallback data - use shorter TTL since it's fallback data
@@ -360,6 +526,10 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
             yesVotingPower: parseFloat(data.yesVotes || data.yesVotingPower) || 0,
             noVotingPower: parseFloat(data.noVotes || data.noVotingPower) || 0,
             abstainVotingPower: parseFloat(data.abstainVotes || data.abstainVotingPower) || 0,
+            // Use direct voter counts
+            yesVoters: data.yesVoters || 0,
+            noVoters: data.noVoters || 0,
+            abstainVoters: data.abstainVoters || 0,
             totalVoters: parseInt(data.totalVoters) || 0,
             fetchedAt: Date.now()
           };
@@ -375,6 +545,20 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
             processedData.yesPercentage = (processedData.yesVotingPower / processedData.totalVotingPower) * 100;
             processedData.noPercentage = (processedData.noVotingPower / processedData.totalVotingPower) * 100;
             processedData.abstainPercentage = (processedData.abstainVotingPower / processedData.totalVotingPower) * 100;
+            
+            // Ensure vote counts are reasonable
+            if (processedData.totalVoters > 0 && 
+                (processedData.yesVoters === 0 && processedData.noVoters === 0 && processedData.abstainVoters === 0)) {
+              
+              // If we have voting power, make sure we have at least one voter
+              if (processedData.yesVotingPower > 0) processedData.yesVoters = 1;
+              if (processedData.noVotingPower > 0) processedData.noVoters = 1;
+              if (processedData.abstainVotingPower > 0) processedData.abstainVoters = 1;
+              
+              // Ensure total is updated
+              processedData.totalVoters = Math.max(processedData.totalVoters, 
+                processedData.yesVoters + processedData.noVoters + processedData.abstainVoters);
+            }
           } else {
             processedData.yesPercentage = 0;
             processedData.noPercentage = 0;
@@ -462,9 +646,6 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
     try {
       console.log(`Direct query for votes on proposal ${proposalId}`);
       
-      // Make sure to query regardless of proposal state
-      // No special handling based on proposal state
-      
       // Use VoteCast events - the most reliable method
       const filter = contracts.governance.filters.VoteCast(proposalId);
       const events = await contracts.governance.queryFilter(filter);
@@ -497,48 +678,41 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
       let yesTotal = ethers.BigNumber.from(0);
       let noTotal = ethers.BigNumber.from(0);
       let abstainTotal = ethers.BigNumber.from(0);
-      let yesVoterCount = 0;
-      let noVoterCount = 0;
-      let abstainVoterCount = 0;
       
-      // Process events to get vote totals
+      // Process all events first to build a map of the final vote for each voter
       for (const event of events) {
         try {
           const voter = event.args.voter.toLowerCase();
           const support = Number(event.args.support);
           const power = event.args.votingPower;
           
-          // Update the voter map with the latest vote
-          // If they've voted before, subtract their previous vote from the totals
-          if (voters.has(voter)) {
-            const prevVote = voters.get(voter);
-            if (prevVote.support === 1) yesVoterCount--;
-            else if (prevVote.support === 0) noVoterCount--;
-            else if (prevVote.support === 2) abstainVoterCount--;
-          }
-          
-          // Add to the counts based on their new vote
-          if (support === 1) yesVoterCount++;
-          else if (support === 0) noVoterCount++;
-          else if (support === 2) abstainVoterCount++;
-          
-          // Store the updated vote
+          // Store or update this voter's latest vote
           voters.set(voter, { support, power });
         } catch (err) {
           console.warn(`Error processing vote event:`, err);
         }
       }
       
-      // Calculate totals from the unique voters' latest votes
+      console.log(`Processed ${voters.size} unique voters for proposal ${proposalId}`);
+      
+      // Now count voters and sum up voting power by type
+      let yesVoterCount = 0;
+      let noVoterCount = 0;
+      let abstainVoterCount = 0;
+      
+      // Calculate totals from each voter's final vote
       for (const [_, voteInfo] of voters.entries()) {
         const { support, power } = voteInfo;
         
         if (support === 1) { // Yes
           yesTotal = yesTotal.add(power);
+          yesVoterCount++;
         } else if (support === 0) { // No
           noTotal = noTotal.add(power);
+          noVoterCount++;
         } else if (support === 2) { // Abstain
           abstainTotal = abstainTotal.add(power);
+          abstainVoterCount++;
         }
       }
       
@@ -564,12 +738,42 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
         abstainVoters: abstainVoterCount
       });
       
+      // Verify that the voter counts add up correctly
+      const totalCalculatedVoters = yesVoterCount + noVoterCount + abstainVoterCount;
+      if (totalCalculatedVoters !== voters.size) {
+        console.warn(`Voter count mismatch in directQueryVotes: sum=${totalCalculatedVoters}, map size=${voters.size}`);
+        // Adjust to ensure consistency - if we counted the voters directly, that's more reliable
+        const votersSize = totalCalculatedVoters;
+        
+        console.log(`Adjusted total voters from ${voters.size} to ${votersSize}`);
+        
+        return {
+          yesVotes: ethers.utils.formatEther(yesTotal),
+          noVotes: ethers.utils.formatEther(noTotal),
+          abstainVotes: ethers.utils.formatEther(abstainTotal),
+          totalVotes: votersSize,
+          totalVoters: votersSize, // Use our calculated total
+          yesVoters: yesVoterCount,
+          noVoters: noVoterCount,
+          abstainVoters: abstainVoterCount,
+          yesPercentage,
+          noPercentage,
+          abstainPercentage,
+          yesVotingPower: ethers.utils.formatEther(yesTotal),
+          noVotingPower: ethers.utils.formatEther(noTotal),
+          abstainVotingPower: ethers.utils.formatEther(abstainTotal),
+          totalVotingPower: ethers.utils.formatEther(totalVotingPower),
+          source: 'direct-query'
+        };
+      }
+      
       return {
         yesVotes: ethers.utils.formatEther(yesTotal),
         noVotes: ethers.utils.formatEther(noTotal),
         abstainVotes: ethers.utils.formatEther(abstainTotal),
         totalVotes: voters.size,
         totalVoters: voters.size,
+        // Return accurate voter counts from event processing
         yesVoters: yesVoterCount,
         noVoters: noVoterCount,
         abstainVoters: abstainVoterCount,
@@ -701,22 +905,23 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
     };
   }, [proposals, getProposalVoteTotals, PROPOSAL_STATES]);
 
-  // Rest of the component remains the same...
-  // ... [the rest of the component code] ...
-
   // Get vote data for a proposal - CONSISTENTLY FOR ALL PROPOSAL STATES
   const getVoteData = useCallback((proposal) => {
     // First check if we have data in the state
     const voteData = proposalVoteData[proposal.id];
     
     if (voteData) {
-      return voteData;
+      // Run a quick consistency check before returning
+      const consistentData = ensureVoteCountConsistency(voteData, proposal.id);
+      return consistentData;
     }
     
     // Check if we have data in the global cache with the exact dashboard key
     const cachedData = blockchainDataCache.get(getVoteDataCacheKey(proposal.id));
     if (cachedData) {
-      return cachedData;
+      // Run a quick consistency check before returning
+      const consistentData = ensureVoteCountConsistency(cachedData, proposal.id);
+      return consistentData;
     }
     
     // If not in state or cache, trigger a fetch to get the data
@@ -755,6 +960,14 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
       syntheticData.yesPercentage = (syntheticData.yesVotingPower / totalVotingPower) * 100;
       syntheticData.noPercentage = (syntheticData.noVotingPower / totalVotingPower) * 100;
       syntheticData.abstainPercentage = (syntheticData.abstainVotingPower / totalVotingPower) * 100;
+      
+      // If we have voting power, set at least 1 voter per category with power
+      if (syntheticData.yesVotingPower > 0) syntheticData.yesVoters = 1;
+      if (syntheticData.noVotingPower > 0) syntheticData.noVoters = 1;
+      if (syntheticData.abstainVotingPower > 0) syntheticData.abstainVoters = 1;
+      
+      // Set total voters to sum of individual types
+      syntheticData.totalVoters = syntheticData.yesVoters + syntheticData.noVoters + syntheticData.abstainVoters;
     }
     
     return syntheticData;
@@ -1154,11 +1367,11 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
                   {/* Vote bar */}
                   {renderVoteBar(proposal)}
                   
-                  {/* Vote counts */}
+                  {/* Vote counts - FIXED VERSION */}
                   <div className="grid grid-cols-3 gap-4 text-sm text-gray-500 mt-2">
-                    <div>{Math.round((voteData.yesVotingPower / Math.max(0.001, voteData.totalVotingPower)) * voteData.totalVoters) || 0} voter{(Math.round((voteData.yesVotingPower / Math.max(0.001, voteData.totalVotingPower)) * voteData.totalVoters) || 0) !== 1 && 's'}</div>
-                    <div className="text-center">{Math.round((voteData.noVotingPower / Math.max(0.001, voteData.totalVotingPower)) * voteData.totalVoters) || 0} voter{(Math.round((voteData.noVotingPower / Math.max(0.001, voteData.totalVotingPower)) * voteData.totalVoters) || 0) !== 1 && 's'}</div>
-                    <div className="text-right">{Math.max(0, voteData.totalVoters - Math.round((voteData.yesVotingPower / Math.max(0.001, voteData.totalVotingPower)) * voteData.totalVoters) - Math.round((voteData.noVotingPower / Math.max(0.001, voteData.totalVotingPower)) * voteData.totalVoters)) || 0} voter{(Math.max(0, voteData.totalVoters - Math.round((voteData.yesVotingPower / Math.max(0.001, voteData.totalVotingPower)) * voteData.totalVoters) - Math.round((voteData.noVotingPower / Math.max(0.001, voteData.totalVotingPower)) * voteData.totalVoters)) || 0) !== 1 && 's'}</div>
+                    <div>{voteData.yesVoters || 0} voter{(voteData.yesVoters || 0) !== 1 && 's'}</div>
+                    <div className="text-center">{voteData.noVoters || 0} voter{(voteData.noVoters || 0) !== 1 && 's'}</div>
+                    <div className="text-right">{voteData.abstainVoters || 0} voter{(voteData.abstainVoters || 0) !== 1 && 's'}</div>
                   </div>
                   
                   {/* Voting power section - FOLLOWING DASHBOARD APPROACH */}
@@ -1344,24 +1557,25 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
                     return (
                       <>
                         {/* Vote counts */}
-                        <h5 className="text-sm font-medium mb-3">Vote Counts (1 vote per person)</h5>
+                        <h5 className="text-sm font-medium mb-3">Vote Counts</h5>
                         
+                        {/* FIXED VERSION - Use direct voter counts */}
                         <div className="grid grid-cols-3 gap-4 text-center mb-3">
                           <div>
                             <div className="text-green-600 font-medium">
-                              {Math.round((voteData.yesVotingPower / Math.max(0.001, voteData.totalVotingPower)) * voteData.totalVoters) || 0}
+                              {voteData.yesVoters || 0}
                             </div>
                             <div className="text-xs text-gray-500">Yes Votes</div>
                           </div>
                           <div>
                             <div className="text-red-600 font-medium">
-                              {Math.round((voteData.noVotingPower / Math.max(0.001, voteData.totalVotingPower)) * voteData.totalVoters) || 0}
+                              {voteData.noVoters || 0}
                             </div>
                             <div className="text-xs text-gray-500">No Votes</div>
                           </div>
                           <div>
                             <div className="text-gray-600 font-medium">
-                              {Math.max(0, voteData.totalVoters - Math.round((voteData.yesVotingPower / Math.max(0.001, voteData.totalVotingPower)) * voteData.totalVoters) - Math.round((voteData.noVotingPower / Math.max(0.001, voteData.totalVotingPower)) * voteData.totalVoters)) || 0}
+                              {voteData.abstainVoters || 0}
                             </div>
                             <div className="text-xs text-gray-500">Abstain</div>
                           </div>
@@ -1402,7 +1616,7 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
                             </div>
                             {selectedProposal.snapshotId && (
                               <div className="text-xs text-gray-500 mt-1">
-                                Quorum calculated at snapshot #{selectedProposal.snapshotId}
+                                Snapshot #{selectedProposal.snapshotId}
                               </div>
                             )}
                           </div>

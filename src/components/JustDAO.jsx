@@ -74,6 +74,51 @@ const JustDAODashboard = () => {
     });
   };
   
+  // Helper function to properly detect self-delegation (copied from DelegationTab)
+  const isSelfDelegated = (userAddress, delegateAddress) => {
+    if (!userAddress || !delegateAddress) return true; // Default to self-delegated if addresses aren't available
+    
+    // Normalize addresses for comparison
+    const normalizedUserAddr = userAddress.toLowerCase();
+    const normalizedDelegateAddr = delegateAddress.toLowerCase();
+    
+    // Check if delegate is self or zero address
+    return normalizedUserAddr === normalizedDelegateAddr || 
+           delegateAddress === '0x0000000000000000000000000000000000000000';
+  };
+
+  // Get actual delegated tokens by excluding self if self-delegated (copied from DelegationTab)
+  const actualDelegatedToYou = () => {
+    // If no delegators, return 0
+    if (!userData.delegators || userData.delegators.length === 0) {
+      return "0";
+    }
+    
+    // Calculate sum of all delegator balances
+    return userData.delegators.reduce((sum, delegator) => {
+      // Skip if the delegator is the user themselves (to avoid double counting)
+      if (delegator.address.toLowerCase() === account.toLowerCase()) {
+        return sum;
+      }
+      return sum + parseFloat(delegator.balance || "0");
+    }, 0).toString();
+  };
+
+  // Calculate proper voting power without double counting (based on DelegationTab logic)
+  const calculateVotingPower = () => {
+    // Check if user is self-delegated
+    const selfDelegated = isSelfDelegated(account, userData.delegate);
+    
+    if (!selfDelegated) {
+      return "0"; // Not self-delegated, no voting power
+    }
+    
+    const ownBalance = parseFloat(userData.balance || "0");
+    const delegatedTokens = parseFloat(actualDelegatedToYou());
+    
+    return (ownBalance + delegatedTokens).toString();
+  };
+  
   // Render security subcomponent based on securitySubtab state
   const renderSecuritySubtab = () => {
     switch (securitySubtab) {
@@ -95,6 +140,43 @@ const JustDAODashboard = () => {
     refreshData();
   };
 
+  // Get the correct voting power using the improved calculation
+  const getCorrectVotingPower = () => {
+    // Check delegation status first
+    const selfDelegated = isSelfDelegated(account, userData.delegate);
+    
+    // If user has explicitly delegated to someone else, they have zero voting power
+    if (!selfDelegated) {
+      return "0"; // User has delegated voting power away
+    }
+    
+    // Use the new calculation that avoids double counting
+    const calculatedVotingPower = calculateVotingPower();
+    
+    // Only use fallback logic if we couldn't calculate properly AND user is self-delegated
+    if (!calculatedVotingPower || parseFloat(calculatedVotingPower) === 0) {
+      // Original fallback logic, only used when self-delegated
+      if (userData.onChainVotingPower && parseFloat(userData.onChainVotingPower) > 0) {
+        return userData.onChainVotingPower;
+      }
+      return userData.votingPower;
+    }
+    
+    return calculatedVotingPower;
+  };
+
+  // Debug log to inspect what voting power values are available
+  console.log("DEBUG - User data in JustDAO:", {
+    balance: userData.balance,
+    localVotingPower: userData.votingPower,
+    onChainVotingPower: userData.onChainVotingPower,
+    calculatedVotingPower: calculateVotingPower(),
+    finalVotingPower: getCorrectVotingPower(),
+    isSelfDelegated: isSelfDelegated(account, userData.delegate),
+    delegatedToYou: actualDelegatedToYou(),
+    currentDelegate: userData.delegate
+  });
+
   return (
     <div className="flex flex-col min-h-screen bg-gray-50">
       {/* Header */}
@@ -110,7 +192,8 @@ const JustDAODashboard = () => {
                 <div className="flex gap-2">
                   <span>{formatTokenForHeader(userData.balance)} JUST</span>
                   <span>|</span>
-                  <span>{formatTokenForHeader(userData.votingPower)} Voting Power</span>
+                  {/* Use the improved voting power calculation function */}
+                  <span>{formatTokenForHeader(getCorrectVotingPower())} Voting Power</span>
                 </div>
               </div>
             ) : (
@@ -214,7 +297,8 @@ const JustDAODashboard = () => {
             user={{
               ...userData,
               balance: formatTokenAmount(userData.balance),
-              votingPower: formatTokenAmount(userData.votingPower)
+              // Make sure we're using the right voting power value
+              votingPower: formatTokenAmount(getCorrectVotingPower())
             }}
             stats={daoStats} 
             loading={dataLoading}
@@ -232,54 +316,55 @@ const JustDAODashboard = () => {
               }))
             }
             getProposalVoteTotals={getProposalVoteTotals}
+            onRefresh={handleRefresh}
           />
         )}
         
         {activeTab === 'proposals' && (
-  <ProposalsTab 
-    proposals={proposalsHook.proposals.map(proposal => ({
-      ...proposal,
-      id: String(proposal.id),
-      state: safeStringToNumber(proposal.state),
-      yesVotes: formatNumber(proposal.yesVotes),
-      noVotes: formatNumber(proposal.noVotes),
-      abstainVotes: formatNumber(proposal.abstainVotes),
-      snapshotId: String(proposal.snapshotId)
-    }))}
-    createProposal={proposalsHook.createProposal}
-    cancelProposal={proposalsHook.cancelProposal}
-    queueProposalWithThreatLevel={proposalsHook.queueProposalWithThreatLevel}
-    executeProposal={proposalsHook.executeProposal}
-    claimRefund={proposalsHook.claimRefund}
-    loading={proposalsHook.loading}
-    user={{
-      ...userData,
-      balance: formatTokenAmount(userData.balance)
-    }}
-    contracts={contracts} // Make sure this line exists
-    account={account} // Add this line to pass the account
-    fetchProposals={proposalsHook.fetchProposals} // Add this line for the fetchProposals function
-  />
-)}
+          <ProposalsTab 
+            proposals={proposalsHook.proposals.map(proposal => ({
+              ...proposal,
+              id: String(proposal.id),
+              state: safeStringToNumber(proposal.state),
+              yesVotes: formatNumber(proposal.yesVotes),
+              noVotes: formatNumber(proposal.noVotes),
+              abstainVotes: formatNumber(proposal.abstainVotes),
+              snapshotId: String(proposal.snapshotId)
+            }))}
+            createProposal={proposalsHook.createProposal}
+            cancelProposal={proposalsHook.cancelProposal}
+            queueProposalWithThreatLevel={proposalsHook.queueProposalWithThreatLevel}
+            executeProposal={proposalsHook.executeProposal}
+            claimRefund={proposalsHook.claimRefund}
+            loading={proposalsHook.loading}
+            user={{
+              ...userData,
+              balance: formatTokenAmount(userData.balance)
+            }}
+            contracts={contracts} // Make sure this line exists
+            account={account} // Add this line to pass the account
+            fetchProposals={proposalsHook.fetchProposals} // Add this line for the fetchProposals function
+          />
+        )}
         
         {activeTab === 'vote' && (
-        <VoteTab 
-          proposals={proposalsHook.proposals.map(proposal => ({
-            ...proposal,
-            id: String(proposal.id),
-            state: safeStringToNumber(proposal.state),
-            yesVotes: formatNumber(proposal.yesVotes),
-            noVotes: formatNumber(proposal.noVotes),
-            abstainVotes: formatNumber(proposal.abstainVotes),
-            snapshotId: String(proposal.snapshotId)
-          }))}
-          castVote={votingHook.castVote}
-          hasVoted={votingHook.hasVoted}
-          getVotingPower={votingHook.getVotingPower}
-          voting={votingHook.voting}
-          account={account}
-        />
-      )}
+          <VoteTab 
+            proposals={proposalsHook.proposals.map(proposal => ({
+              ...proposal,
+              id: String(proposal.id),
+              state: safeStringToNumber(proposal.state),
+              yesVotes: formatNumber(proposal.yesVotes),
+              noVotes: formatNumber(proposal.noVotes),
+              abstainVotes: formatNumber(proposal.abstainVotes),
+              snapshotId: String(proposal.snapshotId)
+            }))}
+            castVote={votingHook.castVote}
+            hasVoted={votingHook.hasVoted}
+            getVotingPower={votingHook.getVotingPower}
+            voting={votingHook.voting}
+            account={account}
+          />
+        )}
         
         {activeTab === 'delegation' && (
           <DelegationTab 
@@ -287,7 +372,8 @@ const JustDAODashboard = () => {
               ...userData,
               address: account,
               balance: formatTokenAmount(userData.balance),
-              votingPower: formatTokenAmount(userData.votingPower)
+              // Use the same helper function for consistency
+              votingPower: formatTokenAmount(getCorrectVotingPower())
             }}
             delegation={{
               ...delegation,
@@ -295,7 +381,7 @@ const JustDAODashboard = () => {
                 currentDelegate: userData.delegate,
                 lockedTokens: userData.lockedTokens,
                 delegatedToYou: userData.delegatedToYou,
-                delegators: userData.delegators
+                delegators: userData.delegators || []
               },
               loading: dataLoading
             }}

@@ -1,4 +1,4 @@
-// src/hooks/useVoting.js - Enhanced version with improved support for non-active proposals
+// src/hooks/useVoting.js - Enhanced version with improved vote distribution
 import { useState, useCallback, useEffect } from 'react';
 import { ethers } from 'ethers';
 import { useWeb3 } from '../contexts/Web3Context';
@@ -425,27 +425,38 @@ export function useVoting() {
         noVotes: votingPowerByType[0].toString(),
         abstainVotes: votingPowerByType[2].toString(),
         totalVotes,
-        
+      
+        // Vote type voter counts
+        yesVoters: votesByType[1],
+        noVoters: votesByType[0],
+        abstainVoters: votesByType[2],
+      
         // Voting power
-        yesVotingPower: votingPowerByType[1].toString(),
-        noVotingPower: votingPowerByType[0].toString(),
-        abstainVotingPower: votingPowerByType[2].toString(),
-        totalVotingPower: totalVotingPower.toString(),
-        
+        yesVotingPower: votingPowerByType[1].toFixed(5),
+        noVotingPower: votingPowerByType[0].toFixed(5),
+        abstainVotingPower: votingPowerByType[2].toFixed(5),
+        totalVotingPower: totalVotingPower.toFixed(5),
+      
         // Total unique voters
         totalVoters: voterVotes.size,
-        
-        // Percentages based on voting power (not vote counts)
-        yesPercentage: totalVotingPower > 0 ? (votingPowerByType[1] / totalVotingPower) * 100 : 0,
-        noPercentage: totalVotingPower > 0 ? (votingPowerByType[0] / totalVotingPower) * 100 : 0,
-        abstainPercentage: totalVotingPower > 0 ? (votingPowerByType[2] / totalVotingPower) * 100 : 0,
-        
+      
+        // Percentages based on voting power (with fixed precision)
+        yesPercentage: totalVotingPower > 0 
+          ? Number(((votingPowerByType[1] / totalVotingPower) * 100).toFixed(2)) 
+          : 0,
+        noPercentage: totalVotingPower > 0 
+          ? Number(((votingPowerByType[0] / totalVotingPower) * 100).toFixed(2)) 
+          : 0,
+        abstainPercentage: totalVotingPower > 0 
+          ? Number(((votingPowerByType[2] / totalVotingPower) * 100).toFixed(2)) 
+          : 0,
+      
         // Add proposal state for context
         proposalState: proposalState !== null ? Number(proposalState) : null,
-        
+      
         // Timestamp for cache management
         fetchedAt: Date.now(),
-        
+      
         // Flag for source of data
         source: 'events'
       };
