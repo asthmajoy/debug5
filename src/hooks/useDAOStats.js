@@ -234,7 +234,7 @@ export function useDAOStats() {
     }
   }, [contracts]);
 
-  // More accurate proposal count fetching
+  // Improved proposal count fetching that properly accounts for canceled proposals
   const fetchProposalStats = useCallback(async () => {
     console.log("Fetching proposal stats...");
     
@@ -247,6 +247,7 @@ export function useDAOStats() {
       let activeProposals = 0;
       let totalProposals = 0;
       let successfulProposals = 0;
+      let nonCanceledProposals = 0; // Track non-canceled proposals separately
       
       // First, try to determine if the contract has a function to get the proposal count
       const hasCountMethod = typeof contracts.governance.getProposalCount === 'function';
@@ -320,7 +321,7 @@ export function useDAOStats() {
         }
       }
       
-      // Count active and successful proposals if we have any total proposals
+      // Count active, successful, and non-canceled proposals if we have any total proposals
       if (totalProposals > 0 && hasStateMethod) {
         console.log("Counting proposal states for", totalProposals, "proposals");
         
@@ -342,14 +343,15 @@ export function useDAOStats() {
           
           const results = await Promise.all(statePromises);
           
-          // Process results to count active and successful
+          // Process results to count active, successful, and non-canceled
           for (const result of results) {
             if (result.state === -1) continue; // Skip errors
             
             // Standard Governor contract states:
             // 0: Pending, 1: Active, 2: Canceled, 3: Defeated, 4: Succeeded, 5: Queued, 6: Expired, 7: Executed
             
-            if (result.state === 1) { // Active
+            // Count as active if state is Pending or Active
+            if (result.state === 0 || result.state === 1) { 
               activeProposals++;
             }
             
@@ -357,23 +359,29 @@ export function useDAOStats() {
             if (result.state === 4 || result.state === 5 || result.state === 7) {
               successfulProposals++;
             }
+            
+            // Count as non-canceled for all states except Canceled (usually state 2)
+            if (result.state !== 2) { // Adjust if your Canceled state is different
+              nonCanceledProposals++;
+            }
           }
         }
       }
       
-      // Calculate success rate
-      const proposalSuccessRate = totalProposals > 0 ? successfulProposals / totalProposals : 0;
+      // Calculate success rate based on non-canceled proposals
+      const proposalSuccessRate = nonCanceledProposals > 0 ? successfulProposals / nonCanceledProposals : 0;
       
       console.log("Proposal stats:", {
         activeProposals,
         totalProposals,
+        nonCanceledProposals,
         successfulProposals,
         proposalSuccessRate
       });
       
       return { 
         activeProposals, 
-        totalProposals,
+        totalProposals: nonCanceledProposals, // Use non-canceled count instead of total
         proposalSuccessRate 
       };
     } catch (error) {
@@ -615,7 +623,7 @@ export function useDAOStats() {
   }, [loadDashboardData, contractsReady, isConnected, refreshCounter, account]);
 
   // Modify the displayed proposal count by subtracting 1
-  const displayProposalCount = Math.max(0, dashboardStats.totalProposals - 1);
+  const displayProposalCount = Math.max(0, dashboardStats.totalProposals);
 
   return { 
     ...dashboardStats,
@@ -627,6 +635,3 @@ export function useDAOStats() {
     reload: loadDashboardData 
   };
 }
-
-
-

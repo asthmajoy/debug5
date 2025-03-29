@@ -1,22 +1,37 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useWeb3 } from '../contexts/Web3Context';
 import { useAuth } from '../contexts/AuthContext';
 import { useBlockchainData } from '../contexts/BlockchainDataContext';
 import { formatAddress } from '../utils/formatters';
-import { formatTokenAmount, formatTokenForHeader } from '../utils/tokenFormatters';
+import { formatTokenAmount } from '../utils/tokenFormatters';
 import { PROPOSAL_STATES } from '../utils/constants';
+import { ethers } from 'ethers';
 
 // Import components
 import SecuritySettingsTab from './SecuritySettingsTab';
 import RoleManagementTab from './RoleManagementTab';
 import TimelockSettingsTab from './TimelockSettingsTab';
 import EmergencyControlsTab from './EmergencyControlsTab';
-import PendingTransactionsTab from './PendingTransactionsTab'; // Import new component
+import PendingTransactionsTab from './PendingTransactionsTab';
 import ProposalsTab from './ProposalsTab';
 import VoteTab from './VoteTab';
 import DelegationTab from './DelegationTab';
 import AnalyticsTab from './AnalyticsTab';
 import DashboardTab from './DashboardTab';
+
+// Define role constants to ensure consistency
+const ROLES = {
+  DEFAULT_ADMIN_ROLE: ethers.utils.hexZeroPad("0x00", 32), // Or ethers.constants.HashZero
+  ADMIN_ROLE: ethers.utils.keccak256(ethers.utils.toUtf8Bytes("ADMIN_ROLE")),
+  GUARDIAN_ROLE: ethers.utils.keccak256(ethers.utils.toUtf8Bytes("GUARDIAN_ROLE")),
+  ANALYTICS_ROLE: ethers.utils.keccak256(ethers.utils.toUtf8Bytes("ANALYTICS_ROLE")),
+  GOVERNANCE_ROLE: ethers.utils.keccak256(ethers.utils.toUtf8Bytes("GOVERNANCE_ROLE")),
+  MINTER_ROLE: ethers.utils.keccak256(ethers.utils.toUtf8Bytes("MINTER_ROLE")),
+  PROPOSER_ROLE: ethers.utils.keccak256(ethers.utils.toUtf8Bytes("PROPOSER_ROLE")),
+  EXECUTOR_ROLE: ethers.utils.keccak256(ethers.utils.toUtf8Bytes("EXECUTOR_ROLE")),
+  CANCELLER_ROLE: ethers.utils.keccak256(ethers.utils.toUtf8Bytes("CANCELLER_ROLE")),
+  TIMELOCK_ADMIN_ROLE: ethers.utils.keccak256(ethers.utils.toUtf8Bytes("TIMELOCK_ADMIN_ROLE"))
+};
 
 // Helper function to safely convert string to number
 const safeStringToNumber = (value) => {
@@ -32,11 +47,64 @@ const JustDAODashboard = () => {
   // State for active security subtab
   const [securitySubtab, setSecuritySubtab] = useState('emergency');
   
+  // State to track window width
+  const [windowWidth, setWindowWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1200);
+  
+  // State to track user roles directly from contract
+  const [userRoles, setUserRoles] = useState({
+    isAdmin: false,
+    isGuardian: false,
+    isAnalytics: false,
+  });
+  
   // Web3 context for blockchain connection
   const { account, isConnected, connectWallet, disconnectWallet, contracts } = useWeb3();
   
   // Auth context for user roles
   const { hasRole } = useAuth();
+  
+  // Listen for window resize events
+  useEffect(() => {
+    const handleResize = () => {
+      setWindowWidth(window.innerWidth);
+    };
+    
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+    };
+  }, []);
+  
+  // Check roles directly from contracts
+  useEffect(() => {
+    const checkRolesDirectly = async () => {
+      if (!isConnected || !account || !contracts.analyticsHelper) return;
+      
+      try {
+        // Get role information directly from the contracts
+        const isAdmin = await contracts.analyticsHelper.hasRole(ROLES.ADMIN_ROLE, account);
+        const isGuardian = await contracts.analyticsHelper.hasRole(ROLES.GUARDIAN_ROLE, account);
+        const isAnalytics = await contracts.analyticsHelper.hasRole(ROLES.ANALYTICS_ROLE, account);
+        
+        console.log("Direct role check from contract:", {
+          isAdmin,
+          isGuardian,
+          isAnalytics,
+        });
+        
+        setUserRoles({
+          isAdmin,
+          isGuardian,
+          isAnalytics
+        });
+        
+      } catch (error) {
+        console.error("Error checking roles directly:", error);
+      }
+    };
+    
+    checkRolesDirectly();
+  }, [account, isConnected, contracts.analyticsHelper]);
   
   // Use our blockchain data context
   const { 
@@ -56,6 +124,47 @@ const JustDAODashboard = () => {
   const delegation = useDelegation();
   const proposalsHook = useProposals();
   const votingHook = useVoting();
+  
+  // Format numbers based on window width
+  const formatTokenBasedOnWidth = (value) => {
+    if (!value) return '0';
+    
+    const numValue = typeof value === 'string' ? parseFloat(value) : value;
+    if (isNaN(numValue)) return '0';
+    
+    // Determine decimal places based on window width and value size
+    let decimals = 5; // Maximum decimals for full screen
+    
+    if (windowWidth < 640) {
+      // Small screen (1/4 window)
+      decimals = 2;
+    } else if (windowWidth < 960) {
+      // Medium screen (1/2 window)
+      decimals = 3; 
+    } else {
+      // Full screen
+      if (numValue >= 10000) {
+        decimals = 2;
+      } else if (numValue >= 1000) {
+        decimals = 3;
+      } else if (numValue >= 100) {
+        decimals = 4;
+      } else {
+        decimals = 5;
+      }
+    }
+    
+    // For very small values, always show some precision
+    if (numValue > 0 && numValue < 0.01) {
+      decimals = Math.max(decimals, 4);
+    }
+    
+    // Format the number with appropriate decimals
+    return numValue.toLocaleString(undefined, {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: decimals
+    });
+  };
   
   // Format numbers to be more readable
   const formatNumber = (value, decimals = 2) => {
@@ -165,17 +274,14 @@ const JustDAODashboard = () => {
     return calculatedVotingPower;
   };
 
-  // Debug log to inspect what voting power values are available
-  console.log("DEBUG - User data in JustDAO:", {
-    balance: userData.balance,
-    localVotingPower: userData.votingPower,
-    onChainVotingPower: userData.onChainVotingPower,
-    calculatedVotingPower: calculateVotingPower(),
-    finalVotingPower: getCorrectVotingPower(),
-    isSelfDelegated: isSelfDelegated(account, userData.delegate),
-    delegatedToYou: actualDelegatedToYou(),
-    currentDelegate: userData.delegate
-  });
+  // Get label for Voting Power based on window width
+  const getVotingPowerLabel = () => {
+    if (windowWidth < 640) {
+      return "VP";
+    } else {
+      return "Voting Power";
+    }
+  };
 
   return (
     <div className="flex flex-col min-h-screen bg-gray-50">
@@ -190,10 +296,9 @@ const JustDAODashboard = () => {
               <div className="text-sm text-gray-700">
                 <div>{formatAddress(account)}</div>
                 <div className="flex gap-2">
-                  <span>{formatTokenForHeader(userData.balance)} JST</span>
+                  <span>{formatTokenBasedOnWidth(userData.balance)} JST</span>
                   <span>|</span>
-                  {/* Use the improved voting power calculation function */}
-                  <span>{formatTokenForHeader(getCorrectVotingPower())} Voting Power</span>
+                  <span>{formatTokenBasedOnWidth(getCorrectVotingPower())} {getVotingPowerLabel()}</span>
                 </div>
               </div>
             ) : (
@@ -253,8 +358,8 @@ const JustDAODashboard = () => {
               Delegation
             </div>
             
-            {/* Analytics tab - only visible to analytics role */}
-            {hasRole('analytics') && (
+            {/* Analytics tab - using direct contract role check + fallbacks */}
+            {(userRoles.isAnalytics || hasRole(ROLES.ANALYTICS_ROLE) || hasRole('analytics')) && (
               <div 
                 className={`py-4 px-6 cursor-pointer border-b-2 ${activeTab === 'analytics' ? 'border-indigo-500 text-indigo-600' : 'border-transparent hover:text-gray-700 hover:border-gray-300'}`}
                 onClick={() => setActiveTab('analytics')}
@@ -265,7 +370,7 @@ const JustDAODashboard = () => {
             )}
             
             {/* Security tab - only visible to admin or guardian roles */}
-            {(hasRole('admin') || hasRole('guardian')) && (
+            {(userRoles.isAdmin || userRoles.isGuardian || hasRole(ROLES.ADMIN_ROLE) || hasRole(ROLES.GUARDIAN_ROLE) || hasRole('admin') || hasRole('guardian')) && (
               <div 
                 className={`py-4 px-6 cursor-pointer border-b-2 ${activeTab === 'security' ? 'border-indigo-500 text-indigo-600' : 'border-transparent hover:text-gray-700 hover:border-gray-300'}`}
                 onClick={() => {
@@ -375,11 +480,12 @@ const JustDAODashboard = () => {
           />
         )}
         
-        {activeTab === 'analytics' && hasRole('analytics') && (
-          <AnalyticsTab contracts={contracts} />
+        {/* Analytics tab */}
+        {activeTab === 'analytics' && (userRoles.isAnalytics || hasRole(ROLES.ANALYTICS_ROLE) || hasRole('analytics')) && (
+          <AnalyticsTab contract={contracts.analyticsHelper} />
         )}
         
-        {activeTab === 'security' && (hasRole('admin') || hasRole('guardian')) && (
+        {activeTab === 'security' && (
           <div>
             <div className="mb-6">
               <h2 className="text-xl font-semibold">Security & Administration</h2>
@@ -405,7 +511,7 @@ const JustDAODashboard = () => {
                 </button>
                 
                 {/* These tabs are only visible to admin roles */}
-                {hasRole('admin') && (
+                {(userRoles.isAdmin || hasRole(ROLES.ADMIN_ROLE) || hasRole('admin')) && (
                   <>
                     <button
                       className={`px-3 py-1 rounded-full text-sm ${securitySubtab === 'roles' ? 'bg-indigo-100 text-indigo-800' : 'bg-gray-100 text-gray-800'}`}
