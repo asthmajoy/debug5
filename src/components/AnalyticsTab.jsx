@@ -7,6 +7,28 @@ import { formatBigNumber, formatPercentage } from '../utils/formatters';
 // Register Chart.js components
 Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, Tooltip, Legend);
 
+// Helper function to safely format BigNumber to regular number
+const formatBigNumberToNumber = (bn) => {
+  if (!bn) return 0;
+  // If it's already a number, return it
+  if (typeof bn === 'number') return bn;
+  // If it has a toNumber method (ethers.js BigNumber), use it
+  if (bn.toNumber && typeof bn.toNumber === 'function') {
+    try {
+      return bn.toNumber();
+    } catch (e) {
+      // If the number is too large for toNumber, use toString and parse
+      return parseInt(bn.toString(), 10);
+    }
+  }
+  // If it has a toString method but not toNumber (different BigNumber implementation)
+  if (bn.toString && typeof bn.toString === 'function') {
+    return parseInt(bn.toString(), 10);
+  }
+  // Fallback - return 0
+  return 0;
+};
+
 const AnalyticsTab = ({ contract }) => {
   const [selectedMetric, setSelectedMetric] = useState('proposal');
   const [analyticsData, setAnalyticsData] = useState({
@@ -27,30 +49,152 @@ const AnalyticsTab = ({ contract }) => {
           case 'proposal':
             // Directly call contract methods instead of using the API
             const proposalAnalytics = await contract.getProposalAnalytics(1, 100); // Adjust parameters as needed
-            setAnalyticsData(prevData => ({...prevData, proposals: proposalAnalytics}));
+            // Process BigNumber values to normal numbers
+            const processedProposalData = {
+              totalProposals: formatBigNumberToNumber(proposalAnalytics.totalProposals),
+              activeProposals: formatBigNumberToNumber(proposalAnalytics.activeProposals),
+              canceledProposals: formatBigNumberToNumber(proposalAnalytics.canceledProposals),
+              defeatedProposals: formatBigNumberToNumber(proposalAnalytics.defeatedProposals),
+              succeededProposals: formatBigNumberToNumber(proposalAnalytics.succeededProposals),
+              queuedProposals: formatBigNumberToNumber(proposalAnalytics.queuedProposals),
+              executedProposals: formatBigNumberToNumber(proposalAnalytics.executedProposals),
+              expiredProposals: formatBigNumberToNumber(proposalAnalytics.expiredProposals),
+              
+              generalProposals: formatBigNumberToNumber(proposalAnalytics.generalProposals),
+              withdrawalProposals: formatBigNumberToNumber(proposalAnalytics.withdrawalProposals),
+              tokenTransferProposals: formatBigNumberToNumber(proposalAnalytics.tokenTransferProposals),
+              governanceChangeProposals: formatBigNumberToNumber(proposalAnalytics.governanceChangeProposals),
+              externalERC20Proposals: formatBigNumberToNumber(proposalAnalytics.externalERC20Proposals),
+              tokenMintProposals: formatBigNumberToNumber(proposalAnalytics.tokenMintProposals),
+              tokenBurnProposals: formatBigNumberToNumber(proposalAnalytics.tokenBurnProposals),
+              
+              generalSuccessRate: formatBigNumberToNumber(proposalAnalytics.generalSuccessRate),
+              withdrawalSuccessRate: formatBigNumberToNumber(proposalAnalytics.withdrawalSuccessRate),
+              tokenTransferSuccessRate: formatBigNumberToNumber(proposalAnalytics.tokenTransferSuccessRate),
+              governanceChangeSuccessRate: formatBigNumberToNumber(proposalAnalytics.governanceChangeSuccessRate),
+              externalERC20SuccessRate: formatBigNumberToNumber(proposalAnalytics.externalERC20SuccessRate),
+              tokenMintSuccessRate: formatBigNumberToNumber(proposalAnalytics.tokenMintSuccessRate),
+              tokenBurnSuccessRate: formatBigNumberToNumber(proposalAnalytics.tokenBurnSuccessRate),
+              
+              avgProposalLifetime: formatBigNumberToNumber(proposalAnalytics.avgProposalLifetime),
+              avgTimeToExecution: formatBigNumberToNumber(proposalAnalytics.avgTimeToExecution),
+              avgVotingTurnout: formatBigNumberToNumber(proposalAnalytics.avgVotingTurnout)
+            };
+            setAnalyticsData(prevData => ({...prevData, proposals: processedProposalData}));
             break;
+
           case 'voter':
             // Directly call contract methods instead of using the API
             const voterAnalytics = await contract.getVoterBehaviorAnalytics(20); // Adjust parameters as needed
-            setAnalyticsData(prevData => ({...prevData, voters: voterAnalytics}));
+            
+            // Process voter data - convert BigNumbers to normal numbers and ensure arrays are properly handled
+            const processedVoterData = {
+              totalVoters: formatBigNumberToNumber(voterAnalytics.totalVoters),
+              activeVoters: formatBigNumberToNumber(voterAnalytics.activeVoters),
+              superActiveVoters: formatBigNumberToNumber(voterAnalytics.superActiveVoters),
+              consistentVoters: formatBigNumberToNumber(voterAnalytics.consistentVoters),
+              yesLeaning: formatBigNumberToNumber(voterAnalytics.yesLeaning),
+              noLeaning: formatBigNumberToNumber(voterAnalytics.noLeaning),
+              balanced: formatBigNumberToNumber(voterAnalytics.balanced),
+              delegatorCount: formatBigNumberToNumber(voterAnalytics.delegatorCount),
+              delegateCount: formatBigNumberToNumber(voterAnalytics.delegateCount),
+              avgDelegationChainLength: formatBigNumberToNumber(voterAnalytics.avgDelegationChainLength),
+              
+              // Handle arrays - check they exist and process each element
+              voters: voterAnalytics.voters || [],
+              voteCounts: voterAnalytics.voteCounts 
+                ? voterAnalytics.voteCounts.map(count => formatBigNumberToNumber(count))
+                : [],
+              yesCounts: voterAnalytics.yesCounts 
+                ? voterAnalytics.yesCounts.map(count => formatBigNumberToNumber(count))
+                : [],
+              noCounts: voterAnalytics.noCounts 
+                ? voterAnalytics.noCounts.map(count => formatBigNumberToNumber(count))
+                : [],
+              abstainCounts: voterAnalytics.abstainCounts 
+                ? voterAnalytics.abstainCounts.map(count => formatBigNumberToNumber(count))
+                : []
+            };
+            
+            setAnalyticsData(prevData => ({...prevData, voters: processedVoterData}));
             break;
+
           case 'token':
             // This could be fetched from the token contract if needed
-            const tokenSupply = await contract.justToken().totalSupply();
+            let tokenSupply;
+            try {
+              tokenSupply = await contract.justToken().totalSupply();
+            } catch (error) {
+              console.error("Error fetching token supply:", error);
+              tokenSupply = 0;
+            }
+            
             // You'll need to structure the token data object based on your needs
-            const tokenData = { totalSupply: tokenSupply };
+            const tokenData = { 
+              totalSupply: tokenSupply,
+              // Fill in default/empty values for other expected fields
+              circulatingSupply: tokenSupply,
+              treasuryBalance: 0,
+              activeTokens: 0,
+              delegatedTokens: 0,
+              smallHolderCount: 0,
+              mediumHolderCount: 0,
+              largeHolderCount: 0,
+              topTenHolderBalance: 0
+            };
+            
             setAnalyticsData(prevData => ({...prevData, tokens: tokenData}));
             break;
+
           case 'health':
             // Directly call contract methods instead of using the API
-            const [healthScore, breakdown] = await contract.calculateGovernanceHealthScore();
-            setAnalyticsData(prevData => ({...prevData, health: { score: healthScore, breakdown }}));
+            const healthData = await contract.calculateGovernanceHealthScore();
+            
+            // Handle the returned tuple from the contract
+            const healthScore = formatBigNumberToNumber(healthData[0]);
+            const healthBreakdown = healthData[1].map(item => formatBigNumberToNumber(item));
+            
+            setAnalyticsData(prevData => ({
+              ...prevData, 
+              health: { 
+                score: healthScore, 
+                breakdown: healthBreakdown 
+              }
+            }));
             break;
+
           case 'timelock':
             // Directly call contract methods instead of using the API
             const timelockAnalytics = await contract.getTimelockAnalytics(50); // Adjust parameters as needed
-            setAnalyticsData(prevData => ({...prevData, timelock: timelockAnalytics}));
+            
+            // Process timelock data - convert BigNumbers to normal numbers
+            const processedTimelockData = {
+              totalTransactions: formatBigNumberToNumber(timelockAnalytics.totalTransactions),
+              executedTransactions: formatBigNumberToNumber(timelockAnalytics.executedTransactions),
+              pendingTransactions: formatBigNumberToNumber(timelockAnalytics.pendingTransactions),
+              canceledTransactions: formatBigNumberToNumber(timelockAnalytics.canceledTransactions),
+              expiredTransactions: formatBigNumberToNumber(timelockAnalytics.expiredTransactions),
+              
+              lowThreatCount: formatBigNumberToNumber(timelockAnalytics.lowThreatCount),
+              mediumThreatCount: formatBigNumberToNumber(timelockAnalytics.mediumThreatCount),
+              highThreatCount: formatBigNumberToNumber(timelockAnalytics.highThreatCount),
+              criticalThreatCount: formatBigNumberToNumber(timelockAnalytics.criticalThreatCount),
+              
+              avgExecutionDelay: formatBigNumberToNumber(timelockAnalytics.avgExecutionDelay),
+              avgLowThreatDelay: formatBigNumberToNumber(timelockAnalytics.avgLowThreatDelay),
+              avgMediumThreatDelay: formatBigNumberToNumber(timelockAnalytics.avgMediumThreatDelay),
+              avgHighThreatDelay: formatBigNumberToNumber(timelockAnalytics.avgHighThreatDelay),
+              avgCriticalThreatDelay: formatBigNumberToNumber(timelockAnalytics.avgCriticalThreatDelay),
+              
+              lowThreatSuccessRate: formatBigNumberToNumber(timelockAnalytics.lowThreatSuccessRate),
+              mediumThreatSuccessRate: formatBigNumberToNumber(timelockAnalytics.mediumThreatSuccessRate),
+              highThreatSuccessRate: formatBigNumberToNumber(timelockAnalytics.highThreatSuccessRate),
+              criticalThreatSuccessRate: formatBigNumberToNumber(timelockAnalytics.criticalThreatSuccessRate)
+            };
+            
+            setAnalyticsData(prevData => ({...prevData, timelock: processedTimelockData}));
             break;
+
           default:
             console.log('Unknown metric selected:', selectedMetric);
             break;
@@ -160,7 +304,11 @@ const AnalyticsTab = ({ contract }) => {
             <div>Treasury:</div>
             <div className="font-bold text-right">{data.withdrawalProposals}</div>
             <div>Token:</div>
-            <div className="font-bold text-right">{data.tokenTransferProposals + data.tokenMintProposals + data.tokenBurnProposals}</div>
+            <div className="font-bold text-right">
+              {(data.tokenTransferProposals || 0) + 
+               (data.tokenMintProposals || 0) + 
+               (data.tokenBurnProposals || 0)}
+            </div>
           </div>
         </div>
         
@@ -174,7 +322,10 @@ const AnalyticsTab = ({ contract }) => {
             <div>Treasury:</div>
             <div className="font-bold text-right">{formatPercentage(data.withdrawalSuccessRate / 100)}</div>
             <div>Token:</div>
-            <div className="font-bold text-right">{formatPercentage((data.tokenTransferSuccessRate + data.tokenMintSuccessRate) / 200)}</div>
+            <div className="font-bold text-right">
+              {formatPercentage(((data.tokenTransferSuccessRate || 0) + 
+                              (data.tokenMintSuccessRate || 0)) / 200)}
+            </div>
           </div>
         </div>
         
@@ -281,7 +432,9 @@ const AnalyticsTab = ({ contract }) => {
                     return (
                       <tr key={voter} className="border-t">
                         <td className="p-2 font-mono text-xs">
-                          {voter.substring(0, 6)}...{voter.substring(voter.length - 4)}
+                          {voter && typeof voter === 'string' ? 
+                            `${voter.substring(0, 6)}...${voter.substring(voter.length - 4)}` : 
+                            'Unknown'}
                         </td>
                         <td className="p-2">{data.voteCounts[index] || 0}</td>
                         <td className="p-2">{formatPercentage(yesPercent)}</td>
@@ -346,13 +499,13 @@ const AnalyticsTab = ({ contract }) => {
             <div>Active Rate:</div>
             <div className="font-bold text-right">
               {data.totalSupply && data.activeTokens
-                ? formatPercentage((data.activeTokens / data.totalSupply) * 100)
+                ? formatPercentage((formatBigNumberToNumber(data.activeTokens) / formatBigNumberToNumber(data.totalSupply)) * 100)
                 : '0%'}
             </div>
             <div>Delegation Rate:</div>
             <div className="font-bold text-right">
               {data.totalSupply && data.delegatedTokens
-                ? formatPercentage((data.delegatedTokens / data.totalSupply) * 100)
+                ? formatPercentage((formatBigNumberToNumber(data.delegatedTokens) / formatBigNumberToNumber(data.totalSupply)) * 100)
                 : '0%'}
             </div>
           </div>
