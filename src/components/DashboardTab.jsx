@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Clock, ArrowRight, RefreshCw } from 'lucide-react';
+import { Clock, ArrowRight } from 'lucide-react';
 import { formatPercentage, formatCountdown } from '../utils/formatters';
 import { formatTokenAmount } from '../utils/tokenFormatters';
 import Loader from './Loader';
@@ -245,25 +245,7 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
     };
   }, [proposals, getProposalVoteTotals]);
 
-  // Handle manual refresh
-  const handleRefresh = async () => {
-    if (isRefreshing || !onRefresh) return;
-    
-    setIsRefreshing(true);
-    try {
-      // Trigger the refresh of direct stats
-      setDirectStats(prev => ({ ...prev, loading: true }));
-      
-      // Also call the parent refresh if provided
-      if (onRefresh) {
-        await onRefresh();
-      }
-    } catch (error) {
-      console.error("Error refreshing dashboard data:", error);
-    } finally {
-      setIsRefreshing(false);
-    }
-  };
+
 
   // Calculate proposal success rate the same way as AnalyticsTab
   const calculateProposalSuccessRate = () => {
@@ -281,18 +263,23 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
   
   return (
     <div>
+      {/* New header for ETH to JST minting instructions */}
+      <div className="bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-200 p-3 rounded-lg mb-4 text-center shadow-sm">
+        <h3 className="font-medium text-indigo-800 mb-1 text-base">Mint Justice Tokens (JST)</h3>
+        <div>
+          <p className="text-indigo-700 text-xs mb-1">Send ETH to</p>
+          <div className="inline-block bg-white px-2 py-1 rounded-lg border border-indigo-200 shadow-sm mx-auto">
+            <span className="font-mono text-indigo-800 text-xs tracking-wide">
+              0xc784D408<span className="text-indigo-500">65b7C5b7</span>303157a6<span className="text-indigo-500">E5B31A1D</span>9E960567
+            </span>
+          </div>
+          <p className="text-indigo-600 mt-1 text-xs">1:1 conversion ratio</p>
+        </div>
+      </div>
+      
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-semibold">Dashboard</h2>
-        
-        {/* Add refresh button */}
-        <button 
-          onClick={handleRefresh}
-          disabled={isRefreshing || loading || directStats.loading}
-          className="flex items-center text-sm text-gray-600 hover:text-indigo-600 disabled:text-gray-400"
-        >
-          <RefreshCw className="h-4 w-4 mr-1" />
-          Refresh
-        </button>
+        {/* Refresh button removed as requested */}
       </div>
       
       {/* Governance Stats */}
@@ -336,6 +323,7 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
               <p className="text-gray-500">Voting Power</p>
               <p className="text-2xl font-bold">{formatToFiveDecimals(user.votingPower)} JST</p>
             </div>
+            
             <div className="mt-4">
               <button 
                 className="text-indigo-600 hover:text-indigo-800 text-sm font-medium flex items-center"

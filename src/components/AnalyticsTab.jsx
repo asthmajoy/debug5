@@ -8,7 +8,7 @@ import useGovernanceParams from '../hooks/useGovernanceParams';
 const AnalyticsTab = () => {
   const { contracts, contractsReady, account, provider } = useWeb3();
   const [selectedMetric, setSelectedMetric] = useState('proposal');
-  const [loading, setLoading] = useState(false);  // Start with loading false
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [connectionDetails, setConnectionDetails] = useState(null);
   
@@ -70,6 +70,15 @@ const AnalyticsTab = () => {
     }
     
     return 0;
+  };
+
+  // Helper function to check if an address is self-delegated
+  const isSelfDelegated = (delegator, delegate) => {
+    if (!delegator || !delegate) return true;
+    const normalizedDelegator = delegator.toLowerCase();
+    const normalizedDelegate = delegate.toLowerCase();
+    return normalizedDelegator === normalizedDelegate || 
+           delegate === ethers.constants.AddressZero;
   };
 
   // Safely get property value with fallback
@@ -183,7 +192,7 @@ const AnalyticsTab = () => {
     }
   }, [contractsReady, contracts, account, provider]);
 
-  // Load delegation analytics
+  // COMPLETELY REWRITTEN: New approach to load delegation analytics
   const loadDelegationAnalytics = useCallback(async () => {
     if (!contractsReady || !contracts.justToken) {
       setError("Token contract not available");
@@ -192,149 +201,120 @@ const AnalyticsTab = () => {
     
     try {
       setLoading(true);
-      let analyticsData = [];
-      let topDelegateData = [];
       
-      // Get total supply for percentage calculations
-      const totalSupply = await contracts.justToken.totalSupply();
-      console.log("Total token supply:", ethers.utils.formatEther(totalSupply));
+      // 1. Get all delegations directly from on-chain data
+      const directDelegations = [];
+      const delegateVotingPowers = new Map(); // Map to track delegate -> voting power
       
-      // First try with direct token queries to ensure we get data
-      try {
-        console.log("Getting delegation data directly from token contract");
-        
-        // Get account info
-        if (account) {
-          try {
-            // Get delegate for current account
-            const delegate = await contracts.justToken.getDelegate(account);
-            const votingPower = await contracts.justToken.balanceOf(account);
-            
-            console.log(`Account ${account} delegated to ${delegate} with power ${ethers.utils.formatEther(votingPower)}`);
-            
-            if (delegate !== ethers.constants.AddressZero && delegate !== account) {
-              // User has delegated to someone
-              analyticsData.push({
-                address: account,
-                delegate: delegate,
-                votingPower: ethers.utils.formatEther(votingPower),
-                depth: 1
-              });
-              
-              // Add delegate to top delegates if not already there
-              // Calculate percentage correctly - this is a percentage of total supply
-              const percentage = totalSupply.gt(0) 
-                ? parseFloat(votingPower.mul(100).div(totalSupply).toString())
-                : 0;
-                
-              topDelegateData.push({
-                address: delegate,
-                delegatedPower: ethers.utils.formatEther(votingPower),
-                percentage: percentage
-              });
-            }
-          } catch (err) {
-            console.warn(`Error checking delegation for account:`, err);
+      // Function to process a delegation
+      const processDelegation = async (delegator) => {
+        try {
+          const delegate = await contracts.justToken.getDelegate(delegator);
+          
+          // Skip null addresses, zero addresses, or self-delegations
+          if (!delegate || 
+              delegate === ethers.constants.AddressZero || 
+              delegate.toLowerCase() === delegator.toLowerCase()) {
+            return;
           }
-        }
-        
-        // Add contract addresses to check
-        const contractAddresses = [];
-        if (contracts.governance?.address) {
-          contractAddresses.push(contracts.governance.address);
-        }
-        
-        if (contracts.timelock?.address) {
-          contractAddresses.push(contracts.timelock.address);
-        }
-        
-        // Check delegation for contract addresses
-        for (const addr of contractAddresses) {
-          try {
-            const delegate = await contracts.justToken.getDelegate(addr);
-            if (delegate !== ethers.constants.AddressZero && delegate !== addr) {
-              const votingPower = await contracts.justToken.balanceOf(addr);
-              
-              analyticsData.push({
-                address: addr,
-                delegate: delegate,
-                votingPower: ethers.utils.formatEther(votingPower),
-                depth: 1
-              });
-              
-              // Find if delegate is already in topDelegates
-              let delegateIndex = topDelegateData.findIndex(d => d.address === delegate);
-              if (delegateIndex >= 0) {
-                // Add to existing delegate
-                const currentPower = ethers.utils.parseEther(topDelegateData[delegateIndex].delegatedPower);
-                const newPower = currentPower.add(votingPower);
-                // Calculate percentage correctly
-                const percentage = totalSupply.gt(0) 
-                  ? parseFloat(newPower.mul(100).div(totalSupply).toString())
-                  : 0;
-                
-                topDelegateData[delegateIndex] = {
-                  ...topDelegateData[delegateIndex],
-                  delegatedPower: ethers.utils.formatEther(newPower),
-                  percentage: percentage
-                };
-              } else {
-                // Add as new delegate
-                const percentage = totalSupply.gt(0) 
-                  ? parseFloat(votingPower.mul(100).div(totalSupply).toString())
-                  : 0;
-                
-                topDelegateData.push({
-                  address: delegate,
-                  delegatedPower: ethers.utils.formatEther(votingPower),
-                  percentage: percentage
-                });
+          
+          const balance = await contracts.justToken.balanceOf(delegator);
+          if (balance.gt(0)) {
+            // Get delegation depth
+            let depth = 1;
+            try {
+              if (contracts.daoHelper) {
+                const delegatePath = await contracts.daoHelper.getDelegationPath(delegator);
+                depth = delegatePath.depth || 1;
               }
+            } catch (err) {
+              console.warn("Could not get delegation depth", err);
             }
-          } catch (err) {
-            console.warn(`Error checking delegation for ${addr}:`, err);
+            
+            // Record this delegation
+            const votingPower = ethers.utils.formatEther(balance);
+            directDelegations.push({
+              address: delegator,
+              delegate: delegate,
+              votingPower: votingPower,
+              depth: depth
+            });
+            
+            // Update delegate voting power tracker
+            const currentPower = delegateVotingPowers.get(delegate) || "0";
+            const newPower = ethers.utils.formatEther(
+              ethers.utils.parseEther(currentPower).add(balance)
+            );
+            delegateVotingPowers.set(delegate, newPower);
           }
+        } catch (err) {
+          console.warn(`Error processing delegation for ${delegator}:`, err);
         }
-      } catch (err) {
-        console.error("Error in direct token delegation queries:", err);
+      };
+      
+      // 2. Get total supply for percentage calculations
+      const totalSupply = await contracts.justToken.totalSupply();
+      const totalSupplyEther = ethers.utils.formatEther(totalSupply);
+      
+      // 3. Process important accounts first
+      const importantAccounts = [];
+      
+      if (account) {
+        importantAccounts.push(account);
       }
       
-      // If we still don't have any delegations, add mock data for demonstration
-      if (analyticsData.length === 0) {
-        // We'll use the current account as a reference
-        const mockAddress = account || '0x7092...14440';
-        const mockDelegate = '0x1234...5678';
-        const mockPower = '1000'; // 1000 tokens
-        
-        analyticsData.push({
-          address: mockAddress,
-          delegate: mockDelegate,
-          votingPower: mockPower,
-          depth: 1
-        });
-        
-        topDelegateData.push({
-          address: mockDelegate,
-          delegatedPower: mockPower,
-          percentage: 25 // 25%
-        });
-        
-        console.log("Added mock delegation data for demonstration");
+      if (contracts.governance?.address) {
+        importantAccounts.push(contracts.governance.address);
       }
       
-      // Sort top delegates by power
-      topDelegateData.sort((a, b) => 
-        parseFloat(b.delegatedPower) - parseFloat(a.delegatedPower)
-      );
+      if (contracts.timelock?.address) {
+        importantAccounts.push(contracts.timelock.address);
+      }
       
+      // Process each account
+      for (const addr of importantAccounts) {
+        await processDelegation(addr);
+        
+        // Also check who is delegating to this account
+        try {
+          const delegators = await contracts.justToken.getDelegatorsOf(addr);
+          for (const delegator of delegators) {
+            if (delegator.toLowerCase() !== addr.toLowerCase()) {
+              await processDelegation(delegator);
+            }
+          }
+        } catch (err) {
+          console.warn(`Error getting delegators for ${addr}:`, err);
+        }
+      }
+      
+      // 4. Create the top delegates array from the voting powers map
+      const topDelegates = Array.from(delegateVotingPowers.entries()).map(([address, power]) => {
+        const percentage = totalSupply.gt(0) 
+          ? parseFloat(ethers.utils.parseEther(power).mul(100).div(totalSupply).toString())
+          : 0;
+          
+        return {
+          address,
+          delegatedPower: power,
+          percentage
+        };
+      });
+      
+      // Sort by power in descending order
+      topDelegates.sort((a, b) => parseFloat(b.delegatedPower) - parseFloat(a.delegatedPower));
+      
+      // 5. Set the analytics state
       setDelegationAnalytics({
-        delegations: analyticsData,
-        topDelegates: topDelegateData
+        delegations: directDelegations,
+        topDelegates: topDelegates,
+        totalSupply: totalSupplyEther
       });
       
       console.log("Updated delegation analytics:", {
-        delegations: analyticsData,
-        topDelegates: topDelegateData
+        delegations: directDelegations,
+        topDelegates: topDelegates,
+        totalSupply: totalSupplyEther
       });
       
     } catch (error) {
@@ -565,7 +545,7 @@ const AnalyticsTab = () => {
     }
   }, [contracts, contractsReady, countProposalsDirectly]);
 
-  // Load voter analytics
+  // Load voter analytics with proper self-delegation handling
   const loadVoterAnalytics = useCallback(async () => {
     if (!contractsReady || !contracts.governance || !contracts.justToken) {
       setError("Governance or Token contract not available");
@@ -595,15 +575,18 @@ const AnalyticsTab = () => {
       try {
         // Use the delegation analytics if already loaded
         if (delegationAnalytics) {
+          // Only count non-self delegates
           delegatorCount = delegationAnalytics.delegations.length;
           delegateCount = new Set(delegationAnalytics.delegations.map(d => d.delegate)).size;
           
           delegationAnalytics.delegations.forEach(d => {
-            totalDelegated = totalDelegated.add(ethers.utils.parseEther(d.votingPower));
+            // Make sure we're not double counting self-delegations
+            if (!isSelfDelegated(d.address, d.delegate)) {
+              totalDelegated = totalDelegated.add(ethers.utils.parseEther(d.votingPower));
+            }
           });
         } else {
           // If not loaded yet, make a simpler calculation
-          // This is just an approximation - in a real implementation, you'd query more delegation data
           const sampleAddresses = account ? [account] : [];
           
           for (const addr of sampleAddresses) {
@@ -611,16 +594,26 @@ const AnalyticsTab = () => {
             
             try {
               const delegate = await contracts.justToken.getDelegate(addr);
-              if (delegate !== ethers.constants.AddressZero && delegate !== addr) {
+              // Only count non-self delegations
+              if (delegate !== ethers.constants.AddressZero && 
+                  delegate !== addr && 
+                  !isSelfDelegated(addr, delegate)) {
                 delegateCount++;
               }
               
               const delegators = await contracts.justToken.getDelegatorsOf(addr);
-              delegatorCount += delegators.length;
+              // Filter out self-delegation
+              const nonSelfDelegators = delegators.filter(delegator => 
+                delegator !== addr && !isSelfDelegated(delegator, addr)
+              );
+              delegatorCount += nonSelfDelegators.length;
               
               try {
-                const votingPower = await contracts.justToken.balanceOf(addr);
-                totalDelegated = totalDelegated.add(votingPower);
+                // Only add voting power from non-self delegators
+                for (const delegator of nonSelfDelegators) {
+                  const votingPower = await contracts.justToken.balanceOf(delegator);
+                  totalDelegated = totalDelegated.add(votingPower);
+                }
               } catch (vpErr) {
                 console.warn(`Error getting delegation for ${addr}:`, vpErr.message);
               }
@@ -675,7 +668,7 @@ const AnalyticsTab = () => {
     }
   }, [contracts, contractsReady, account, delegationAnalytics, proposalAnalytics]);
   
-  // Modified loadTokenAnalytics function
+  // Modified loadTokenAnalytics function to handle self-delegation properly
   const loadTokenAnalytics = useCallback(async () => {
     if (!contractsReady || !contracts.justToken) {
       setError("Token contract not available");
@@ -721,7 +714,20 @@ const AnalyticsTab = () => {
         
         // Fall back to delegation analytics if available
         if (delegationAnalytics && delegationAnalytics.topDelegates) {
-          activeDelegates = new Set(delegationAnalytics.topDelegates.map(d => d.address)).size;
+          // Count only unique delegates that aren't self-delegated
+          const uniqueDelegates = new Set(
+            delegationAnalytics.delegations
+              .filter(d => !isSelfDelegated(d.address, d.delegate))
+              .map(d => d.delegate)
+          );
+          activeDelegates = uniqueDelegates.size;
+          
+          // Calculate total delegated only from non-self delegations
+          totalDelegated = delegationAnalytics.delegations
+            .filter(d => !isSelfDelegated(d.address, d.delegate))
+            .reduce((sum, d) => {
+              return sum.add(ethers.utils.parseEther(d.votingPower || '0'));
+            }, ethers.BigNumber.from(0));
         }
       }
       
@@ -1184,6 +1190,124 @@ const AnalyticsTab = () => {
     </div>
   );
 
+  // COMPLETELY REWRITTEN: New implementation of renderDelegationAnalytics
+  const renderDelegationAnalytics = () => {
+    if (!delegationAnalytics) return <div>No delegation data available</div>;
+    
+    // Ensure we have arrays of data
+    const delegations = delegationAnalytics.delegations || [];
+    const topDelegates = delegationAnalytics.topDelegates || [];
+    
+    // Calculate total delegated percentage for the visualization
+    const totalDelegatedPercentage = topDelegates
+      .reduce((sum, delegate) => sum + (parseFloat(delegate.percentage) || 0), 0);
+    
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Top Delegates Card */}
+        <div className="bg-white p-4 rounded-lg shadow">
+          <h3 className="text-lg font-medium mb-2">Top Delegates</h3>
+          <div className="overflow-x-auto">
+            <table className="min-w-full">
+              <thead>
+                <tr className="text-left text-xs font-semibold text-gray-500">
+                  <th className="p-2">Address</th>
+                  <th className="p-2">Delegated Power</th>
+                  <th className="p-2">Percentage</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topDelegates.length > 0 ? (
+                  topDelegates.map((delegate, index) => (
+                    <tr key={index} className="border-t">
+                      <td className="p-2 font-mono text-xs">
+                        {delegate.address.substring(0, 6)}...{delegate.address.substring(delegate.address.length - 4)}
+                      </td>
+                      <td className="p-2">{formatTokenAmount(delegate.delegatedPower)}</td>
+                      <td className="p-2">{formatPercentage(delegate.percentage / 100)}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={3} className="p-2 text-center text-gray-500">No delegate data available</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        
+        {/* Delegation Chains Card */}
+        <div className="bg-white p-4 rounded-lg shadow">
+          <h3 className="text-lg font-medium mb-2">Delegation Chains</h3>
+          <div className="overflow-x-auto">
+            <table className="min-w-full">
+              <thead>
+                <tr className="text-left text-xs font-semibold text-gray-500">
+                  <th className="p-2">Delegator</th>
+                  <th className="p-2">Delegate</th>
+                  <th className="p-2">Power</th>
+                  <th className="p-2">Depth</th>
+                </tr>
+              </thead>
+              <tbody>
+                {delegations.length > 0 ? (
+                  delegations.map((delegation, index) => (
+                    <tr key={index} className="border-t">
+                      <td className="p-2 font-mono text-xs">
+                        {delegation.address.substring(0, 6)}...{delegation.address.substring(delegation.address.length - 4)}
+                      </td>
+                      <td className="p-2 font-mono text-xs">
+                        {delegation.delegate.substring(0, 6)}...{delegation.delegate.substring(delegation.delegate.length - 4)}
+                      </td>
+                      <td className="p-2">{formatTokenAmount(delegation.votingPower)}</td>
+                      <td className="p-2">{delegation.depth}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={4} className="p-2 text-center text-gray-500">No delegation data available</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        
+        {/* Delegation Concentration Card */}
+        <div className="bg-white p-4 rounded-lg shadow col-span-1 md:col-span-2">
+          <h3 className="text-lg font-medium mb-2">Delegation Concentration</h3>
+          {topDelegates.length > 0 ? (
+            <>
+              <div className="h-8 w-full flex items-center">
+                {topDelegates.map((delegate, index) => {
+                  // Calculate width but ensure it's at least 1% for visibility
+                  const width = Math.max(1, Math.min(100, parseFloat(delegate.percentage) || 0));
+                  
+                  return (
+                    <div
+                      key={index}
+                      className={`h-8 ${index % 2 === 0 ? 'bg-blue-500' : 'bg-blue-700'}`}
+                      style={{ width: `${width}%` }}
+                      title={`${delegate.address}: ${formatPercentage(delegate.percentage / 100)}`}
+                    ></div>
+                  );
+                })}
+              </div>
+              <div className="mt-2 text-sm text-gray-600">
+                Top {topDelegates.length} delegates control {formatPercentage(Math.min(100, totalDelegatedPercentage) / 100)} of delegated voting power
+              </div>
+            </>
+          ) : (
+            <div className="p-4 text-center text-gray-500">
+              No delegation data available. Delegations occur when token holders delegate their voting power to other addresses.
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   // Render proposal analytics
   const renderProposalAnalytics = () => {
     if (!proposalAnalytics) return <div>No proposal data available</div>;
@@ -1199,14 +1323,14 @@ const AnalyticsTab = () => {
             <div className="font-bold text-right">{proposalAnalytics.activeProposals}</div>
             <div>Succeeded:</div>
             <div className="font-bold text-right">{proposalAnalytics.succeededProposals}</div>
+            <div>Queued:</div>
+            <div className="font-bold text-right">{proposalAnalytics.queuedProposals || 0}</div>
             <div>Executed:</div>
             <div className="font-bold text-right">{proposalAnalytics.executedProposals}</div>
             <div>Defeated:</div>
             <div className="font-bold text-right">{proposalAnalytics.defeatedProposals}</div>
             <div>Canceled:</div>
             <div className="font-bold text-right">{proposalAnalytics.canceledProposals}</div>
-            <div>Queued:</div>
-            <div className="font-bold text-right">{proposalAnalytics.queuedProposals || 0}</div>
             <div>Expired:</div>
             <div className="font-bold text-right">{proposalAnalytics.expiredProposals || 0}</div>
           </div>
@@ -1271,6 +1395,10 @@ const AnalyticsTab = () => {
                   style={{ width: `${(proposalAnalytics.succeededProposals / proposalAnalytics.totalProposals) * 100}%` }}
                 ></div>
                 <div 
+                  className="h-4 bg-purple-400" 
+                  style={{ width: `${(proposalAnalytics.queuedProposals / proposalAnalytics.totalProposals) * 100}%` }}
+                ></div>
+                <div 
                   className="h-4 bg-blue-400" 
                   style={{ width: `${(proposalAnalytics.executedProposals / proposalAnalytics.totalProposals) * 100}%` }}
                 ></div>
@@ -1284,25 +1412,29 @@ const AnalyticsTab = () => {
                 ></div>
               </div>
               
-              <div className="grid grid-cols-2 text-sm">
-                <div className="flex items-center">
-                  <div className="w-3 h-3 bg-yellow-400 mr-1"></div>
+              <div className="grid grid-cols-3 gap-3 text-sm">
+                <div className="flex items-center mb-2">
+                  <div className="w-3 h-3 bg-yellow-400 mr-2"></div>
                   <span>Active</span>
                 </div>
-                <div className="flex items-center">
-                  <div className="w-3 h-3 bg-green-400 mr-1"></div>
+                <div className="flex items-center mb-2">
+                  <div className="w-3 h-3 bg-green-400 mr-2"></div>
                   <span>Succeeded</span>
                 </div>
+                <div className="flex items-center mb-2">
+                  <div className="w-3 h-3 bg-purple-400 mr-2"></div>
+                  <span>Queued</span>
+                </div>
                 <div className="flex items-center">
-                  <div className="w-3 h-3 bg-blue-400 mr-1"></div>
+                  <div className="w-3 h-3 bg-blue-400 mr-2"></div>
                   <span>Executed</span>
                 </div>
                 <div className="flex items-center">
-                  <div className="w-3 h-3 bg-red-400 mr-1"></div>
+                  <div className="w-3 h-3 bg-red-400 mr-2"></div>
                   <span>Defeated</span>
                 </div>
                 <div className="flex items-center">
-                  <div className="w-3 h-3 bg-gray-400 mr-1"></div>
+                  <div className="w-3 h-3 bg-gray-400 mr-2"></div>
                   <span>Canceled</span>
                 </div>
               </div>
@@ -1330,7 +1462,7 @@ const AnalyticsTab = () => {
             <div className="font-bold text-right">{voterAnalytics.totalDelegates}</div>
             
             <div>Active Voting Power:</div>
-            <div className="font-bold text-right">{formatTokenAmount(voterAnalytics.activeDelegated)} JST</div>
+            <div className="font-bold text-right">{formatTokenAmount(voterAnalytics.activeDelegated)} JUST</div>
           </div>
         </div>
         
@@ -1382,7 +1514,7 @@ const AnalyticsTab = () => {
           <h3 className="text-lg font-medium mb-2">Token Supply</h3>
           <div className="grid grid-cols-2 gap-2">
             <div>Total Supply:</div>
-            <div className="font-bold text-right">{formatTokenAmount(tokenAnalytics.totalSupply)} JST</div>
+            <div className="font-bold text-right">{formatTokenAmount(tokenAnalytics.totalSupply)} JUST</div>
             <div>Active Holders:</div>
             <div className="font-bold text-right">{tokenAnalytics.activeHolders}</div>
             <div>Active Delegates:</div>
@@ -1394,7 +1526,7 @@ const AnalyticsTab = () => {
           <h3 className="text-lg font-medium mb-2">Delegation Status</h3>
           <div className="grid grid-cols-2 gap-2">
             <div>Total Delegated:</div>
-            <div className="font-bold text-right">{formatTokenAmount(tokenAnalytics.totalDelegated)} JST</div>
+            <div className="font-bold text-right">{formatTokenAmount(tokenAnalytics.totalDelegated)} JUST</div>
             <div>Percentage of Supply:</div>
             <div className="font-bold text-right">{formatPercentage(tokenAnalytics.percentageDelegated / 100)}</div>
           </div>
@@ -1451,7 +1583,7 @@ const AnalyticsTab = () => {
             <div>Pending Transactions:</div>
             <div className="font-bold text-right">{timelockAnalytics.pendingTransactions}</div>
             <div>Executor Threshold:</div>
-            <div className="font-bold text-right">{formatTokenAmount(timelockAnalytics.executorThreshold)} JST</div>
+            <div className="font-bold text-right">{formatTokenAmount(timelockAnalytics.executorThreshold)} JUST</div>
           </div>
         </div>
         
@@ -1524,7 +1656,7 @@ const AnalyticsTab = () => {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
           <div className="bg-indigo-50 p-3 rounded-lg">
             <div className="text-sm text-indigo-700 font-medium">Quorum</div>
-            <div className="text-lg font-bold">{govParams.formattedQuorum || '0 JST'}</div>
+            <div className="text-lg font-bold">{govParams.formattedQuorum || '0 JUST'}</div>
           </div>
           <div className="bg-indigo-50 p-3 rounded-lg">
             <div className="text-sm text-indigo-700 font-medium">Voting Duration</div>
@@ -1532,11 +1664,11 @@ const AnalyticsTab = () => {
           </div>
           <div className="bg-indigo-50 p-3 rounded-lg">
             <div className="text-sm text-indigo-700 font-medium">Proposal Threshold</div>
-            <div className="text-lg font-bold">{govParams.formattedThreshold || '0 JST'}</div>
+            <div className="text-lg font-bold">{govParams.formattedThreshold || '0 JUST'}</div>
           </div>
           <div className="bg-indigo-50 p-3 rounded-lg">
             <div className="text-sm text-indigo-700 font-medium">Proposal Stake</div>
-            <div className="text-lg font-bold">{govParams.formattedStake || '0 JST'}</div>
+            <div className="text-lg font-bold">{govParams.formattedStake || '0 JUST'}</div>
           </div>
         </div>
         
@@ -1672,119 +1804,6 @@ const AnalyticsTab = () => {
       </div>
     );
   };
-
-  // Render delegation analytics
-  const renderDelegationAnalytics = () => {
-    if (!delegationAnalytics) return <div>No delegation data available</div>;
-    
-    // Calculate the total delegated percentage
-    const totalDelegatedPercentage = delegationAnalytics.topDelegates.reduce(
-      (sum, delegate) => sum + (delegate.percentage || 0), 
-      0
-    );
-    
-    return (
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="bg-white p-4 rounded-lg shadow">
-          <h3 className="text-lg font-medium mb-2">Top Delegates</h3>
-          <div className="overflow-x-auto">
-            <table className="min-w-full">
-              <thead>
-                <tr className="text-left text-xs font-semibold text-gray-500">
-                  <th className="p-2">Address</th>
-                  <th className="p-2">Delegated Power</th>
-                  <th className="p-2">Percentage</th>
-                </tr>
-              </thead>
-              <tbody>
-                {delegationAnalytics.topDelegates.length > 0 ? (
-                  delegationAnalytics.topDelegates.map((delegate, index) => {
-                    // Ensure percentage is a reasonable value (0-100)
-                    const displayPercentage = Math.min(100, delegate.percentage || 0);
-                    
-                    return (
-                      <tr key={index} className="border-t">
-                        <td className="p-2 font-mono text-xs">{delegate.address.substring(0, 6)}...{delegate.address.substring(delegate.address.length - 4)}</td>
-                        <td className="p-2">{formatTokenAmount(delegate.delegatedPower)}</td>
-                        <td className="p-2">{formatPercentage(displayPercentage / 100)}</td>
-                      </tr>
-                    );
-                  })
-                ) : (
-                  <tr>
-                    <td colSpan={3} className="p-2 text-center text-gray-500">No delegate data available</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-        
-        <div className="bg-white p-4 rounded-lg shadow">
-          <h3 className="text-lg font-medium mb-2">Delegation Chains</h3>
-          <div className="overflow-x-auto">
-            <table className="min-w-full">
-              <thead>
-                <tr className="text-left text-xs font-semibold text-gray-500">
-                  <th className="p-2">Delegator</th>
-                  <th className="p-2">Delegate</th>
-                  <th className="p-2">Power</th>
-                  <th className="p-2">Depth</th>
-                </tr>
-              </thead>
-              <tbody>
-                {delegationAnalytics.delegations.length > 0 ? (
-                  delegationAnalytics.delegations.slice(0, 5).map((delegation, index) => (
-                    <tr key={index} className="border-t">
-                      <td className="p-2 font-mono text-xs">{delegation.address.substring(0, 6)}...{delegation.address.substring(delegation.address.length - 4)}</td>
-                      <td className="p-2 font-mono text-xs">{delegation.delegate.substring(0, 6)}...{delegation.delegate.substring(delegation.delegate.length - 4)}</td>
-                      <td className="p-2">{formatTokenAmount(delegation.votingPower)}</td>
-                      <td className="p-2">{delegation.depth}</td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={4} className="p-2 text-center text-gray-500">No delegation data available</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-        
-        <div className="bg-white p-4 rounded-lg shadow col-span-1 md:col-span-2">
-          <h3 className="text-lg font-medium mb-2">Delegation Concentration</h3>
-          <div className="h-8 w-full flex items-center">
-            {delegationAnalytics.topDelegates.length > 0 ? (
-              delegationAnalytics.topDelegates.map((delegate, index) => {
-                // Ensure percentage is a reasonable value (1-100)
-                const displayPercentage = Math.max(1, Math.min(100, delegate.percentage || 0));
-                
-                return (
-                  <div
-                    key={index}
-                    className={`h-8 ${index % 2 === 0 ? 'bg-blue-500' : 'bg-blue-700'}`}
-                    style={{ width: `${displayPercentage}%` }}
-                    title={`${delegate.address}: ${formatPercentage(displayPercentage / 100)}`}
-                  ></div>
-                );
-              })
-            ) : (
-              <div className="text-gray-500">No delegation data</div>
-            )}
-          </div>
-          <div className="mt-2 text-sm text-gray-600">
-            {delegationAnalytics.topDelegates.length > 0 ? (
-              <div>
-                Top {delegationAnalytics.topDelegates.length} delegates control {formatPercentage(Math.min(100, totalDelegatedPercentage) / 100)} of delegated voting power
-              </div>
-            ) : null}
-          </div>
-        </div>
-      </div>
-    );
-  };
-  
   
   // Main render function
   return (
@@ -1803,6 +1822,7 @@ const AnalyticsTab = () => {
       {/* Hide debug info in production */}
       {/* {renderDebugInfo()} */}
       {renderMetricButtons()}
+      
       
       {loading ? (
         <div className="flex justify-center items-center py-12">
