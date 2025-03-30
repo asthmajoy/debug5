@@ -234,165 +234,447 @@ export function useDAOStats() {
     }
   }, [contracts]);
 
-  // Improved proposal count fetching that properly accounts for canceled proposals
-  const fetchProposalStats = useCallback(async () => {
-    console.log("Fetching proposal stats...");
+
+// Enhanced proposal fetching for useProposals.js
+// This ensures proper counting and sorting of proposals by state
+const fetchProposals = useCallback(async () => {
+  if (!isConnected || !contractsReady || !contracts.governance) {
+    setLoading(false);
+    return;
+  }
+  
+  try {
+    setLoading(true);
+    setError(null);
     
-    if (!contracts.governance) {
-      console.warn("Governance contract not available");
-      return { activeProposals: 0, totalProposals: 0, proposalSuccessRate: 0 };
+    console.log("Fetching proposals from governance contract...");
+    
+    // Find the upper limit of proposal IDs more efficiently
+    let maxId = -1;
+    try {
+      // Try a binary search approach to find the highest valid proposal ID
+      let low = 0;
+      let high = 100; // Start with a reasonable upper bound
+      
+      // First, find an upper bound that's definitely too high
+      let foundTooHigh = false;
+      while (!foundTooHigh) {
+        try {
+          await contracts.governance.getProposalState(high);
+          // If this succeeds, our high is still valid, double it
+          low = high;
+          high = high * 2;
+          if (high > 10000) {
+            // Set a reasonable maximum to prevent infinite loops
+            foundTooHigh = true;
+          }
+        } catch (err) {
+          // Found a proposal ID that doesn't exist
+          foundTooHigh = true;
+        }
+      }
+      
+      // Now do binary search between known low and high
+      while (low <= high) {
+        const mid = Math.floor((low + high) / 2);
+        
+        try {
+          await contracts.governance.getProposalState(mid);
+          // If we can get the state, this ID exists
+          low = mid + 1;
+        } catch (err) {
+          // If we can't get the state, this ID doesn't exist
+          high = mid - 1;
+        }
+      }
+      
+      maxId = high; // The highest valid proposal ID
+      console.log("Highest valid proposal ID:", maxId);
+    } catch (err) {
+      console.error("Error finding max proposal ID:", err);
+      maxId = -1; // Reset if something went wrong
     }
     
-    try {
-      let activeProposals = 0;
-      let totalProposals = 0;
-      let successfulProposals = 0;
-      let nonCanceledProposals = 0; // Track non-canceled proposals separately
-      
-      // First, try to determine if the contract has a function to get the proposal count
-      const hasCountMethod = typeof contracts.governance.getProposalCount === 'function';
-      const hasStateMethod = typeof contracts.governance.getProposalState === 'function';
-      
-      console.log(`Governance contract has: countMethod=${hasCountMethod}, stateMethod=${hasStateMethod}`);
-      
-      // Direct method for getting count if available
-      if (hasCountMethod) {
+    // If we didn't find any proposals, try a linear search for a small range
+    if (maxId === -1) {
+      for (let i = 0; i < 20; i++) {
         try {
-          const count = await contracts.governance.getProposalCount();
-          totalProposals = count.toNumber ? count.toNumber() : parseInt(count.toString());
-          console.log("Total proposals from direct count method:", totalProposals);
-        } catch (countError) {
-          console.warn("Error using direct proposal count method:", countError);
+          await contracts.governance.getProposalState(i);
+          maxId = Math.max(maxId, i);
+        } catch (err) {
+          // Skip if proposal doesn't exist
         }
       }
+    }
+    
+    if (maxId === -1) {
+      console.log("No proposals found");
+      setProposals([]);
+      setLoading(false);
+      return;
+    }
+    
+    // Fetch all proposals up to maxId with detailed information
+    const proposalData = [];
+    const uniqueProposers = new Set();
+    const stateCount = {
+      active: 0,
+      canceled: 0,
+      defeated: 0,
+      succeeded: 0,
+      queued: 0,
+      executed: 0, 
+      expired: 0
+    };
+    
+    // Load proposals in batches to avoid overloading the provider
+    const batchSize = 5;
+    for (let batch = 0; batch <= Math.ceil(maxId / batchSize); batch++) {
+      const batchPromises = [];
+      const startIdx = batch * batchSize;
+      const endIdx = Math.min(startIdx + batchSize, maxId + 1);
       
-      // If direct method failed or isn't available, try binary search approach
-      if (totalProposals === 0 && hasStateMethod) {
-        console.log("Using binary search to find proposal count...");
-        
-        // Start with a reasonable max to avoid too many queries
-        let low = 0;
-        let high = 100;
-        let found = false;
-        
-        // First quickly check if any proposals exist
-        try {
-          await contracts.governance.getProposalState(0);
-          found = true;
-        } catch (error) {
-          console.log("No proposals found at ID 0");
-        }
-        
-        if (found) {
-          // Do binary search to find highest valid ID
-          while (low <= high) {
-            const mid = Math.floor((low + high) / 2);
-            
-            try {
-              await contracts.governance.getProposalState(mid);
-              // If we get here, this ID exists
-              low = mid + 1;
-            } catch (error) {
-              // This ID doesn't exist, look lower
-              high = mid - 1;
-            }
-          }
-          
-          totalProposals = high + 1; // +1 if using 0-indexed proposals
-          console.log("Total proposals from binary search:", totalProposals);
-        }
+      for (let i = startIdx; i < endIdx; i++) {
+        batchPromises.push(getProposalDetailsFromEvents(i));
       }
       
-      // Try alternate methods if we still have zero
-      if (totalProposals === 0) {
-        // Check for proposal-related events
-        try {
-          const filter = contracts.governance.filters.ProposalCreated ? 
-                         contracts.governance.filters.ProposalCreated() : 
-                         contracts.governance.filters.ProposalCreated?.();
-                         
-          if (filter) {
-            const events = await contracts.governance.queryFilter(filter);
-            totalProposals = events.length;
-            console.log("Total proposals from ProposalCreated events:", totalProposals);
-          }
-        } catch (error) {
-          console.warn("Error getting proposals from events:", error);
-        }
-      }
+      const batchResults = await Promise.allSettled(batchPromises);
       
-      // Count active, successful, and non-canceled proposals if we have any total proposals
-      if (totalProposals > 0 && hasStateMethod) {
-        console.log("Counting proposal states for", totalProposals, "proposals");
-        
-        // Process in smaller batches to avoid RPC limits
-        const batchSize = 5;
-        
-        for (let i = 0; i < totalProposals; i += batchSize) {
-          const endIdx = Math.min(i + batchSize, totalProposals);
-          const batch = Array.from({ length: endIdx - i }, (_, idx) => i + idx);
+      batchResults.forEach(result => {
+        if (result.status === 'fulfilled' && result.value) {
+          proposalData.push(result.value);
           
-          const statePromises = batch.map(id => {
-            return contracts.governance.getProposalState(id)
-              .then(state => ({
-                id,
-                state: typeof state === 'object' ? state.toNumber() : Number(state)
-              }))
-              .catch(err => ({ id, state: -1 })); // -1 indicates error
-          });
+          // Count by state
+          const state = result.value.state;
+          if (state === 0) stateCount.active++;
+          else if (state === 1) stateCount.canceled++;
+          else if (state === 2) stateCount.defeated++;
+          else if (state === 3) stateCount.succeeded++;
+          else if (state === 4) stateCount.queued++;
+          else if (state === 5) stateCount.executed++;
+          else if (state === 6) stateCount.expired++;
           
-          const results = await Promise.all(statePromises);
-          
-          // Process results to count active, successful, and non-canceled
-          for (const result of results) {
-            if (result.state === -1) continue; // Skip errors
-            
-            // Standard Governor contract states:
-            // 0: Pending, 1: Active, 2: Canceled, 3: Defeated, 4: Succeeded, 5: Queued, 6: Expired, 7: Executed
-            
-            // Count as active if state is Pending or Active
-            if (result.state === 0 || result.state === 1) { 
-              activeProposals++;
-            }
-            
-            // Count as successful if Succeeded, Queued, or Executed
-            if (result.state === 4 || result.state === 5 || result.state === 7) {
-              successfulProposals++;
-            }
-            
-            // Count as non-canceled for all states except Canceled (usually state 2)
-            if (result.state !== 2) { // Adjust if your Canceled state is different
-              nonCanceledProposals++;
-            }
+          if (result.value.proposer !== ethers.constants.AddressZero) {
+            uniqueProposers.add(result.value.proposer);
           }
         }
-      }
-      
-      // Calculate success rate based on non-canceled proposals
-      const proposalSuccessRate = nonCanceledProposals > 0 ? successfulProposals / nonCanceledProposals : 0;
-      
-      console.log("Proposal stats:", {
-        activeProposals,
-        totalProposals,
-        nonCanceledProposals,
-        successfulProposals,
-        proposalSuccessRate
       });
       
-      return { 
-        activeProposals, 
-        totalProposals: nonCanceledProposals, // Use non-canceled count instead of total
-        proposalSuccessRate 
-      };
-    } catch (error) {
-      console.error("Error fetching proposal stats:", error);
-      return { 
-        activeProposals: 0, 
-        totalProposals: 0,
-        proposalSuccessRate: 0
-      };
+      // Short delay between batches to avoid rate limiting
+      if (batch < Math.ceil(maxId / batchSize)) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
     }
-  }, [contracts]);
+    
+    console.log(`Found ${proposalData.length} proposals with state distribution:`, stateCount);
+    
+    // Verify the total matches our count
+    const totalByState = Object.values(stateCount).reduce((a, b) => a + b, 0);
+    if (totalByState !== proposalData.length) {
+      console.warn(`Proposal count mismatch: found ${proposalData.length} proposals but counted ${totalByState} by state`);
+    }
+    
+    // Enhanced sorting logic to prioritize by state and recency
+    const sortedProposals = proposalData.sort((a, b) => {
+      // First sort by state priority
+      const statePriority = {
+        [PROPOSAL_STATES.ACTIVE]: 1,  // Active proposals have highest priority
+        [PROPOSAL_STATES.SUCCEEDED]: 2,
+        [PROPOSAL_STATES.QUEUED]: 3,
+        [PROPOSAL_STATES.EXECUTED]: 4,
+        [PROPOSAL_STATES.DEFEATED]: 5,
+        [PROPOSAL_STATES.CANCELED]: 6,
+        [PROPOSAL_STATES.EXPIRED]: 7
+      };
+      
+      const aStatePriority = statePriority[a.state] || 999;
+      const bStatePriority = statePriority[b.state] || 999;
+      
+      // If states are different, sort by state priority
+      if (aStatePriority !== bStatePriority) {
+        return aStatePriority - bStatePriority;
+      }
+      
+      // Then sort by creation date (newest first)
+      if (a.createdAt && b.createdAt) {
+        return new Date(b.createdAt) - new Date(a.createdAt);
+      }
+      
+      // Fall back to ID sorting (newest first)
+      return b.id - a.id;
+    });
+    
+    console.log("Sorted proposals:", sortedProposals.map(p => ({
+      id: p.id,
+      state: p.stateLabel,
+      created: p.createdAt ? new Date(p.createdAt).toISOString() : 'unknown'
+    })));
+    
+    setProposals(sortedProposals);
+    
+    // Update token holders count
+    setTokenHolders(uniqueProposers.size);
+    
+  } catch (err) {
+    console.error("Error fetching proposals:", err);
+    setError("Failed to fetch proposals: " + err.message);
+  } finally {
+    setLoading(false);
+  }
+}, [contracts, isConnected, contractsReady, getProposalDetailsFromEvents]);
+// Add this to useDAOStats.js
+
+const fetchProposalStats = useCallback(async () => {
+  console.log("Using direct proposal state query approach");
+  
+  if (!contracts.governance) {
+    console.warn("Governance contract not available");
+    return { 
+      activeProposals: 0, 
+      totalProposals: 0,
+      proposalSuccessRate: 0,
+      stateCounts: {
+        active: 0,
+        canceled: 0,
+        defeated: 0,
+        succeeded: 0,
+        queued: 0,
+        executed: 0,
+        expired: 0
+      }
+    };
+  }
+  
+  try {
+    // State map for clarity
+    const stateNames = [
+      'active',     // 0
+      'canceled',   // 1
+      'defeated',   // 2
+      'succeeded',  // 3
+      'queued',     // 4
+      'executed',   // 5
+      'expired'     // 6
+    ];
+    
+    // Initialize counters
+    const stateCounts = {
+      active: 0,
+      canceled: 0,
+      defeated: 0,
+      succeeded: 0,
+      queued: 0,
+      executed: 0,
+      expired: 0
+    };
+    
+    let totalProposals = 0;
+    let successfulProposals = 0;
+    
+    // Directly query every proposal ID from 0 to a reasonable maximum
+    // This approach ensures we don't miss any proposals regardless of state
+    const MAX_PROPOSAL_ID = 100; // Adjust as needed
+    
+    for (let id = 0; id < MAX_PROPOSAL_ID; id++) {
+      try {
+        // Try to get the state - if it fails, the proposal doesn't exist
+        const state = await contracts.governance.getProposalState(id);
+        
+        // Convert state to number (handle BigNumber or other formats)
+        const stateNum = typeof state === 'object' && state.toNumber 
+          ? state.toNumber() 
+          : Number(state);
+        
+        // Count by state using the stateNames map
+        const stateName = stateNames[stateNum];
+        if (stateName && stateCounts.hasOwnProperty(stateName)) {
+          stateCounts[stateName]++;
+        }
+        
+        // Count successful proposals (Succeeded, Queued, or Executed)
+        if (stateNum === 3 || stateNum === 4 || stateNum === 5) {
+          successfulProposals++;
+        }
+        
+        // Increment total proposals counter
+        totalProposals++;
+        
+        console.log(`Proposal #${id} state: ${stateName} (${stateNum})`);
+      } catch (error) {
+        // Skip non-existent proposals
+        // We don't break here because proposal IDs might not be sequential
+        continue;
+      }
+    }
+    
+    // Calculate success rate from non-canceled proposals
+    const nonCanceledCount = totalProposals - stateCounts.canceled;
+    const proposalSuccessRate = nonCanceledCount > 0 ? 
+      successfulProposals / nonCanceledCount : 0;
+    
+    console.log("Final proposal counts:", {
+      totalProposals,
+      activeProposals: stateCounts.active,
+      stateCounts,
+      successfulProposals,
+      proposalSuccessRate
+    });
+    
+    return { 
+      activeProposals: stateCounts.active, 
+      totalProposals,
+      proposalSuccessRate,
+      stateCounts,
+      successfulProposals
+    };
+  } catch (error) {
+    console.error("Error fetching proposal stats:", error);
+    return { 
+      activeProposals: 0, 
+      totalProposals: 0,
+      proposalSuccessRate: 0,
+      stateCounts: {
+        active: 0,
+        canceled: 0,
+        defeated: 0,
+        succeeded: 0,
+        queued: 0,
+        executed: 0,
+        expired: 0
+      }
+    };
+  }
+}, [contracts]);
+
+// If you have JustAnalyticsHelperUpgradeable available, add this alternative method
+const fetchProposalStatsFromAnalytics = useCallback(async () => {
+  console.log("Fetching proposal stats from analytics helper contract");
+  
+  if (!contracts.analyticsHelper) {
+    console.warn("Analytics helper contract not available");
+    return fetchProposalStats(); // Fallback to direct query
+  }
+  
+  try {
+    // Find latest proposal ID first to determine range
+    let latestId = 0;
+    for (let i = 100; i >= 0; i--) {
+      try {
+        await contracts.governance.getProposalState(i);
+        latestId = i;
+        break;
+      } catch (error) {
+        continue;
+      }
+    }
+    
+    // Use the analytics helper to get comprehensive stats
+    const analytics = await contracts.analyticsHelper.getProposalAnalytics(0, latestId);
+    
+    // Properly convert from contract types to JS types if needed
+    const formatNumber = (value) => {
+      return typeof value === 'object' && value.toNumber 
+        ? value.toNumber() 
+        : Number(value);
+    };
+    
+    // Map analytics data to our expected format
+    const stateCounts = {
+      active: formatNumber(analytics.activeProposals),
+      canceled: formatNumber(analytics.canceledProposals),
+      defeated: formatNumber(analytics.defeatedProposals),
+      succeeded: formatNumber(analytics.succeededProposals),
+      queued: formatNumber(analytics.queuedProposals),
+      executed: formatNumber(analytics.executedProposals),
+      expired: formatNumber(analytics.expiredProposals)
+    };
+    
+    // Calculate totals and success rate
+    const totalProposals = formatNumber(analytics.totalProposals);
+    const successfulProposals = stateCounts.succeeded + stateCounts.queued + stateCounts.executed;
+    const nonCanceledCount = totalProposals - stateCounts.canceled;
+    const proposalSuccessRate = nonCanceledCount > 0 ? 
+      successfulProposals / nonCanceledCount : 0;
+    
+    console.log("Analytics helper proposal stats:", {
+      totalProposals,
+      activeProposals: stateCounts.active,
+      stateCounts,
+      successfulProposals,
+      proposalSuccessRate
+    });
+    
+    return { 
+      activeProposals: stateCounts.active, 
+      totalProposals,
+      proposalSuccessRate,
+      stateCounts,
+      successfulProposals
+    };
+  } catch (error) {
+    console.error("Error fetching from analytics helper:", error);
+    // Fallback to direct method if analytics helper fails
+    return fetchProposalStats();
+  }
+}, [contracts, fetchProposalStats]);
+
+// Use this as your main method in loadDashboardData
+const loadDashboardData = useCallback(async () => {
+  if (!isConnected || !contractsReady || !contracts.token || !contracts.governance) {
+    return;
+  }
+
+  try {
+    setDashboardStats(prev => ({ ...prev, isLoading: true, errorMessage: null }));
+    console.log("Loading dashboard data...");
+
+    // Try first with the analytics helper if available
+    const proposalStats = contracts.analyticsHelper 
+      ? await fetchProposalStatsFromAnalytics()
+      : await fetchProposalStats();
+    
+    // Get other values in parallel
+    const [tokenHolders, supplyData, governanceMetrics] = await Promise.all([
+      fetchTokenHolders(),
+      fetchSupplyData(),
+      fetchGovernanceMetrics()
+    ]);
+
+    console.log("Dashboard data fetched:", {
+      tokenHolders,
+      supplyData,
+      proposalStats,
+      governanceMetrics
+    });
+
+    // Update the state with fetched data
+    setDashboardStats({
+      totalHolders: tokenHolders,
+      ...supplyData,
+      ...proposalStats,
+      ...governanceMetrics,
+      isLoading: false,
+      errorMessage: null
+    });
+    
+  } catch (error) {
+    console.error("Error loading dashboard data:", error);
+    setDashboardStats(prev => ({
+      ...prev,
+      isLoading: false,
+      errorMessage: "Failed to load dashboard data: " + error.message
+    }));
+  }
+}, [
+  contracts,
+  contractsReady,
+  isConnected,
+  fetchTokenHolders,
+  fetchSupplyData,
+  fetchProposalStats,
+  fetchProposalStatsFromAnalytics,
+  fetchGovernanceMetrics
+]);
 
   // Fixed governance metrics fetching function
   const fetchGovernanceMetrics = useCallback(async () => {
@@ -622,7 +904,7 @@ export function useDAOStats() {
     }
   }, [loadDashboardData, contractsReady, isConnected, refreshCounter, account]);
 
-  // Modify the displayed proposal count by subtracting 1
+  // Ensure proposal count is never negative
   const displayProposalCount = Math.max(0, dashboardStats.totalProposals);
 
   return { 

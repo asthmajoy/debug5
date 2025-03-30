@@ -4,8 +4,27 @@ import { formatPercentage, formatCountdown } from '../utils/formatters';
 import { formatTokenAmount } from '../utils/tokenFormatters';
 import Loader from './Loader';
 import blockchainDataCache from '../utils/blockchainDataCache';
+import { useWeb3 } from '../contexts/Web3Context';
 
 const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, onRefresh }) => {
+  const { contracts, isConnected } = useWeb3();
+  const [directStats, setDirectStats] = useState({
+    activeProposalsCount: 0,
+    totalProposalsCount: 0,
+    loading: true,
+    stateBreakdown: {
+      active: 0,
+      canceled: 0,
+      defeated: 0,
+      succeeded: 0,
+      queued: 0,
+      executed: 0,
+      expired: 0
+    }
+  });
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [proposalVoteData, setProposalVoteData] = useState({});
+
   // Format numbers for display with better null/undefined handling
   const formatNumberDisplay = (value) => {
     if (value === undefined || value === null) return "0";
@@ -33,10 +52,99 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
     return formatTokenAmount(value);
   };
 
-  // Store proposal vote data
-  const [proposalVoteData, setProposalVoteData] = useState({});
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  
+  // Direct calculation of proposal counts
+  useEffect(() => {
+    async function countProposals() {
+      if (!isConnected || !contracts.governance) {
+        setDirectStats(prev => ({
+          ...prev,
+          loading: false,
+          activeProposalsCount: 0,
+          totalProposalsCount: 0
+        }));
+        return;
+      }
+
+      try {
+        console.log("Directly counting proposals in DashboardTab component...");
+        
+        // State names for logging
+        const stateNames = [
+          'active',     // 0
+          'canceled',   // 1
+          'defeated',   // 2
+          'succeeded',  // 3
+          'queued',     // 4
+          'executed',   // 5
+          'expired'     // 6
+        ];
+        
+        // Initialize counters
+        const stateBreakdown = {
+          active: 0,
+          canceled: 0,
+          defeated: 0,
+          succeeded: 0,
+          queued: 0,
+          executed: 0,
+          expired: 0
+        };
+        
+        let foundProposals = 0;
+        const MAX_PROPOSAL_ID = 100; // Adjust as needed
+        
+        const results = [];
+        
+        // Check each proposal ID
+        for (let id = 0; id < MAX_PROPOSAL_ID; id++) {
+          try {
+            // Try to get the state - if it fails, the proposal doesn't exist
+            const state = await contracts.governance.getProposalState(id);
+            
+            // Convert state to number (handle BigNumber or other formats)
+            const stateNum = typeof state === 'object' && state.toNumber 
+              ? state.toNumber() 
+              : Number(state);
+            
+            // Save the result for logging
+            results.push({ id, state: stateNum, stateName: stateNames[stateNum] });
+            
+            // Count by state
+            const stateName = stateNames[stateNum];
+            if (stateName && stateBreakdown.hasOwnProperty(stateName)) {
+              stateBreakdown[stateName]++;
+            }
+            
+            // Increment total proposals counter
+            foundProposals++;
+          } catch (error) {
+            // Skip non-existent proposals
+            continue;
+          }
+        }
+        
+        console.log("Direct proposal count results:", results);
+        console.log("State breakdown:", stateBreakdown);
+        console.log(`Found ${foundProposals} total proposals with ${stateBreakdown.active} active`);
+        
+        setDirectStats({
+          activeProposalsCount: stateBreakdown.active,
+          totalProposalsCount: foundProposals,
+          loading: false,
+          stateBreakdown
+        });
+      } catch (error) {
+        console.error("Error in direct proposal counting:", error);
+        setDirectStats(prev => ({
+          ...prev,
+          loading: false
+        }));
+      }
+    }
+
+    countProposals();
+  }, [contracts.governance, isConnected, isRefreshing]);
+
   // Fetch vote data for active proposals
   useEffect(() => {
     const fetchVoteData = async () => {
@@ -143,7 +251,13 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
     
     setIsRefreshing(true);
     try {
-      await onRefresh();
+      // Trigger the refresh of direct stats
+      setDirectStats(prev => ({ ...prev, loading: true }));
+      
+      // Also call the parent refresh if provided
+      if (onRefresh) {
+        await onRefresh();
+      }
     } catch (error) {
       console.error("Error refreshing dashboard data:", error);
     } finally {
@@ -159,10 +273,11 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
         {/* Add refresh button */}
         <button 
           onClick={handleRefresh}
-          disabled={isRefreshing || loading}
+          disabled={isRefreshing || loading || directStats.loading}
           className="flex items-center text-sm text-gray-600 hover:text-indigo-600 disabled:text-gray-400"
         >
-        
+          <RefreshCw className="h-4 w-4 mr-1" />
+          Refresh
         </button>
       </div>
       
@@ -170,7 +285,7 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
         <div className="bg-white p-6 rounded-lg shadow">
           <h3 className="text-lg font-medium text-gray-900 mb-2">DAO Overview</h3>
-          {loading ? (
+          {loading || directStats.loading ? (
             <Loader size="small" text="Loading stats..." />
           ) : (
             <div className="grid grid-cols-2 gap-4 text-sm">
@@ -186,11 +301,11 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
               </div>
               <div>
                 <p className="text-gray-500">Active Proposals</p>
-                <p className="text-2xl font-bold">{stats.activeProposals}</p>
+                <p className="text-2xl font-bold">{directStats.activeProposalsCount}</p>
               </div>
               <div>
                 <p className="text-gray-500">Total Proposals</p>
-                <p className="text-2xl font-bold">{stats.totalProposals}</p>
+                <p className="text-2xl font-bold">{directStats.totalProposalsCount}</p>
               </div>
             </div>
           )}
