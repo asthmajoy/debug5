@@ -4,7 +4,8 @@ import { PROPOSAL_STATES, PROPOSAL_TYPES } from '../utils/constants';
 import { formatRelativeTime, formatBigNumber, formatAddress, formatTime } from '../utils/formatters';
 import { addressesEqual, diagnoseMismatchedAddresses } from '../utils/addressUtils';
 import Loader from './Loader';
-import { ChevronDown, ChevronUp, Copy, Check, AlertTriangle } from 'lucide-react';
+import { ChevronDown, ChevronUp, Copy, Check, AlertTriangle, Clock, Shield } from 'lucide-react';
+import TimelockInfoDisplay from './TimelockInfoDisplay';
 
 // Helper function to get human-readable proposal state label
 function getProposalStateLabel(state) {
@@ -37,6 +38,18 @@ function getProposalTypeLabel(type) {
   return typeLabels[type] || "Unknown";
 }
 
+// Helper function to get human-readable threat level label
+function getThreatLevelLabel(level) {
+  const threatLevelLabels = {
+    0: "LOW",
+    1: "MEDIUM",
+    2: "HIGH", 
+    3: "CRITICAL"
+  };
+  
+  return threatLevelLabels[level] || "Unknown";
+}
+
 // Helper function for status colors
 function getStatusColor(status) {
   switch (status) {
@@ -62,7 +75,7 @@ function getStatusColor(status) {
 const ProposalsTab = ({ 
   proposals, 
   createProposal, 
-  createSignalingProposal, // New prop for creating signaling proposals
+  createSignalingProposal,
   cancelProposal, 
   queueProposal,
   executeProposal, 
@@ -93,6 +106,9 @@ const ProposalsTab = ({
   const [submitting, setSubmitting] = useState(false);
   const [transactionError, setTransactionError] = useState('');
   
+  // Add state for timelock information
+  const [timelockInfo, setTimelockInfo] = useState({});
+  
   // Transaction status tracking
   const [pendingTxs, setPendingTxs] = useState({});
   const [loading, setLoading] = useState(globalLoading);
@@ -104,6 +120,156 @@ const ProposalsTab = ({
       setPendingTxs({});
     };
   }, []);
+  
+  // Fetch timelock information for queued proposals
+  useEffect(() => {
+    // Only attempt to fetch timelock info if we have contracts and proposals
+    if (contracts?.timelock && proposals?.length > 0) {
+      const fetchAllTimelockInfo = async () => {
+        try {
+          for (const proposal of proposals) {
+            // Only fetch for queued proposals
+            if (proposal.stateLabel?.toLowerCase() === 'queued') {
+              try {
+                // Create a simplified function to fetch timelock data
+                const fetchInfo = async () => {
+                  const provider = new ethers.providers.Web3Provider(window.ethereum);
+                  const timelockContract = contracts.timelock.connect(provider);
+                  
+                  // Get current block number for filtering
+                  const currentBlock = await provider.getBlockNumber();
+                  const startBlock = Math.max(0, currentBlock - 100000);
+                  
+                  // Fetch TransactionQueued events
+                  const filter = timelockContract.filters.TransactionQueued();
+                  const events = await timelockContract.queryFilter(filter, startBlock);
+                  
+                  console.log(`Fetched ${events.length} timelock events for proposal #${proposal.id}`);
+                  
+                  // Try multiple matching strategies
+                  let matchingEvent = null;
+                  
+                  // 1. Try by txHash if available
+                  if (proposal.txHash) {
+                    matchingEvent = events.find(event => event.args.txHash === proposal.txHash);
+                    console.log(`Matching by txHash: ${proposal.txHash}`, matchingEvent ? "Found match" : "No match");
+                  }
+                  
+                  // 2. Try by timelockTxHash if available
+                  if (!matchingEvent && proposal.timelockTxHash) {
+                    matchingEvent = events.find(event => event.args.txHash === proposal.timelockTxHash);
+                    console.log(`Matching by timelockTxHash: ${proposal.timelockTxHash}`, matchingEvent ? "Found match" : "No match");
+                  }
+                  
+                  // 3. Try by target address
+                  if (!matchingEvent && proposal.target) {
+                    const proposalTarget = proposal.target.toLowerCase();
+                    matchingEvent = events.find(event => {
+                      const eventTarget = event.args.target?.toLowerCase();
+                      return eventTarget === proposalTarget;
+                    });
+                    console.log(`Matching by target address: ${proposal.target}`, matchingEvent ? "Found match" : "No match");
+                  }
+                  
+                  // 4. Try by description hash (if available)
+                  if (!matchingEvent && proposal.descriptionHash) {
+                    // Some contracts include the description hash in the event data
+                    matchingEvent = events.find(event => {
+                      // Look for the description hash in any of the event data
+                      for (const key in event.args) {
+                        if (typeof event.args[key] === 'string' && 
+                            event.args[key].toLowerCase() === proposal.descriptionHash.toLowerCase()) {
+                          return true;
+                        }
+                      }
+                      return false;
+                    });
+                    console.log(`Matching by description hash: ${proposal.descriptionHash}`, matchingEvent ? "Found match" : "No match");
+                  }
+                  
+                  if (matchingEvent) {
+                    const threatLevel = Number(matchingEvent.args.threatLevel || 0);
+                    const etaTimestamp = matchingEvent.args.eta ? Number(matchingEvent.args.eta) : null;
+                    const txHash = matchingEvent.args.txHash;
+                    
+                    console.log(`Found timelock info for proposal #${proposal.id}:`, {
+                      threatLevel,
+                      etaLabel: getThreatLevelLabel(threatLevel),
+                      eta: etaTimestamp,
+                      txHash
+                    });
+                    
+                    setTimelockInfo(prevInfo => ({
+                      ...prevInfo,
+                      [proposal.id]: {
+                        level: threatLevel,
+                        label: getThreatLevelLabel(threatLevel),
+                        eta: etaTimestamp,
+                        txHash
+                      }
+                    }));
+                    
+                    return true;
+                  }
+                  
+                  // Direct lookup as fallback
+                  if (proposal.timelockTxHash) {
+                    try {
+                      const txDetails = await timelockContract.getTransaction(proposal.timelockTxHash);
+                      if (txDetails && txDetails.eta) {
+                        // We don't get threat level from this direct lookup, so deduce it from other proposal data
+                        let deducedThreatLevel = 0; // Default to LOW
+                        
+                        // Try to deduce threat level from proposal type
+                        if (proposal.type) {
+                          const type = Number(proposal.type);
+                          if (type === PROPOSAL_TYPES.TOKEN_MINT || 
+                              type === PROPOSAL_TYPES.TOKEN_BURN || 
+                              type === PROPOSAL_TYPES.GOVERNANCE_CHANGE) {
+                            deducedThreatLevel = 2; // HIGH
+                          } else if (type === PROPOSAL_TYPES.WITHDRAWAL || 
+                                    type === PROPOSAL_TYPES.TOKEN_TRANSFER || 
+                                    type === PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER) {
+                            deducedThreatLevel = 1; // MEDIUM
+                          }
+                        }
+                        
+                        console.log(`Deduced threat level for proposal #${proposal.id}: ${deducedThreatLevel}`);
+                        
+                        setTimelockInfo(prevInfo => ({
+                          ...prevInfo,
+                          [proposal.id]: {
+                            level: deducedThreatLevel,
+                            label: getThreatLevelLabel(deducedThreatLevel),
+                            eta: Number(txDetails.eta),
+                            txHash: proposal.timelockTxHash
+                          }
+                        }));
+                        
+                        return true;
+                      }
+                    } catch (err) {
+                      console.warn(`Error in direct lookup for proposal #${proposal.id}:`, err);
+                    }
+                  }
+                  
+                  return false;
+                };
+                
+                await fetchInfo();
+              } catch (error) {
+                console.error(`Error fetching timelock info for proposal #${proposal.id}:`, error);
+              }
+            }
+          }
+        } catch (error) {
+          console.error("Error fetching timelock information:", error);
+        }
+      };
+      
+      fetchAllTimelockInfo();
+    }
+  }, [contracts, proposals]);
   
   // Watch pending transactions
   useEffect(() => {
@@ -1082,6 +1248,101 @@ const ProposalsTab = ({
     }
   });
 
+  // Enhanced function to check if a user can claim a refund
+  const canClaimRefund = (proposal) => {
+    // Log that the function is being called
+    console.debug(`REFUND CHECK: Started check for proposal #${proposal?.id || 'unknown'}`);
+    
+    // Skip if no proposal data or no connected account
+    if (!proposal || !account) {
+      console.debug('REFUND CHECK: No proposal or account, returning false');
+      return false;
+    }
+    
+    // CRITICAL: Make sure all data we need is available
+    if (!proposal.proposer) {
+      console.debug('REFUND CHECK: Missing proposer address, returning false');
+      return false;
+    }
+    
+    // Use our address utility functions for robust address comparison
+    // Check if addresses are equal using our utility
+    const isProposer = addressesEqual(account, proposal.proposer);
+    
+    // For debugging, log the detailed diagnostics about the addresses
+    const addressDiagnostics = diagnoseMismatchedAddresses({
+      address1: account,
+      address2: proposal.proposer,
+      label1: 'userAddress',
+      label2: 'proposerAddress'
+    });
+    
+    console.debug('REFUND CHECK: Address comparison details:', addressDiagnostics);
+    console.debug(`REFUND CHECK: Is proposer: ${isProposer}`);
+    
+    if (!isProposer) {
+      console.debug('REFUND CHECK: User is not the proposer, returning false');
+      return false;
+    }
+    
+    // Check if the stake has already been refunded
+    if (proposal.stakeRefunded) {
+      console.debug('REFUND CHECK: Stake already refunded, returning false');
+      return false;
+    }
+    
+    // The governance contract only allows refunds for these 3 states:
+    // Defeated (2), Canceled (1), or Expired (6)
+    const refundableStates = [
+      PROPOSAL_STATES.DEFEATED,  // 2 
+      PROPOSAL_STATES.CANCELED,  // 1
+      PROPOSAL_STATES.EXPIRED    // 6
+    ];
+    
+    // Log the PROPOSAL_STATES constants to verify they are correct
+    console.debug('REFUND CHECK: PROPOSAL_STATES constants:', {
+      DEFEATED: PROPOSAL_STATES.DEFEATED,
+      CANCELED: PROPOSAL_STATES.CANCELED,
+      EXPIRED: PROPOSAL_STATES.EXPIRED
+    });
+    
+    // Multiple approaches to check if the state is refundable
+    
+    // Approach 1: Check using the raw state number
+    let proposalState;
+    try {
+      // Handle various input types for state
+      if (typeof proposal.state === 'object' && proposal.state._isBigNumber) {
+        // Handle ethers.js BigNumber
+        proposalState = proposal.state.toNumber();
+      } else {
+        proposalState = Number(proposal.state);
+      }
+      console.debug(`REFUND CHECK: Converted proposal state: ${proposalState} (${typeof proposalState})`);
+    } catch (err) {
+      console.error('REFUND CHECK: Error converting state to number:', err);
+      proposalState = -1; // Invalid state that won't match
+    }
+    
+    const isStateRefundable = refundableStates.includes(proposalState);
+    console.debug(`REFUND CHECK: Numeric state check: ${proposalState} in [${refundableStates.join(', ')}] = ${isStateRefundable}`);
+    
+    // Approach 2: Check using the state label (more reliable)
+    const stateLabelLower = (proposal.stateLabel || '').toLowerCase().trim();
+    const isLabelRefundable = ['defeated', 'canceled', 'expired'].includes(stateLabelLower);
+    console.debug(`REFUND CHECK: Label state check: "${stateLabelLower}" in ["defeated", "canceled", "expired"] = ${isLabelRefundable}`);
+    
+    // Use either approach, preferring the label check as it's less prone to bugs
+    const isRefundable = isStateRefundable || isLabelRefundable;
+    console.debug(`REFUND CHECK: Final refundable state determination: ${isRefundable}`);
+    
+    // Final check with all conditions
+    const result = isProposer && isRefundable && !proposal.stakeRefunded;
+    console.debug(`REFUND CHECK: Final result (all conditions): ${result} (isProposer && isRefundable && !stakeRefunded)`);
+    
+    return result;
+  };
+
   // Improved transaction notification card with better error message handling
   const renderTransactionNotifications = () => {
     const txEntries = Object.entries(pendingTxs);
@@ -1193,101 +1454,6 @@ const ProposalsTab = ({
         ))}
       </div>
     );
-  };
-
-  // Enhanced function to check if a user can claim a refund
-  const canClaimRefund = (proposal) => {
-    // Log that the function is being called
-    console.debug(`REFUND CHECK: Started check for proposal #${proposal?.id || 'unknown'}`);
-    
-    // Skip if no proposal data or no connected account
-    if (!proposal || !account) {
-      console.debug('REFUND CHECK: No proposal or account, returning false');
-      return false;
-    }
-    
-    // CRITICAL: Make sure all data we need is available
-    if (!proposal.proposer) {
-      console.debug('REFUND CHECK: Missing proposer address, returning false');
-      return false;
-    }
-    
-    // Use our address utility functions for robust address comparison
-    // Check if addresses are equal using our utility
-    const isProposer = addressesEqual(account, proposal.proposer);
-    
-    // For debugging, log the detailed diagnostics about the addresses
-    const addressDiagnostics = diagnoseMismatchedAddresses({
-      address1: account,
-      address2: proposal.proposer,
-      label1: 'userAddress',
-      label2: 'proposerAddress'
-    });
-    
-    console.debug('REFUND CHECK: Address comparison details:', addressDiagnostics);
-    console.debug(`REFUND CHECK: Is proposer: ${isProposer}`);
-    
-    if (!isProposer) {
-      console.debug('REFUND CHECK: User is not the proposer, returning false');
-      return false;
-    }
-    
-    // Check if the stake has already been refunded
-    if (proposal.stakeRefunded) {
-      console.debug('REFUND CHECK: Stake already refunded, returning false');
-      return false;
-    }
-    
-    // The governance contract only allows refunds for these 3 states:
-    // Defeated (2), Canceled (1), or Expired (6)
-    const refundableStates = [
-      PROPOSAL_STATES.DEFEATED,  // 2 
-      PROPOSAL_STATES.CANCELED,  // 1
-      PROPOSAL_STATES.EXPIRED    // 6
-    ];
-    
-    // Log the PROPOSAL_STATES constants to verify they are correct
-    console.debug('REFUND CHECK: PROPOSAL_STATES constants:', {
-      DEFEATED: PROPOSAL_STATES.DEFEATED,
-      CANCELED: PROPOSAL_STATES.CANCELED,
-      EXPIRED: PROPOSAL_STATES.EXPIRED
-    });
-    
-    // Multiple approaches to check if the state is refundable
-    
-    // Approach 1: Check using the raw state number
-    let proposalState;
-    try {
-      // Handle various input types for state
-      if (typeof proposal.state === 'object' && proposal.state._isBigNumber) {
-        // Handle ethers.js BigNumber
-        proposalState = proposal.state.toNumber();
-      } else {
-        proposalState = Number(proposal.state);
-      }
-      console.debug(`REFUND CHECK: Converted proposal state: ${proposalState} (${typeof proposalState})`);
-    } catch (err) {
-      console.error('REFUND CHECK: Error converting state to number:', err);
-      proposalState = -1; // Invalid state that won't match
-    }
-    
-    const isStateRefundable = refundableStates.includes(proposalState);
-    console.debug(`REFUND CHECK: Numeric state check: ${proposalState} in [${refundableStates.join(', ')}] = ${isStateRefundable}`);
-    
-    // Approach 2: Check using the state label (more reliable)
-    const stateLabelLower = (proposal.stateLabel || '').toLowerCase().trim();
-    const isLabelRefundable = ['defeated', 'canceled', 'expired'].includes(stateLabelLower);
-    console.debug(`REFUND CHECK: Label state check: "${stateLabelLower}" in ["defeated", "canceled", "expired"] = ${isLabelRefundable}`);
-    
-    // Use either approach, preferring the label check as it's less prone to bugs
-    const isRefundable = isStateRefundable || isLabelRefundable;
-    console.debug(`REFUND CHECK: Final refundable state determination: ${isRefundable}`);
-    
-    // Final check with all conditions
-    const result = isProposer && isRefundable && !proposal.stakeRefunded;
-    console.debug(`REFUND CHECK: Final result (all conditions): ${result} (isProposer && isRefundable && !stakeRefunded)`);
-    
-    return result;
   };
 
   return (
@@ -1543,6 +1709,18 @@ const ProposalsTab = ({
                           </p>
                         </div>
                       )}
+                      
+                      {/* Add TimelockInfoDisplay component for queued proposals */}
+                      {proposal.stateLabel?.toLowerCase() === 'queued' && (
+                        <TimelockInfoDisplay
+                          proposal={proposal}
+                          contracts={contracts}
+                          timelockInfo={timelockInfo}
+                          setTimelockInfo={setTimelockInfo}
+                          copiedText={copiedText}
+                          setCopiedText={setCopiedText}
+                        />
+                      )}
                     </div>
                   </div>
                 ) : (
@@ -1629,7 +1807,7 @@ const ProposalsTab = ({
           </div>
         )}
       </div>
-      
+     
       {/* Create Proposal Modal */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">

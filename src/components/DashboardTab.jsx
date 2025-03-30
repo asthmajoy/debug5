@@ -5,6 +5,7 @@ import { formatTokenAmount } from '../utils/tokenFormatters';
 import Loader from './Loader';
 import blockchainDataCache from '../utils/blockchainDataCache';
 import { useWeb3 } from '../contexts/Web3Context';
+import DismissibleMintNotice from './DismissibleMintNotice';
 
 const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, onRefresh }) => {
   const { contracts, isConnected } = useWeb3();
@@ -50,6 +51,54 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
   // Utilize our token formatter directly to ensure consistent display
   const formatToFiveDecimals = (value) => {
     return formatTokenAmount(value);
+  };
+  
+  // Responsive formatter for token values with dynamic decimal places
+  const [windowWidth, setWindowWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1200);
+  
+  // Update window width on resize
+  useEffect(() => {
+    const handleResize = () => setWindowWidth(window.innerWidth);
+    
+    if (typeof window !== 'undefined') {
+      window.addEventListener('resize', handleResize);
+      return () => window.removeEventListener('resize', handleResize);
+    }
+  }, []);
+  
+  // Format with dynamic decimal places based on screen size and layout
+  const formatDynamicDecimals = (value) => {
+    if (value === undefined || value === null) return "0";
+    
+    // Handle string inputs
+    const numValue = typeof value === 'string' ? parseFloat(value) : value;
+    
+    // If it's NaN or not a number, return "0"
+    if (isNaN(numValue)) return "0";
+    
+    // Dynamic decimal places based on screen width and layout
+    let decimalPlaces = 10; // Default for large screens
+    
+    // In a responsive grid, cards stack at small screens (< 768px)
+    // which gives more horizontal space per card
+    if (windowWidth < 768) { 
+      // Small screens with stacked layout (more horizontal space)
+      decimalPlaces = 8;
+    } else if (windowWidth < 900) {
+      // Medium-small screens with 3-column layout (very constrained)
+      decimalPlaces = 4; 
+    } else if (windowWidth < 1024) {
+      // Medium screens
+      decimalPlaces = 6;
+    } else if (windowWidth < 1280) {
+      // Medium-large screens
+      decimalPlaces = 8;
+    }
+    
+    return numValue.toLocaleString(undefined, {
+      minimumFractionDigits: decimalPlaces,
+      maximumFractionDigits: decimalPlaces
+    });
   };
 
   // Direct calculation of proposal counts
@@ -263,19 +312,8 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
   
   return (
     <div>
-      {/* New header for ETH to JST minting instructions */}
-      <div className="bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-200 p-3 rounded-lg mb-4 text-center shadow-sm">
-        <h3 className="font-medium text-indigo-800 mb-1 text-base">Mint Justice Tokens (JST)</h3>
-        <div>
-          <p className="text-indigo-700 text-xs mb-1">Send ETH to</p>
-          <div className="inline-block bg-white px-2 py-1 rounded-lg border border-indigo-200 shadow-sm mx-auto">
-            <span className="font-mono text-indigo-800 text-xs tracking-wide">
-            <span className="text-black-500">0x0DB1Fe54b3202F198863747b43C9138502e4D6D5</span>
-            </span>
-          </div>
-          <p className="text-indigo-600 mt-1 text-xs">1:1 conversion ratio - JST remitted to sending wallet</p>
-        </div>
-      </div>
+      {/* Dismissible JST Minting Notice */}
+      <DismissibleMintNotice />
       
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-semibold">Dashboard</h2>
@@ -317,11 +355,19 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
           <div className="space-y-3">
             <div>
               <p className="text-gray-500">Balance</p>
-              <p className="text-2xl font-bold">{formatToFiveDecimals(user.balance)} JST</p>
+              <div className="relative">
+                <p className="text-xl md:text-2xl font-bold overflow-hidden text-ellipsis whitespace-nowrap">
+                  {formatDynamicDecimals(user.balance)} <span className="text-sm md:text-base font-medium">JST</span>
+                </p>
+              </div>
             </div>
             <div>
               <p className="text-gray-500">Voting Power</p>
-              <p className="text-2xl font-bold">{formatToFiveDecimals(user.votingPower)} JST</p>
+              <div className="relative">
+                <p className="text-xl md:text-2xl font-bold overflow-hidden text-ellipsis whitespace-nowrap">
+                  {formatDynamicDecimals(user.votingPower)} <span className="text-sm md:text-base font-medium">JST</span>
+                </p>
+              </div>
             </div>
             
             <div className="mt-4">

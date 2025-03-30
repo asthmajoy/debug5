@@ -1,16 +1,52 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
+import { useWeb3 } from '../contexts/Web3Context';
 
 const DismissibleMintNotice = () => {
+  const { isConnected, account } = useWeb3();
   const [isVisible, setIsVisible] = useState(true);
+  
+  // Reset visibility when wallet address changes
+  useEffect(() => {
+    if (isConnected && account) {
+      // Create a storage key that's unique to this wallet address
+      const storageKey = `mintNoticeDismissed-${account}`;
+      const isDismissed = localStorage.getItem(storageKey) === 'true';
+      
+      // Set visibility based on whether this specific account has dismissed it
+      setIsVisible(!isDismissed);
+      
+      // Clean up function to reset when wallet changes
+      return () => {
+        // This will run when the account changes or component unmounts
+        setIsVisible(true);
+      };
+    } else {
+      // If wallet is disconnected, reset to visible
+      setIsVisible(true);
+    }
+  }, [isConnected, account]);
 
+  const handleDismiss = () => {
+    if (isConnected && account) {
+      // Use wallet-specific storage key
+      const storageKey = `mintNoticeDismissed-${account}`;
+      localStorage.setItem(storageKey, 'true');
+    }
+    setIsVisible(false);
+  };
+
+  // Don't show if dismissed
   if (!isVisible) return null;
+  
+  // Don't show if wallet not connected
+  if (!isConnected) return null;
 
   return (
     <div className="bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-200 p-3 rounded-lg mb-4 shadow-sm relative">
       <button 
         className="absolute top-1 right-1 text-indigo-400 hover:text-indigo-600 p-1"
-        onClick={() => setIsVisible(false)}
+        onClick={handleDismiss}
         aria-label="Close notification"
       >
         <X className="h-4 w-4" />

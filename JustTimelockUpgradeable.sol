@@ -14,6 +14,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 interface JustTokenInterface {
     function balanceOf(address account) external view returns (uint256);
 }
+
 /**
  * @title JustTimelockUpgradeable
  * @notice Complete timelock contract for the JustGovernance system, modified for proxy compatibility
@@ -158,6 +159,7 @@ contract JustTimelockUpgradeable is
         highThreatDelay = 7 days;       // 7 days for high threat
         criticalThreatDelay = 14 days;  // 14 days for critical threat
         minExecutorTokenThreshold = 10**16; // Initially set to .01
+        
         // Set up default threat levels for common operations
         
         // LOW THREAT - Basic operations
@@ -214,6 +216,7 @@ contract JustTimelockUpgradeable is
     function _authorizeUpgrade(address newImplementation) internal override onlyRole(ADMIN_ROLE) {
         // Authorization is handled by the onlyRole modifier
     }
+    
     // ==================== ADMIN FUNCTIONS ====================
     /**
      * @notice Set the JustToken contract address
@@ -409,65 +412,71 @@ contract JustTimelockUpgradeable is
         highestThreatLevel = addressLevel;
     }
     
-    // Check if this is a governance proposal execution - always evaluate this regardless of address level
+    // Check function selector threat level if data has sufficient length
     if (data.length >= 4) {
+        // Extract the function selector using byte-by-byte method to avoid bit manipulation issues
         bytes4 selector;
-        assembly {
-            selector := and(mload(add(data, 32)), 0xFFFFFFFF)
+        
+        {
+            // Explicitly extract each byte
+            bytes1 b0 = data[0];
+            bytes1 b1 = data[1];
+            bytes1 b2 = data[2];
+            bytes1 b3 = data[3];
+            
+            // Combine bytes to form selector (using string concatenation)
+            selector = bytes4(abi.encodePacked(b0, b1, b2, b3));
         }
         
-        // This is the selector for executeProposalLogic with added parameters
-        if (selector == bytes4(keccak256("executeProposalLogic(uint256,uint8,address)"))) {
-            // Extract the proposal type and target
-            uint8 proposalType;
-            address proposalTarget;
-            
-            // Skip selector (4 bytes) and uint256 proposalId (32 bytes)
-            // to get to proposalType at position 36
-            assembly {
-                proposalType := mload(add(data, 36))
-                proposalTarget := mload(add(data, 68)) // 36+32=68 (after proposalType)
-            }
-            
-            // For General proposals, check the target address threat level
-            if (proposalType == 0) { // General
-                ThreatLevel targetAddressLevel = addressThreatLevels[proposalTarget];
-                if (targetAddressLevel > highestThreatLevel) {
-                    highestThreatLevel = targetAddressLevel;
-                } else if (highestThreatLevel == ThreatLevel.LOW) {
-                    // Default General proposals to MEDIUM if no higher level found
-                    highestThreatLevel = ThreatLevel.MEDIUM;
-                }
-            }
-            // Determine threat level based on proposal type
-            else if (proposalType == 5 || // TokenMint
-                proposalType == 6 || // TokenBurn
-                proposalType == 3) { // GovernanceChange
-                ThreatLevel proposalTypeLevel = ThreatLevel.HIGH;
-                if (proposalTypeLevel > highestThreatLevel) {
-                    highestThreatLevel = proposalTypeLevel;
-                }
-            } 
-            else if (proposalType == 4 || // ExternalERC20Transfer
-                proposalType == 2 || // TokenTransfer
-                proposalType == 1) { // Withdrawal
-                ThreatLevel proposalTypeLevel = ThreatLevel.MEDIUM;
-                if (proposalTypeLevel > highestThreatLevel) {
-                    highestThreatLevel = proposalTypeLevel;
-                }
-            }
-            // Signaling proposals remain LOW, no need to update highestThreatLevel
-        }
-        
-        // Check if the function selector has a specific threat level
+        // Check if this selector has a threat level
         ThreatLevel functionLevel = functionThreatLevels[selector];
         if (functionLevel > highestThreatLevel) {
             highestThreatLevel = functionLevel;
+        }
+        
+        // CRITICAL selectors fallback - direct check for specific selectors
+        if (bytes4(abi.encodePacked(data[0], data[1], data[2], data[3])) == bytes4(hex"3659cfe6")) { // upgradeTo
+            if (ThreatLevel.CRITICAL > highestThreatLevel) {
+                highestThreatLevel = ThreatLevel.CRITICAL;
+            }
+        }
+        
+        // Check if this is a governance proposal execution - only if previous checks didn't find HIGH threat
+        if (highestThreatLevel < ThreatLevel.HIGH && 
+            bytes4(abi.encodePacked(data[0], data[1], data[2], data[3])) == bytes4(hex"fa0af14c")) {
+            
+            // If data has enough length for proposal type (at least 4 + 32 + 32 bytes)
+            if (data.length >= 68) {
+                uint8 proposalType;
+                
+                // Extract the proposal type from the calldata - byte at position 67
+                proposalType = uint8(data[67]);
+                
+                // Assign threat levels based on proposal type
+                if (proposalType == 5 || // TokenMint (5)
+                    proposalType == 6 || // TokenBurn (6)
+                    proposalType == 3) { // GovernanceChange (3)
+                    // HIGH threat for these critical operations
+                    if (ThreatLevel.HIGH > highestThreatLevel) {
+                        highestThreatLevel = ThreatLevel.HIGH;
+                    }
+                } 
+                else if (proposalType == 4 || // ExternalERC20Transfer (4)
+                         proposalType == 2 || // TokenTransfer (2) 
+                         proposalType == 1) { // Withdrawal (1)
+                    // MEDIUM threat for these financial operations
+                    if (ThreatLevel.MEDIUM > highestThreatLevel) {
+                        highestThreatLevel = ThreatLevel.MEDIUM;
+                    }
+                }
+                // Signaling (7) or General (0) proposals remain at their current threat level
+            }
         }
     }
     
     return highestThreatLevel;
 }
+
     /**
      * @notice Gets the delay for a specific threat level
      * @param level The threat level

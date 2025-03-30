@@ -1,4 +1,4 @@
-// Fixed JustDAODashboard.jsx with proper analytics access control
+// Fixed JustDAODashboard.jsx with proper analytics access control and Governance tab
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useWeb3 } from '../contexts/Web3Context';
@@ -20,6 +20,7 @@ import VoteTab from './VoteTab';
 import DelegationTab from './DelegationTab';
 import AnalyticsTab from './AnalyticsTab';
 import DashboardTab from './DashboardTab';
+import GovernanceTab from './GovernanceTab';
 
 // Define role constants to ensure consistency
 const ROLES = {
@@ -60,6 +61,7 @@ const JustDAODashboard = () => {
     isAdmin: false,
     isGuardian: false,
     isAnalytics: false,
+    isGovernance: false, // Added governance role
   });
   
   // Web3 context for blockchain connection
@@ -92,6 +94,7 @@ const JustDAODashboard = () => {
         let isAdmin = false;
         let isGuardian = false;
         let isAnalytics = false;
+        let isGovernance = false; // Added governance role check
         
         // Try using justToken first
         if (contracts.justToken) {
@@ -99,31 +102,34 @@ const JustDAODashboard = () => {
             isAdmin = await contracts.justToken.hasRole(ROLES.ADMIN_ROLE, account);
             isGuardian = await contracts.justToken.hasRole(ROLES.GUARDIAN_ROLE, account);
             isAnalytics = await contracts.justToken.hasRole(ROLES.ANALYTICS_ROLE, account);
-            console.log("Role check from justToken:", { isAdmin, isGuardian, isAnalytics });
+            isGovernance = await contracts.justToken.hasRole(ROLES.GOVERNANCE_ROLE, account); // Check governance role
+            console.log("Role check from justToken:", { isAdmin, isGuardian, isAnalytics, isGovernance });
           } catch (err) {
             console.warn("Error checking roles from justToken:", err);
           }
         }
         
         // Try using governance as fallback
-        if ((!isAdmin || !isGuardian || !isAnalytics) && contracts.governance) {
+        if ((!isAdmin || !isGuardian || !isAnalytics || !isGovernance) && contracts.governance) {
           try {
             if (!isAdmin) isAdmin = await contracts.governance.hasRole(ROLES.ADMIN_ROLE, account);
             if (!isGuardian) isGuardian = await contracts.governance.hasRole(ROLES.GUARDIAN_ROLE, account);
             if (!isAnalytics) isAnalytics = await contracts.governance.hasRole(ROLES.ANALYTICS_ROLE, account);
-            console.log("Role check from governance:", { isAdmin, isGuardian, isAnalytics });
+            if (!isGovernance) isGovernance = await contracts.governance.hasRole(ROLES.GOVERNANCE_ROLE, account); // Check governance role
+            console.log("Role check from governance:", { isAdmin, isGuardian, isAnalytics, isGovernance });
           } catch (err) {
             console.warn("Error checking roles from governance:", err);
           }
         }
         
         // Try using timelock as another fallback
-        if ((!isAdmin || !isGuardian || !isAnalytics) && contracts.timelock) {
+        if ((!isAdmin || !isGuardian || !isAnalytics || !isGovernance) && contracts.timelock) {
           try {
             if (!isAdmin) isAdmin = await contracts.timelock.hasRole(ROLES.ADMIN_ROLE, account);
             if (!isGuardian) isGuardian = await contracts.timelock.hasRole(ROLES.GUARDIAN_ROLE, account);
             if (!isAnalytics) isAnalytics = await contracts.timelock.hasRole(ROLES.ANALYTICS_ROLE, account);
-            console.log("Role check from timelock:", { isAdmin, isGuardian, isAnalytics });
+            if (!isGovernance) isGovernance = await contracts.timelock.hasRole(ROLES.GOVERNANCE_ROLE, account); // Check governance role
+            console.log("Role check from timelock:", { isAdmin, isGuardian, isAnalytics, isGovernance });
           } catch (err) {
             console.warn("Error checking roles from timelock:", err);
           }
@@ -133,7 +139,8 @@ const JustDAODashboard = () => {
         setUserRoles({
           isAdmin,
           isGuardian,
-          isAnalytics
+          isAnalytics,
+          isGovernance // Include governance role
         });
         
       } catch (error) {
@@ -446,6 +453,17 @@ const JustDAODashboard = () => {
               Delegation
             </div>
             
+            {/* Governance tab - only visible to users with GOVERNANCE_ROLE */}
+            {(userRoles.isGovernance || hasRole(ROLES.GOVERNANCE_ROLE) || hasRole('governance')) && (
+              <div 
+                className={`py-4 px-6 cursor-pointer border-b-2 ${activeTab === 'governance' ? 'border-indigo-500 text-indigo-600' : 'border-transparent hover:text-gray-700 hover:border-gray-300'}`}
+                onClick={() => setActiveTab('governance')}
+                data-tab="governance"
+              >
+                Governance
+              </div>
+            )}
+            
             {/* Analytics tab - FIXED: only visible to users with analytics role */}
             {(() => {
               // Comprehensive analytics role check function
@@ -609,6 +627,14 @@ const JustDAODashboard = () => {
               },
               loading: dataLoading
             }}
+          />
+        )}
+        
+        {/* Governance tab - only visible to users with GOVERNANCE_ROLE */}
+        {activeTab === 'governance' && (userRoles.isGovernance || hasRole(ROLES.GOVERNANCE_ROLE) || hasRole('governance')) && (
+          <GovernanceTab 
+            contracts={contracts}
+            account={account}
           />
         )}
         
