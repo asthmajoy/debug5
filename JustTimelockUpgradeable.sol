@@ -400,13 +400,16 @@ contract JustTimelockUpgradeable is
      * @return The appropriate threat level
      */
     function getThreatLevel(address target, bytes memory data) public view returns (ThreatLevel) {
-    // First check if the target address has a specific threat level
+    // Initialize with the lowest threat level
+    ThreatLevel highestThreatLevel = ThreatLevel.LOW;
+    
+    // Check the target address threat level
     ThreatLevel addressLevel = addressThreatLevels[target];
-    if (addressLevel != ThreatLevel.LOW) {
-        return addressLevel;
+    if (addressLevel > highestThreatLevel) {
+        highestThreatLevel = addressLevel;
     }
     
-    // Check if this is a governance proposal execution
+    // Check if this is a governance proposal execution - always evaluate this regardless of address level
     if (data.length >= 4) {
         bytes4 selector;
         assembly {
@@ -429,46 +432,41 @@ contract JustTimelockUpgradeable is
             // For General proposals, check the target address threat level
             if (proposalType == 0) { // General
                 ThreatLevel targetAddressLevel = addressThreatLevels[proposalTarget];
-                if (targetAddressLevel != ThreatLevel.LOW) {
-                    return targetAddressLevel;
+                if (targetAddressLevel > highestThreatLevel) {
+                    highestThreatLevel = targetAddressLevel;
+                } else if (highestThreatLevel == ThreatLevel.LOW) {
+                    // Default General proposals to MEDIUM if no higher level found
+                    highestThreatLevel = ThreatLevel.MEDIUM;
                 }
-                // Default General proposals to MEDIUM if no specific level set
-                return ThreatLevel.MEDIUM;
             }
-            
             // Determine threat level based on proposal type
-            if (proposalType == 5 || // TokenMint
+            else if (proposalType == 5 || // TokenMint
                 proposalType == 6 || // TokenBurn
                 proposalType == 3) { // GovernanceChange
-                return ThreatLevel.HIGH;
-            } else if (
-                proposalType == 4 || // ExternalERC20Transfer
+                ThreatLevel proposalTypeLevel = ThreatLevel.HIGH;
+                if (proposalTypeLevel > highestThreatLevel) {
+                    highestThreatLevel = proposalTypeLevel;
+                }
+            } 
+            else if (proposalType == 4 || // ExternalERC20Transfer
                 proposalType == 2 || // TokenTransfer
                 proposalType == 1) { // Withdrawal
-                return ThreatLevel.MEDIUM;
+                ThreatLevel proposalTypeLevel = ThreatLevel.MEDIUM;
+                if (proposalTypeLevel > highestThreatLevel) {
+                    highestThreatLevel = proposalTypeLevel;
+                }
             }
-            
-            // Default to LOW for Signaling proposals
-            return ThreatLevel.LOW;
-        }
-    }
-    
-    // Then check if the function selector has a specific threat level
-    if (data.length >= 4) {
-        bytes4 selector;
-        assembly {
-            selector := and(mload(add(data, 32)), 0xFFFFFFFF)
+            // Signaling proposals remain LOW, no need to update highestThreatLevel
         }
         
+        // Check if the function selector has a specific threat level
         ThreatLevel functionLevel = functionThreatLevels[selector];
-        if (functionLevel != ThreatLevel.LOW) {
-            return functionLevel;
+        if (functionLevel > highestThreatLevel) {
+            highestThreatLevel = functionLevel;
         }
     }
     
-    // Default to LOW if no specific level is set
-    return ThreatLevel.LOW;
-
+    return highestThreatLevel;
 }
     /**
      * @notice Gets the delay for a specific threat level

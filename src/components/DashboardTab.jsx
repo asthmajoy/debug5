@@ -270,10 +270,10 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
           <p className="text-indigo-700 text-xs mb-1">Send ETH to</p>
           <div className="inline-block bg-white px-2 py-1 rounded-lg border border-indigo-200 shadow-sm mx-auto">
             <span className="font-mono text-indigo-800 text-xs tracking-wide">
-              0xc784D408<span className="text-indigo-500">65b7C5b7</span>303157a6<span className="text-indigo-500">E5B31A1D</span>9E960567
+            <span className="text-black-500">0x0DB1Fe54b3202F198863747b43C9138502e4D6D5</span>
             </span>
           </div>
-          <p className="text-indigo-600 mt-1 text-xs">1:1 conversion ratio</p>
+          <p className="text-indigo-600 mt-1 text-xs">1:1 conversion ratio - JST remitted to sending wallet</p>
         </div>
       </div>
       
