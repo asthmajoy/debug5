@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
 import { PROPOSAL_STATES, PROPOSAL_TYPES } from '../utils/constants';
 import { formatRelativeTime, formatBigNumber, formatAddress, formatTime } from '../utils/formatters';
-import { addressesEqual, diagnoseMismatchedAddresses } from '../utils/addressUtils'; // Import our new utility
+import { addressesEqual, diagnoseMismatchedAddresses } from '../utils/addressUtils';
 import Loader from './Loader';
 import { ChevronDown, ChevronUp, Copy, Check, AlertTriangle } from 'lucide-react';
 
@@ -19,6 +19,22 @@ function getProposalStateLabel(state) {
   };
   
   return stateLabels[state] || "Unknown";
+}
+
+// Helper function to get human-readable proposal type label
+function getProposalTypeLabel(type) {
+  const typeLabels = {
+    [PROPOSAL_TYPES.GENERAL]: "General",
+    [PROPOSAL_TYPES.WITHDRAWAL]: "Withdrawal",
+    [PROPOSAL_TYPES.TOKEN_TRANSFER]: "Token Transfer",
+    [PROPOSAL_TYPES.GOVERNANCE_CHANGE]: "Governance Change",
+    [PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER]: "External ERC20 Transfer",
+    [PROPOSAL_TYPES.TOKEN_MINT]: "Token Mint",
+    [PROPOSAL_TYPES.TOKEN_BURN]: "Token Burn",
+    [PROPOSAL_TYPES.SIGNALING]: "Signaling"
+  };
+  
+  return typeLabels[type] || "Unknown";
 }
 
 // Helper function for status colors
@@ -46,14 +62,15 @@ function getStatusColor(status) {
 const ProposalsTab = ({ 
   proposals, 
   createProposal, 
+  createSignalingProposal, // New prop for creating signaling proposals
   cancelProposal, 
   queueProposal,
   executeProposal, 
   claimRefund,
   loading: globalLoading,
   contracts,
-  fetchProposals, // Access to fetchProposals
-  account // Current user's wallet address
+  fetchProposals,
+  account
 }) => {
   const [proposalType, setProposalType] = useState('all');
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -71,7 +88,7 @@ const ProposalsTab = ({
     newThreshold: '',
     newQuorum: '',
     newVotingDuration: '',
-    newProposalStake: '' // Changed from newTimelockDelay to newProposalStake
+    newProposalStake: ''
   });
   const [submitting, setSubmitting] = useState(false);
   const [transactionError, setTransactionError] = useState('');
@@ -210,13 +227,145 @@ const ProposalsTab = ({
     }
   };
 
+  // Add console logs to debug PROPOSAL_TYPES
+  console.log("PROPOSAL_TYPES from import:", PROPOSAL_TYPES);
+  console.log("SIGNALING type value:", PROPOSAL_TYPES.SIGNALING);
+  
+  // Make a separate, clear constant to use
+  const SIGNALING_TYPE = 7; // If this is the correct value
+  
+  const validateProposalInputs = (proposal) => {
+    // Check for signaling proposals by string or number
+    const isSignalingProposal = 
+      proposal.type === 7 || 
+      proposal.type === "7" ||
+      String(proposal.type).toLowerCase().includes("signaling");
+    
+    console.log("Is signaling by string check:", isSignalingProposal);
+    
+    // Skip validation for signaling proposals
+    if (isSignalingProposal) {
+      console.log("Skipping validation for signaling proposal");
+      return true;
+    }
+    
+    switch (parseInt(proposal.type)) {
+      case PROPOSAL_TYPES.GENERAL:
+        return proposal.target && proposal.callData;
+      
+      case PROPOSAL_TYPES.WITHDRAWAL:
+        return proposal.recipient && proposal.amount;
+      
+      case PROPOSAL_TYPES.TOKEN_TRANSFER:
+        return proposal.recipient && proposal.amount;
+      
+      case PROPOSAL_TYPES.GOVERNANCE_CHANGE:
+        // At least one parameter must be changed and have a non-zero/non-empty value
+        return (proposal.newThreshold && parseFloat(proposal.newThreshold) > 0) || 
+               (proposal.newQuorum && parseFloat(proposal.newQuorum) > 0) || 
+               (proposal.newVotingDuration && parseInt(proposal.newVotingDuration) > 0) || 
+               (proposal.newProposalStake && parseFloat(proposal.newProposalStake) > 0);
+      
+      case PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER:
+        return proposal.recipient && proposal.token && proposal.amount;
+      
+      case PROPOSAL_TYPES.TOKEN_MINT:
+        return proposal.recipient && proposal.amount;
+      
+      case PROPOSAL_TYPES.TOKEN_BURN:
+        return proposal.recipient && proposal.amount;
+      
+      case PROPOSAL_TYPES.SIGNALING:
+        // Always return true for signaling proposals - no validation
+        return true;
+      
+      default:
+        return false;
+    }
+  };
+
   const handleSubmitProposal = async (e) => {
     e.preventDefault();
     setSubmitting(true);
     setTransactionError('');
     
+    // Check if this is a signaling proposal by string matching
+    const isSignalingProposal = 
+      newProposal.type === 7 || 
+      newProposal.type === "7" || 
+      String(newProposal.type).toLowerCase().includes("signaling");
+    
+    console.log("Is signaling by string check:", isSignalingProposal);
+    
     try {
-      // For governance change proposals, include the parameters in the description for backup parsing
+      // Handle signaling proposals with string matching
+      if (isSignalingProposal) {
+        console.log("Handling as signaling proposal");
+        
+        // Skip validation entirely for signaling proposals
+        const description = `${newProposal.title}\n\n${newProposal.description}`;
+        console.log('Submitting signaling proposal:', { description });
+        
+        try {
+          // Check if createSignalingProposal exists, otherwise use createProposal
+          if (typeof createSignalingProposal === 'function') {
+            await createSignalingProposal(description);
+          } else {
+            // Fallback to using regular createProposal with type 7
+            console.log("createSignalingProposal not available, using createProposal");
+            await createProposal(
+              description,
+              7, // SIGNALING type
+              ethers.constants.AddressZero, // target (not used)
+              '0x', // callData (not used)
+              0, // amount (not used)
+              ethers.constants.AddressZero, // recipient (not used)
+              ethers.constants.AddressZero, // token (not used)
+              0, // newThreshold (not used)
+              0, // newQuorum (not used)
+              0, // newVotingDuration (not used)
+              0  // newTimelockDelay (not used)
+            );
+          }
+          
+          // Reset form and close modal
+          setShowCreateModal(false);
+          setNewProposal({
+            title: '',
+            description: '',
+            type: PROPOSAL_TYPES.GENERAL,
+            target: '',
+            callData: '',
+            amount: '',
+            recipient: '',
+            token: '',
+            newThreshold: '',
+            newQuorum: '',
+            newVotingDuration: '',
+            newProposalStake: ''
+          });
+        } catch (error) {
+          console.error("Error in signaling proposal creation:", error);
+          setTransactionError(error.message || "Failed to create signaling proposal");
+        } finally {
+          setSubmitting(false);
+        }
+        
+        // Exit early
+        return;
+      }
+      
+      console.log("Handling as regular proposal");
+      
+      // Only run validation for non-signaling proposals
+      if (!validateProposalInputs(newProposal)) {
+        console.log("Validation failed");
+        setTransactionError('Please fill in all required fields for this proposal type.');
+        setSubmitting(false);
+        return;
+      }
+      
+      // For other proposal types
       let description = `${newProposal.title}\n\n${newProposal.description}`;
       
       // Add parameter details to description for governance changes to ensure they can be parsed later
@@ -246,14 +395,7 @@ const ProposalsTab = ({
       const newThreshold = newProposal.newThreshold ? ethers.utils.parseEther(newProposal.newThreshold.toString()) : 0;
       const newQuorum = newProposal.newQuorum ? ethers.utils.parseEther(newProposal.newQuorum.toString()) : 0;
       const newVotingDuration = newProposal.newVotingDuration ? parseInt(newProposal.newVotingDuration) : 0;
-      const newProposalStake = newProposal.newProposalStake ? ethers.utils.parseEther(newProposal.newProposalStake.toString()) : 0; // Changed
-      
-      // Validate inputs based on proposal type
-      if (!validateProposalInputs(newProposal)) {
-        setTransactionError('Please fill in all required fields for this proposal type.');
-        setSubmitting(false);
-        return;
-      }
+      const newProposalStake = newProposal.newProposalStake ? ethers.utils.parseEther(newProposal.newProposalStake.toString()) : 0;
       
       console.log('Submitting proposal:', {
         description,
@@ -266,7 +408,7 @@ const ProposalsTab = ({
         newThreshold,
         newQuorum,
         newVotingDuration,
-        newProposalStake // Changed
+        newProposalStake
       });
       
       // For governance change proposals, use the proposal stake
@@ -287,7 +429,7 @@ const ProposalsTab = ({
         newThreshold,
         newQuorum,
         newVotingDuration,
-        finalParamValue // Using proposalStake for governance changes, 0 for others
+        finalParamValue
       );
       
       setShowCreateModal(false);
@@ -304,7 +446,7 @@ const ProposalsTab = ({
         newThreshold: '',
         newQuorum: '',
         newVotingDuration: '',
-        newProposalStake: '' // Changed
+        newProposalStake: ''
       });
     } catch (error) {
       console.error("Error creating proposal:", error);
@@ -337,39 +479,6 @@ const ProposalsTab = ({
     } catch (error) {
       console.error("Error extracting governance params from description:", error);
       return null;
-    }
-  };
-
-  // Validate proposal inputs based on type
-  const validateProposalInputs = (proposal) => {
-    switch (parseInt(proposal.type)) {
-      case PROPOSAL_TYPES.GENERAL:
-        return proposal.target && proposal.callData;
-      
-      case PROPOSAL_TYPES.WITHDRAWAL:
-        return proposal.recipient && proposal.amount;
-      
-      case PROPOSAL_TYPES.TOKEN_TRANSFER:
-        return proposal.recipient && proposal.amount;
-      
-      case PROPOSAL_TYPES.GOVERNANCE_CHANGE:
-        // At least one parameter must be changed and have a non-zero/non-empty value
-        return (proposal.newThreshold && parseFloat(proposal.newThreshold) > 0) || 
-               (proposal.newQuorum && parseFloat(proposal.newQuorum) > 0) || 
-               (proposal.newVotingDuration && parseInt(proposal.newVotingDuration) > 0) || 
-               (proposal.newProposalStake && parseFloat(proposal.newProposalStake) > 0);
-      
-      case PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER:
-        return proposal.recipient && proposal.token && proposal.amount;
-      
-      case PROPOSAL_TYPES.TOKEN_MINT:
-        return proposal.recipient && proposal.amount;
-      
-      case PROPOSAL_TYPES.TOKEN_BURN:
-        return proposal.recipient && proposal.amount;
-      
-      default:
-        return false;
     }
   };
 
@@ -580,6 +689,12 @@ const ProposalsTab = ({
                 break;
                 
               case PROPOSAL_TYPES.GOVERNANCE_CHANGE:
+                if (contracts.governance && contracts.governance.address) {
+                  target = contracts.governance.address;
+                }
+                break;
+                
+              case PROPOSAL_TYPES.SIGNALING:
                 if (contracts.governance && contracts.governance.address) {
                   target = contracts.governance.address;
                 }
@@ -1080,7 +1195,7 @@ const ProposalsTab = ({
     );
   };
 
-  // FIXED VERSION: Enhanced function to check if a user can claim a refund with proper address comparison
+  // Enhanced function to check if a user can claim a refund
   const canClaimRefund = (proposal) => {
     // Log that the function is being called
     console.debug(`REFUND CHECK: Started check for proposal #${proposal?.id || 'unknown'}`);
@@ -1232,7 +1347,26 @@ const ProposalsTab = ({
               <div className="grid grid-cols-3 gap-4 mb-4 text-sm text-gray-500">
                 <div>
                   <p className="font-medium">Type</p>
-                  <p>{proposal.typeLabel}</p>
+                  <p>{(() => {
+                    // Robust type detection for signaling proposals
+                    if (proposal.typeLabel && proposal.typeLabel !== "Unknown") {
+                      return proposal.typeLabel;
+                    }
+                    
+                    // Try to identify signaling proposals by type
+                    const type = Number(proposal.type);
+                    if (type === 7 || type === PROPOSAL_TYPES.SIGNALING) {
+                      return "Signaling";
+                    }
+                    
+                    // As a fallback, check description for signaling keywords
+                    if (proposal.description && proposal.description.toLowerCase().includes("signaling")) {
+                      return "Signaling";
+                    }
+                    
+                    // Finally, use our helper function
+                    return getProposalTypeLabel(proposal.type);
+                  })()}</p>
                 </div>
                 <div>
                   <p className="font-medium">Created</p>
@@ -1400,6 +1534,15 @@ const ProposalsTab = ({
                           
                         </div>
                       )}
+                      
+                      {/* Display Signaling proposal details */}
+                      {proposal.type === PROPOSAL_TYPES.SIGNALING && (
+                        <div className="mt-2 bg-gray-50 p-4 rounded">
+                          <p className="text-sm text-gray-600 italic">
+                            This is a signaling proposal. It serves as a community discussion or vote without executing any code.
+                          </p>
+                        </div>
+                      )}
                     </div>
                   </div>
                 ) : (
@@ -1420,16 +1563,16 @@ const ProposalsTab = ({
                 </button>
                 
                 {proposal.state === PROPOSAL_STATES.ACTIVE && 
- addressesEqual(account, proposal.proposer) && 
- (!proposal.hasVotes) && (
-  <button 
-    className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-md text-sm"
-    onClick={() => handleProposalAction(cancelProposal, proposal.id, 'cancelling')}
-    disabled={loading}
-  >
-    Cancel
-  </button>
-)}
+                 addressesEqual(account, proposal.proposer) && 
+                 (!proposal.hasVotes) && (
+                  <button 
+                    className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-md text-sm"
+                    onClick={() => handleProposalAction(cancelProposal, proposal.id, 'cancelling')}
+                    disabled={loading}
+                  >
+                    Cancel
+                  </button>
+                )}
                 
                 {/* Show Queue button only for SUCCEEDED proposals that haven't been queued yet */}
                 {proposal.state === PROPOSAL_STATES.SUCCEEDED && !proposal.isQueued && (
@@ -1453,152 +1596,30 @@ const ProposalsTab = ({
                   </button>
                 )}
                 
-                {/* FIXED: Display claim stake button for defeated/canceled/expired proposals */}
-                {(() => {
-  // Step 1: Log ALL possible data for debugging
-  console.log(`CLAIM BUTTON DATA - Proposal #${proposal.id}:`, {
-    proposalData: proposal,
-    userAccount: account,
-    proposerAddress: proposal.proposer,
-    proposalState: proposal.state, 
-    stateLabel: proposal.stateLabel,
-    stakeRefunded: proposal.stakeRefunded
-  });
-  
-  // Step 2: Super-normalize both addresses for comparison
-  const normUser = (account || '').toString().toLowerCase().replace(/\s+/g, '');
-  const normProposer = (proposal.proposer || '').toString().toLowerCase().replace(/\s+/g, '');
-  
-  // If they have 0x prefixes, compare without them too
-  const normUserNoPrefix = normUser.startsWith('0x') ? normUser.slice(2) : normUser;
-  const normProposerNoPrefix = normProposer.startsWith('0x') ? normProposer.slice(2) : normProposer;
-  
-  // Try multiple comparison strategies 
-  const addressesMatch = (
-    normUser === normProposer ||                  // Regular comparison
-    normUserNoPrefix === normProposerNoPrefix ||  // No prefix comparison
-    normUser.includes(normProposerNoPrefix) ||    // Partial inclusion
-    normProposer.includes(normUserNoPrefix)       // Partial inclusion (reverse)
-  );
-  
-  // Step 3: Check refundable state using multiple methods
-  // Method 1: Using numeric state
-  const refundableStates = [
-    PROPOSAL_STATES.DEFEATED,  // 2 
-    PROPOSAL_STATES.CANCELED,  // 1
-    PROPOSAL_STATES.EXPIRED    // 6
-  ];
-  
-  let proposalState = -1;
-  try {
-    // Handle various input types for state
-    if (typeof proposal.state === 'object' && proposal.state._isBigNumber) {
-      // Handle ethers.js BigNumber
-      proposalState = proposal.state.toNumber();
-    } else {
-      proposalState = Number(proposal.state);
-    }
-  } catch (err) {
-    console.error('Error converting state:', err);
-  }
-  
-  const isRefundableByState = refundableStates.includes(proposalState);
-  
-  // Method 2: Using string state label (more reliable)
-  const stateLabelLower = (proposal.stateLabel || '').toString().toLowerCase().trim();
-  const isRefundableByLabel = ['defeated', 'canceled', 'expired'].includes(stateLabelLower);
-  
-  // Combined check
-  const isRefundableState = isRefundableByState || isRefundableByLabel;
-  
-  // Step 4: Check if stake has already been refunded
-  const notYetRefunded = !proposal.stakeRefunded;
-  
-  // Step 5: Log all comparison results
-  console.log(`CLAIM BUTTON COMPARISON - Proposal #${proposal.id}:`, {
-    addressComparison: {
-      normUser,
-      normProposer,
-      normUserNoPrefix,
-      normProposerNoPrefix,
-      addressesMatch
-    },
-    stateComparison: {
-      proposalState,
-      stateLabelLower,
-      isRefundableByState,
-      isRefundableByLabel,
-      isRefundableState
-    },
-    refundStatus: {
-      stakeRefunded: proposal.stakeRefunded,
-      notYetRefunded
-    }
-  });
-  
-  // Final eligibility check - standard approach
-  const normalShouldShowButton = addressesMatch && isRefundableState && notYetRefunded;
-  
-  // ========== EMERGENCY OVERRIDE OPTIONS ==========
-  // Option 1: Force button to show for all refundable, not-yet-refunded proposals 
-  // Uncomment to use this option
-  const forceShowAll = false; // Set to true to force button for all refundable proposals
-  
-  // Option 2: Force button to show for specific proposal IDs
-  // Uncomment and add IDs to use this option
-  const targetProposalIds = []; // e.g. [1, 5, 7] for proposals #1, #5, and #7
-  const forceShowForIds = targetProposalIds.includes(proposal.id);
-  
-  // Option 3: Manually enter the address that should see the button
-  // Replace with your actual wallet address to force-enable the button
-  const yourRealAddress = ''; // e.g. '0x123abc...'
-  const forceShowForAddress = normUser === yourRealAddress.toLowerCase();
-  
-  // Combined force override
-  const forceShowButton = forceShowAll || forceShowForIds || forceShowForAddress;
-  
-  // Final decision: show if normal check passed OR if force override is active
-  const shouldShowButton = normalShouldShowButton || 
-    (forceShowButton && isRefundableState && notYetRefunded);
-  
-  // Log the final decision
-  console.log(`CLAIM BUTTON DECISION - Proposal #${proposal.id}: ${shouldShowButton ? 'SHOW' : 'HIDE'}`);
-  
-  // ========== VISIBLE DEBUG INFO ==========
-  // This adds a visible debug panel to the UI
-  const showDebugInfo = isRefundableState && notYetRefunded;
-  
-  return (
-    <>
-     
-    
-      {/* The actual claim button */}
-      {shouldShowButton && (
-        <button 
-          className="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded-md text-sm flex items-center"
-          onClick={() => handleProposalAction(claimRefund, proposal.id, 'claiming refund for')}
-          disabled={loading}
-        >
-          <svg 
-            xmlns="http://www.w3.org/2000/svg" 
-            className="h-4 w-4 mr-1" 
-            fill="none" 
-            viewBox="0 0 24 24" 
-            stroke="currentColor"
-          >
-            <path 
-              strokeLinecap="round" 
-              strokeLinejoin="round" 
-              strokeWidth={2} 
-              d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" 
-            />
-          </svg>
-          Claim Stake Refund
-        </button>
-      )}
-    </>
-  );
-})()}
+                {/* Display claim stake button for defeated/canceled/expired proposals */}
+                {canClaimRefund(proposal) && (
+                  <button 
+                    className="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded-md text-sm flex items-center"
+                    onClick={() => handleProposalAction(claimRefund, proposal.id, 'claiming refund for')}
+                    disabled={loading}
+                  >
+                    <svg 
+                      xmlns="http://www.w3.org/2000/svg" 
+                      className="h-4 w-4 mr-1" 
+                      fill="none" 
+                      viewBox="0 0 24 24" 
+                      stroke="currentColor"
+                    >
+                      <path 
+                        strokeLinecap="round" 
+                        strokeLinejoin="round" 
+                        strokeWidth={2} 
+                        d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" 
+                      />
+                    </svg>
+                    Claim Stake Refund
+                  </button>
+                )}
               </div>
             </div>
           ))
@@ -1622,7 +1643,7 @@ const ProposalsTab = ({
               </div>
             )}
             
-            <form onSubmit={handleSubmitProposal} className="space-y-4">
+            <form onSubmit={handleSubmitProposal} className="space-y-4" noValidate>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Proposal Title</label>
                 <input 
@@ -1631,7 +1652,6 @@ const ProposalsTab = ({
                   placeholder="Enter proposal title" 
                   value={newProposal.title}
                   onChange={(e) => setNewProposal({...newProposal, title: e.target.value})}
-                  required
                 />
               </div>
               
@@ -1640,8 +1660,10 @@ const ProposalsTab = ({
                 <select 
                   className="w-full rounded-md border border-gray-300 p-2"
                   value={newProposal.type}
-                  onChange={(e) => setNewProposal({...newProposal, type: e.target.value})}
-                  required
+                  onChange={(e) => {
+                    console.log("Type changed to:", e.target.value);
+                    setNewProposal({...newProposal, type: e.target.value})
+                  }}
                 >
                   <option value={PROPOSAL_TYPES.GENERAL}>General</option>
                   <option value={PROPOSAL_TYPES.WITHDRAWAL}>Withdrawal</option>
@@ -1650,6 +1672,7 @@ const ProposalsTab = ({
                   <option value={PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER}>External ERC20 Transfer</option>
                   <option value={PROPOSAL_TYPES.TOKEN_MINT}>Token Mint</option>
                   <option value={PROPOSAL_TYPES.TOKEN_BURN}>Token Burn</option>
+                  <option value={PROPOSAL_TYPES.SIGNALING}>Signaling (Text Proposal)</option>
                 </select>
               </div>
               
@@ -1661,7 +1684,6 @@ const ProposalsTab = ({
                   placeholder="Describe your proposal"
                   value={newProposal.description}
                   onChange={(e) => setNewProposal({...newProposal, description: e.target.value})}
-                  required
                 ></textarea>
               </div>
               
@@ -1915,6 +1937,19 @@ const ProposalsTab = ({
                 </>
               )}
               
+              {/* Fields for SIGNALING proposal type - NEW */}
+              {parseInt(newProposal.type) === PROPOSAL_TYPES.SIGNALING && (
+                <div className="bg-yellow-50 border border-yellow-200 p-4 rounded-md">
+                  <p className="text-sm text-yellow-800 mb-2">
+                    <strong>Signaling Proposal Information:</strong>
+                  </p>
+                  <p className="text-sm text-yellow-700">
+                    A signaling proposal is used for community polls, sentiment gathering, or discussion topics without any on-chain actions.
+                    Only title and description are required. A proposal deposit will still be required.
+                  </p>
+                </div>
+              )}
+              
               <div className="flex justify-end space-x-2 pt-4">
                 <button 
                   type="button"
@@ -1924,13 +1959,52 @@ const ProposalsTab = ({
                 >
                   Cancel
                 </button>
-                <button 
-                  type="submit"
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:bg-indigo-400"
-                  disabled={submitting}
-                >
-                  {submitting ? 'Creating Proposal...' : 'Create Proposal'}
-                </button>
+                {parseInt(newProposal.type) === PROPOSAL_TYPES.SIGNALING ? (
+                  // Special button for signaling proposals that bypasses form validation
+                  <button 
+                    type="button"
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:bg-indigo-400"
+                    disabled={submitting}
+                    onClick={async () => {
+                      try {
+                        setSubmitting(true);
+                        const description = `${newProposal.title}\n\n${newProposal.description}`;
+                        await createSignalingProposal(description);
+                        setShowCreateModal(false);
+                        setNewProposal({
+                          title: '',
+                          description: '',
+                          type: PROPOSAL_TYPES.GENERAL,
+                          target: '',
+                          callData: '',
+                          amount: '',
+                          recipient: '',
+                          token: '',
+                          newThreshold: '',
+                          newQuorum: '',
+                          newVotingDuration: '',
+                          newProposalStake: ''
+                        });
+                      } catch (error) {
+                        console.error("Error creating signaling proposal:", error);
+                        setTransactionError(error.message || 'Error creating signaling proposal');
+                      } finally {
+                        setSubmitting(false);
+                      }
+                    }}
+                  >
+                    {submitting ? 'Creating Signaling Proposal...' : 'Create Signaling Proposal'}
+                  </button>
+                ) : (
+                  // Regular submit button for other proposal types
+                  <button 
+                    type="submit"
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:bg-indigo-400"
+                    disabled={submitting}
+                  >
+                    {submitting ? 'Creating Proposal...' : 'Create Proposal'}
+                  </button>
+                )}
               </div>
             </form>
           </div>

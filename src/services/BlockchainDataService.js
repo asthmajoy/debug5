@@ -509,7 +509,7 @@ const getProposalVoteTotals = useCallback(async (proposalId) => {
   }, [contractsReady, isConnected, contracts, getProposalVoteTotals]);
 
   // Get DAO statistics from blockchain
-  const fetchDAOStats = useCallback(async () => {
+  async function fetchDAOStats() {
     if (!contractsReady || !isConnected) {
       return {
         totalHolders: 0,
@@ -521,15 +521,8 @@ const getProposalVoteTotals = useCallback(async (proposalId) => {
         proposalSuccessRate: 0
       };
     }
-
+  
     try {
-      // Try to get from cache first
-      const cacheKey = 'daoStats';
-      const cachedStats = blockchainDataCache.get(cacheKey);
-      if (cachedStats !== null) {
-        return cachedStats;
-      }
-      
       // 1. Get total supply
       const totalSupply = await contracts.justToken.totalSupply();
       const circulatingSupply = ethers.utils.formatEther(totalSupply);
@@ -567,7 +560,8 @@ const getProposalVoteTotals = useCallback(async (proposalId) => {
       // 3. Count active and total proposals
       let activeProposals = 0;
       let totalProposals = 0;
-      let proposalSuccessRate = 0;
+      let successfulProposals = 0;
+      let canceledProposals = 0; // Track canceled proposals separately
       
       try {
         // Try to get proposal count directly
@@ -592,19 +586,27 @@ const getProposalVoteTotals = useCallback(async (proposalId) => {
           totalProposals = highestId + 1;
         }
         
-        // Count active and successful proposals
-        let successfulProposals = 0;
-        
+        // Count active, successful, and canceled proposals
         for (let i = 0; i < totalProposals; i++) {
           try {
             const state = await contracts.governance.getProposalState(i);
             
-            if (state === 0) { // Active state is usually 0
+            // Convert state to number (handle BigNumber or other formats)
+            const stateNum = typeof state === 'object' && state.toNumber 
+              ? state.toNumber() 
+              : Number(state);
+            
+            if (stateNum === 0) { // Active state is 0
               activeProposals++;
             }
             
-            // States 4, 5, 7 typically represent success states
-            if (state === 4 || state === 5 || state === 7) {
+            // State 1 is CANCELED - track these separately
+            if (stateNum === 1) {
+              canceledProposals++;
+            }
+            
+            // States 3, 4, 5 represent success states (SUCCEEDED, QUEUED, EXECUTED)
+            if (stateNum === 3 || stateNum === 4 || stateNum === 5) {
               successfulProposals++;
             }
           } catch (err) {
@@ -612,8 +614,18 @@ const getProposalVoteTotals = useCallback(async (proposalId) => {
           }
         }
         
-        // Calculate success rate
-        proposalSuccessRate = totalProposals > 0 ? successfulProposals / totalProposals : 0;
+        // Calculate success rate using non-canceled proposals as denominator
+        const nonCanceledCount = totalProposals - canceledProposals;
+        const proposalSuccessRate = nonCanceledCount > 0 ? 
+          successfulProposals / nonCanceledCount : 0;
+        
+        console.log("Fixed proposal success calculation:", {
+          totalProposals,
+          canceledProposals,
+          nonCanceledCount,
+          successfulProposals,
+          proposalSuccessRate
+        });
       } catch (error) {
         console.error("Error counting proposals:", error);
       }
@@ -669,7 +681,7 @@ const getProposalVoteTotals = useCallback(async (proposalId) => {
       const formattedDelegationRate = `${(delegationRate * 100).toFixed(1)}%`;
       const formattedSuccessRate = `${(proposalSuccessRate * 100).toFixed(1)}%`;
       
-      const stats = {
+      return {
         totalHolders,
         circulatingSupply,
         activeProposals,
@@ -681,11 +693,6 @@ const getProposalVoteTotals = useCallback(async (proposalId) => {
         formattedDelegationRate,
         formattedSuccessRate
       };
-      
-      // Cache the result
-      blockchainDataCache.set(cacheKey, stats);
-      
-      return stats;
     } catch (error) {
       console.error("Error fetching DAO stats:", error);
       return {
@@ -701,8 +708,7 @@ const getProposalVoteTotals = useCallback(async (proposalId) => {
         formattedSuccessRate: "0.0%"
       };
     }
-  }, [contractsReady, isConnected, contracts, provider]);
-
+  }
   // Fetch user data function
   const fetchUserData = useCallback(async () => {
     if (!contractsReady || !isConnected || !account) return;

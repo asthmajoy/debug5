@@ -3,13 +3,17 @@ import { BarChart, PieChart, LineChart, AreaChart } from 'lucide-react';
 import { ethers } from 'ethers';
 import { useWeb3 } from '../contexts/Web3Context';
 import { formatPercentage, formatNumber, formatBigNumber } from '../utils/formatters';
+import useGovernanceParams from '../hooks/useGovernanceParams';
 
 const AnalyticsTab = () => {
   const { contracts, contractsReady, account, provider } = useWeb3();
   const [selectedMetric, setSelectedMetric] = useState('proposal');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);  // Start with loading false
   const [error, setError] = useState(null);
   const [connectionDetails, setConnectionDetails] = useState(null);
+  
+  // Get governance parameters using the same hook as VoteTab
+  const govParams = useGovernanceParams();
   
   // Analytics state
   const [proposalAnalytics, setProposalAnalytics] = useState(null);
@@ -18,6 +22,15 @@ const AnalyticsTab = () => {
   const [timelockAnalytics, setTimelockAnalytics] = useState(null);
   const [healthScore, setHealthScore] = useState(null);
   const [delegationAnalytics, setDelegationAnalytics] = useState(null);
+  
+  // Threat level states to match VoteTab
+  const THREAT_LEVELS = {
+    LOW: 0,
+    MEDIUM: 1,
+    HIGH: 2,
+    CRITICAL: 3
+  };
+  const [threatLevelDelays, setThreatLevelDelays] = useState({});
 
   // Improved BigNumber to Number conversion
   const formatBigNumberToNumber = (bn) => {
@@ -743,7 +756,7 @@ const AnalyticsTab = () => {
     }
   }, [contracts, contractsReady, delegationAnalytics]);
 
-  // Load timelock analytics
+  // Load timelock analytics - Updated to match VoteTab approach
   const loadTimelockAnalytics = useCallback(async () => {
     if (!contractsReady || !contracts.timelock) {
       setError("Timelock contract not available");
@@ -752,71 +765,94 @@ const AnalyticsTab = () => {
     
     try {
       setLoading(true);
-      // Get timelock configuration
+      
+      // Fetch all timelock parameters
       const minDelay = await contracts.timelock.minDelay();
-      let maxDelay;
-      let gracePeriod;
-      let proposerThreshold = ethers.BigNumber.from(0);
+      let maxDelay = ethers.BigNumber.from(30 * 24 * 60 * 60); // Default value
+      let gracePeriod = ethers.BigNumber.from(14 * 24 * 60 * 60); // Default value
       let executorThreshold = ethers.BigNumber.from(0);
       
       try {
         maxDelay = await contracts.timelock.maxDelay();
       } catch (err) {
-        console.warn("Error getting max delay:", err.message);
-        maxDelay = ethers.BigNumber.from(30 * 24 * 60 * 60); // Default to 30 days
+        console.warn("Using default max delay:", err.message);
       }
       
       try {
         gracePeriod = await contracts.timelock.gracePeriod();
       } catch (err) {
-        console.warn("Error getting grace period:", err.message);
-        gracePeriod = ethers.BigNumber.from(14 * 24 * 60 * 60); // Default to 14 days
+        console.warn("Using default grace period:", err.message);
       }
       
-      // Get executor threshold - this is the correct method based on the contract
+      // Get minExecutorTokenThreshold - try with multiple approaches
       try {
-        console.log("Getting minExecutorTokenThreshold...");
         executorThreshold = await contracts.timelock.minExecutorTokenThreshold();
         console.log("Executor threshold:", executorThreshold.toString());
       } catch (err) {
-        console.warn("Error getting executor threshold directly:", err.message);
+        console.warn("Falling back to default executor threshold:", err.message);
+      }
+      
+      // Get threat level delays - match the approach in VoteTab
+      let lowThreatDelay = minDelay; // Use the value directly
+      let mediumThreatDelay = minDelay.mul(3);
+      let highThreatDelay = minDelay.mul(7);
+      let criticalThreatDelay = minDelay.mul(14);
+      
+      // Try to get actual values, but use defaults if needed
+      try {
+        const lowDelay = await contracts.timelock.getDelayForThreatLevel(THREAT_LEVELS.LOW);
+        if (!lowDelay.isZero()) lowThreatDelay = lowDelay;
         
-        // Try alternative method names
+        const mediumDelay = await contracts.timelock.getDelayForThreatLevel(THREAT_LEVELS.MEDIUM);
+        if (!mediumDelay.isZero()) mediumThreatDelay = mediumDelay;
+        
+        const highDelay = await contracts.timelock.getDelayForThreatLevel(THREAT_LEVELS.HIGH);
+        if (!highDelay.isZero()) highThreatDelay = highDelay;
+        
+        const criticalDelay = await contracts.timelock.getDelayForThreatLevel(THREAT_LEVELS.CRITICAL);
+        if (!criticalDelay.isZero()) criticalThreatDelay = criticalDelay;
+        
+        // Update threat level delays state for reuse
+        setThreatLevelDelays({
+          [THREAT_LEVELS.LOW]: lowThreatDelay.toNumber(),
+          [THREAT_LEVELS.MEDIUM]: mediumThreatDelay.toNumber(),
+          [THREAT_LEVELS.HIGH]: highThreatDelay.toNumber(),
+          [THREAT_LEVELS.CRITICAL]: criticalThreatDelay.toNumber()
+        });
+      } catch (err) {
+        console.warn("Using calculated threat level delays:", err.message);
+        
+        // Try direct property access as fallback
         try {
-          executorThreshold = await contracts.timelock.executorThreshold();
-        } catch (altErr) {
-          console.warn("Alternative method also failed:", altErr.message);
+          const directLowDelay = await contracts.timelock.lowThreatDelay();
+          if (!directLowDelay.isZero()) lowThreatDelay = directLowDelay;
+          
+          const directMediumDelay = await contracts.timelock.mediumThreatDelay();
+          if (!directMediumDelay.isZero()) mediumThreatDelay = directMediumDelay;
+          
+          const directHighDelay = await contracts.timelock.highThreatDelay();
+          if (!directHighDelay.isZero()) highThreatDelay = directHighDelay;
+          
+          const directCriticalDelay = await contracts.timelock.criticalThreatDelay();
+          if (!directCriticalDelay.isZero()) criticalThreatDelay = directCriticalDelay;
+          
+          setThreatLevelDelays({
+            [THREAT_LEVELS.LOW]: lowThreatDelay.toNumber(),
+            [THREAT_LEVELS.MEDIUM]: mediumThreatDelay.toNumber(),
+            [THREAT_LEVELS.HIGH]: highThreatDelay.toNumber(),
+            [THREAT_LEVELS.CRITICAL]: criticalThreatDelay.toNumber()
+          });
+        } catch (err2) {
+          console.warn("Using calculated threat level delays (fallback):", err2.message);
         }
       }
       
-      // Get threat level delays
-      let lowThreatDelay = ethers.BigNumber.from(0);
-      let mediumThreatDelay = ethers.BigNumber.from(0);
-      let highThreatDelay = ethers.BigNumber.from(0);
-      let criticalThreatDelay = ethers.BigNumber.from(0);
-      
-      try {
-        lowThreatDelay = await contracts.timelock.lowThreatDelay();
-        mediumThreatDelay = await contracts.timelock.mediumThreatDelay();
-        highThreatDelay = await contracts.timelock.highThreatDelay();
-        criticalThreatDelay = await contracts.timelock.criticalThreatDelay();
-      } catch (err) {
-        console.warn("Error getting threat level delays:", err.message);
-        // Fallback to minimum delay if specific delays are not available
-        lowThreatDelay = minDelay;
-        mediumThreatDelay = minDelay.mul(3);
-        highThreatDelay = minDelay.mul(7);
-        criticalThreatDelay = minDelay.mul(14);
-      }
-      
-      // Get pending transactions (approximation)
+      // Get pending transactions (use 0 if unavailable)
       let pendingCount = ethers.BigNumber.from(0);
       try {
         pendingCount = await contracts.timelock.getPendingTransactionCount();
       } catch (err) {
-        console.warn("Error getting pending transaction count:", err.message);
-        // Fallback to a default value
-        pendingCount = ethers.BigNumber.from(0);
+        console.warn("Using default pending transaction count:", err.message);
       }
       
       const timelockAnalyticsData = {
@@ -840,82 +876,98 @@ const AnalyticsTab = () => {
     } finally {
       setLoading(false);
     }
-  }, [contracts, contractsReady]);
+  }, [contracts, contractsReady, THREAT_LEVELS]);
 
-  // Calculate governance health score based on available metrics
+  // Calculate governance health score based on available metrics - simplified
   const calculateHealthScore = useCallback(() => {
     // Only calculate if we have all the necessary data
-    if (!proposalAnalytics || !voterAnalytics || !tokenAnalytics || !timelockAnalytics) return;
+    if (!proposalAnalytics || !voterAnalytics || !tokenAnalytics || !timelockAnalytics) {
+      console.log("Missing data for health score calculation");
+      return;
+    }
     
-    // Components of the health score:
-    // 1. Proposal Success Rate (20%)
-    // 2. Voter Participation (20%)
-    // 3. Delegation Rate (20%)
-    // 4. Proposal Activity (20%)
-    // 5. Security Balance (20%)
-    
-    // 1. Calculate proposal success score (0-20)
-    const successScore = Math.min(20, (proposalAnalytics.successRate / 100) * 20);
-    
-    // 2. Calculate voter participation score (0-20)
-    const participationScore = Math.min(20, (voterAnalytics.participationRate * 2) * 20);
-    
-    // 3. Calculate delegation score (0-20)
-    const delegationScore = Math.min(20, (tokenAnalytics.percentageDelegated / 100) * 20);
-    
-    // 4. Calculate proposal activity score (0-20)
-    // Based on number of proposals, max score at 20 proposals
-    const activityScore = Math.min(20, (proposalAnalytics.totalProposals / 20) * 20);
-    
-    // 5. Calculate security balance score (0-20)
-    // Based on timelock delays having a good balance
-    const securityScore = Math.min(20, ((
-      timelockAnalytics.lowThreatDelay > 0 ? 5 : 0) +
-      (timelockAnalytics.mediumThreatDelay > timelockAnalytics.lowThreatDelay ? 5 : 0) +
-      (timelockAnalytics.highThreatDelay > timelockAnalytics.mediumThreatDelay ? 5 : 0) +
-      (timelockAnalytics.criticalThreatDelay > timelockAnalytics.highThreatDelay ? 5 : 0)
-    ));
-    
-    // Overall score (0-100)
-    const overallScore = Math.round(
-      successScore + participationScore + delegationScore + activityScore + securityScore
-    );
-    
-    const healthScoreData = {
-      overall: overallScore,
-      components: [
-        Math.round(successScore),
-        Math.round(participationScore),
-        Math.round(delegationScore),
-        Math.round(activityScore),
-        Math.round(securityScore)
-      ]
-    };
-    
-    setHealthScore(healthScoreData);
-    console.log("Updated health score:", healthScoreData);
-    
+    try {
+      // Components of the health score:
+      // 1. Proposal Success Rate (20%)
+      // 2. Voter Participation (20%)
+      // 3. Delegation Rate (20%)
+      // 4. Proposal Activity (20%)
+      // 5. Security Balance (20%)
+      
+      // 1. Calculate proposal success score (0-20)
+      const successScore = Math.min(20, (proposalAnalytics.successRate / 100) * 20);
+      
+      // 2. Calculate voter participation score (0-20)
+      const participationScore = Math.min(20, (voterAnalytics.participationRate * 2) * 20);
+      
+      // 3. Calculate delegation score (0-20)
+      const delegationScore = Math.min(20, (tokenAnalytics.percentageDelegated / 100) * 20);
+      
+      // 4. Calculate proposal activity score (0-20)
+      // Based on number of proposals, max score at 20 proposals
+      const activityScore = Math.min(20, (proposalAnalytics.totalProposals / 20) * 20);
+      
+      // 5. Calculate security balance score (0-20)
+      // Based on timelock delays having a good balance
+      const securityScore = Math.min(20, ((
+        timelockAnalytics.lowThreatDelay > 0 ? 5 : 0) +
+        (timelockAnalytics.mediumThreatDelay > timelockAnalytics.lowThreatDelay ? 5 : 0) +
+        (timelockAnalytics.highThreatDelay > timelockAnalytics.mediumThreatDelay ? 5 : 0) +
+        (timelockAnalytics.criticalThreatDelay > timelockAnalytics.highThreatDelay ? 5 : 0)
+      ));
+      
+      // Overall score (0-100)
+      const overallScore = Math.round(
+        successScore + participationScore + delegationScore + activityScore + securityScore
+      );
+      
+      const healthScoreData = {
+        overall: overallScore,
+        components: [
+          Math.round(successScore),
+          Math.round(participationScore),
+          Math.round(delegationScore),
+          Math.round(activityScore),
+          Math.round(securityScore)
+        ]
+      };
+      
+      setHealthScore(healthScoreData);
+    } catch (error) {
+      console.error("Error calculating health score:", error);
+    }
   }, [proposalAnalytics, voterAnalytics, tokenAnalytics, timelockAnalytics]);
 
-  // Check contract connectivity when component mounts
+  // Check contract connectivity when component mounts - simplified to prevent loop
   useEffect(() => {
+    let mounted = true;
+    
     async function checkConnectivity() {
-      const details = await checkContractConnectivity();
-      setConnectionDetails(details);
-      console.log("Contract connectivity details:", details);
+      try {
+        if (mounted && contractsReady) {
+          const details = await checkContractConnectivity();
+          setConnectionDetails(details);
+        }
+      } catch (error) {
+        console.error("Error checking connectivity:", error);
+      }
     }
     
     checkConnectivity();
-  }, [checkContractConnectivity]);
+    
+    return () => {
+      mounted = false;
+    };
+  }, [contractsReady]); // Only depend on contractsReady
 
-  // Load data based on selected metric
+  // Load data based on selected metric - simplified to prevent loop
   useEffect(() => {
     if (!contractsReady) {
-      setLoading(false);
       setError("Contracts not ready. Please connect your wallet.");
       return;
     }
     
+    let isMounted = true;
     setLoading(true);
     setError(null);
     
@@ -924,54 +976,78 @@ const AnalyticsTab = () => {
         // Load data based on selected tab
         switch (selectedMetric) {
           case 'proposal':
-            await loadProposalAnalytics();
+            if (isMounted) await loadProposalAnalytics();
             break;
           case 'voter':
-            await loadVoterAnalytics();
+            if (isMounted) await loadVoterAnalytics();
             break;
           case 'token':
-            await loadTokenAnalytics();
+            if (isMounted) await loadTokenAnalytics();
             break;
           case 'timelock':
-            await loadTimelockAnalytics();
+            if (isMounted) await loadTimelockAnalytics();
             break;
           case 'health':
-            // Health score depends on all other metrics
-            if (!proposalAnalytics) await loadProposalAnalytics();
-            if (!voterAnalytics) await loadVoterAnalytics();
-            if (!tokenAnalytics) await loadTokenAnalytics();
-            if (!timelockAnalytics) await loadTimelockAnalytics();
-            calculateHealthScore();
+            if (isMounted) {
+              // Health score depends on all other metrics being loaded first
+              try {
+                await loadProposalAnalytics();
+                if (!isMounted) return;
+                await loadVoterAnalytics();
+                if (!isMounted) return;
+                await loadTokenAnalytics();
+                if (!isMounted) return;
+                await loadTimelockAnalytics();
+                if (!isMounted) return;
+                calculateHealthScore();
+              } catch (healthErr) {
+                console.error("Error calculating health score:", healthErr);
+              }
+            }
             break;
           case 'delegation':
-            await loadDelegationAnalytics();
+            if (isMounted) await loadDelegationAnalytics();
             break;
           default:
             break;
         }
       } catch (err) {
-        console.error(`Error loading ${selectedMetric} analytics:`, err);
-        setError(`Failed to load analytics: ${err.message}`);
+        if (isMounted) {
+          console.error(`Error loading ${selectedMetric} analytics:`, err);
+          setError(`Failed to load analytics: ${err.message}`);
+        }
       } finally {
-        setLoading(false);
+        if (isMounted) {
+          setLoading(false);
+        }
       }
     };
     
     loadData();
-  }, [
-    selectedMetric, 
-    contractsReady, 
-    loadProposalAnalytics, 
-    loadVoterAnalytics, 
-    loadTokenAnalytics, 
-    loadTimelockAnalytics,
-    loadDelegationAnalytics,
-    calculateHealthScore,
-    proposalAnalytics,
-    voterAnalytics,
-    tokenAnalytics,
-    timelockAnalytics
-  ]);
+    
+    // Cleanup function to prevent state updates after unmount
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedMetric, contractsReady]);
+
+  // Helper function to format time durations in a human-readable way
+  // Identical to the one used in VoteTab
+  const formatTimeDuration = (seconds) => {
+    if (!seconds || isNaN(seconds)) return "0 minutes";
+    
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    
+    if (days > 0) {
+      return `${days} day${days !== 1 ? 's' : ''} ${hours} hour${hours !== 1 ? 's' : ''}`;
+    } else if (hours > 0) {
+      return `${hours} hour${hours !== 1 ? 's' : ''} ${minutes} minute${minutes !== 1 ? 's' : ''}`;
+    } else {
+      return `${minutes} minute${minutes !== 1 ? 's' : ''}`;
+    }
+  };
 
   // Format seconds to a human-readable duration
   const formatDuration = (seconds) => {
@@ -1013,6 +1089,14 @@ const AnalyticsTab = () => {
         ></div>
       </div>
     );
+  };
+
+  // Get threat level name from value - same as VoteTab
+  const getThreatLevelName = (level) => {
+    const keys = Object.keys(THREAT_LEVELS);
+    const values = Object.values(THREAT_LEVELS);
+    const index = values.indexOf(level);
+    return keys[index];
   };
 
   // Render contract connectivity debug info
@@ -1244,8 +1328,7 @@ const AnalyticsTab = () => {
             <div className="font-bold text-right">{voterAnalytics.totalDelegators}</div>
             <div>Total Delegates:</div>
             <div className="font-bold text-right">{voterAnalytics.totalDelegates}</div>
-            <div>Voter Participation:</div>
-            <div className="font-bold text-right">{formatPercentage(voterAnalytics.participationRate)}</div>
+            
             <div>Active Voting Power:</div>
             <div className="font-bold text-right">{formatTokenAmount(voterAnalytics.activeDelegated)} JST</div>
           </div>
@@ -1340,8 +1423,8 @@ const AnalyticsTab = () => {
               <span>Holders / Delegates Ratio:</span>
               <span className="font-bold">
                 {tokenAnalytics.activeDelegates > 0 ? 
-                  (tokenAnalytics.activeHolders / tokenAnalytics.activeDelegates).toFixed(2) : 
-                  '0.00'}
+                  `${(tokenAnalytics.activeHolders / tokenAnalytics.activeDelegates).toFixed(2)}:1` : 
+                  '0:0'}
               </span>
             </div>
           </div>
@@ -1350,7 +1433,7 @@ const AnalyticsTab = () => {
     );
   };
 
-  // Render timelock analytics
+  // Render timelock analytics - Updated to include properly formatted executor threshold
   const renderTimelockAnalytics = () => {
     if (!timelockAnalytics) return <div>No timelock data available</div>;
     
@@ -1428,6 +1511,52 @@ const AnalyticsTab = () => {
     );
   };
   
+  // Render governance parameters section like in VoteTab
+  const renderGovernanceParams = () => {
+    return (
+      <div className="bg-white p-6 rounded-lg shadow mb-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-medium">Governance Parameters</h3>
+          {govParams.loading && <div className="text-sm text-gray-500">Loading...</div>}
+          {govParams.error && <div className="text-sm text-red-500">{govParams.error}</div>}
+        </div>
+        
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+          <div className="bg-indigo-50 p-3 rounded-lg">
+            <div className="text-sm text-indigo-700 font-medium">Quorum</div>
+            <div className="text-lg font-bold">{govParams.formattedQuorum || '0 JST'}</div>
+          </div>
+          <div className="bg-indigo-50 p-3 rounded-lg">
+            <div className="text-sm text-indigo-700 font-medium">Voting Duration</div>
+            <div className="text-lg font-bold">{govParams.formattedDuration || '0 days'}</div>
+          </div>
+          <div className="bg-indigo-50 p-3 rounded-lg">
+            <div className="text-sm text-indigo-700 font-medium">Proposal Threshold</div>
+            <div className="text-lg font-bold">{govParams.formattedThreshold || '0 JST'}</div>
+          </div>
+          <div className="bg-indigo-50 p-3 rounded-lg">
+            <div className="text-sm text-indigo-700 font-medium">Proposal Stake</div>
+            <div className="text-lg font-bold">{govParams.formattedStake || '0 JST'}</div>
+          </div>
+        </div>
+        
+        <div className="grid grid-cols-3 md:grid-cols-3 gap-3 mx-auto max-w-3xl">
+          <div className="p-3 rounded-lg border border-gray-200">
+            <div className="text-sm text-gray-700 font-medium">Defeated Refund</div>
+            <div className="text-lg">{govParams.defeatedRefundPercentage || '0'}%</div>
+          </div>
+          <div className="p-3 rounded-lg border border-gray-200">
+            <div className="text-sm text-gray-700 font-medium">Canceled Refund</div>
+            <div className="text-lg">{govParams.canceledRefundPercentage || '0'}%</div>
+          </div>
+          <div className="p-3 rounded-lg border border-gray-200">
+            <div className="text-sm text-gray-700 font-medium">Expired Refund</div>
+            <div className="text-lg">{govParams.expiredRefundPercentage || '0'}%</div>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   // Render health score
   const renderHealthScore = () => {
@@ -1545,7 +1674,6 @@ const AnalyticsTab = () => {
   };
 
   // Render delegation analytics
-  // This function specifically fixes the delegation analytics rendering
   const renderDelegationAnalytics = () => {
     if (!delegationAnalytics) return <div>No delegation data available</div>;
     
@@ -1669,7 +1797,11 @@ const AnalyticsTab = () => {
         </div>
       )}
       
-      {renderDebugInfo()}
+      {/* Add Governance Parameters section from VoteTab - only if we have data */}
+      {contractsReady && renderGovernanceParams()}
+      
+      {/* Hide debug info in production */}
+      {/* {renderDebugInfo()} */}
       {renderMetricButtons()}
       
       {loading ? (
@@ -1682,12 +1814,32 @@ const AnalyticsTab = () => {
         </div>
       ) : (
         <div>
-          {selectedMetric === 'proposal' && renderProposalAnalytics()}
-          {selectedMetric === 'voter' && renderVoterAnalytics()}
-          {selectedMetric === 'token' && renderTokenAnalytics()}
-          {selectedMetric === 'timelock' && renderTimelockAnalytics()}
-          {selectedMetric === 'health' && renderHealthScore()}
-          {selectedMetric === 'delegation' && renderDelegationAnalytics()}
+          {selectedMetric === 'proposal' && proposalAnalytics && renderProposalAnalytics()}
+          {selectedMetric === 'voter' && voterAnalytics && renderVoterAnalytics()}
+          {selectedMetric === 'token' && tokenAnalytics && renderTokenAnalytics()}
+          {selectedMetric === 'timelock' && timelockAnalytics && renderTimelockAnalytics()}
+          {selectedMetric === 'health' && healthScore && renderHealthScore()}
+          {selectedMetric === 'delegation' && delegationAnalytics && renderDelegationAnalytics()}
+          
+          {/* Show appropriate message when data is missing */}
+          {selectedMetric === 'proposal' && !proposalAnalytics && !loading && !error && (
+            <div className="text-center py-8">No proposal data available</div>
+          )}
+          {selectedMetric === 'voter' && !voterAnalytics && !loading && !error && (
+            <div className="text-center py-8">No voter data available</div>
+          )}
+          {selectedMetric === 'token' && !tokenAnalytics && !loading && !error && (
+            <div className="text-center py-8">No token data available</div>
+          )}
+          {selectedMetric === 'timelock' && !timelockAnalytics && !loading && !error && (
+            <div className="text-center py-8">No timelock data available</div>
+          )}
+          {selectedMetric === 'health' && !healthScore && !loading && !error && (
+            <div className="text-center py-8">No health score data available. Ensure all analytics tabs have been loaded.</div>
+          )}
+          {selectedMetric === 'delegation' && !delegationAnalytics && !loading && !error && (
+            <div className="text-center py-8">No delegation data available</div>
+          )}
         </div>
       )}
     </div>

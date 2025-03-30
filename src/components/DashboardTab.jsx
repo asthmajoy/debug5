@@ -264,6 +264,20 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
       setIsRefreshing(false);
     }
   };
+
+  // Calculate proposal success rate the same way as AnalyticsTab
+  const calculateProposalSuccessRate = () => {
+    const { stateBreakdown } = directStats;
+    const successfulProposals = (stateBreakdown.succeeded || 0) + 
+                               (stateBreakdown.queued || 0) + 
+                               (stateBreakdown.executed || 0);
+    const nonCanceledCount = directStats.totalProposalsCount - (stateBreakdown.canceled || 0);
+    return nonCanceledCount > 0 ? (successfulProposals / nonCanceledCount) : 0;
+  };
+  
+  // Get the success rate and format it
+  const proposalSuccessRate = calculateProposalSuccessRate();
+  const formattedSuccessRate = formatPercentage(proposalSuccessRate);
   
   return (
     <div>
@@ -358,10 +372,10 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
             <div>
               <div className="flex justify-between mb-1">
                 <p className="text-gray-500 text-sm">Proposal Success Rate</p>
-                <p className="text-sm font-medium">{stats.formattedSuccessRate || formatPercentage(stats.proposalSuccessRate)}</p>
+                <p className="text-sm font-medium">{formattedSuccessRate}</p>
               </div>
               <div className="w-full bg-gray-200 rounded-full h-2">
-                <div className="bg-indigo-500 h-2 rounded-full" style={{ width: `${Math.min(stats.proposalSuccessRate * 100, 100)}%` }}></div>
+                <div className="bg-indigo-500 h-2 rounded-full" style={{ width: `${Math.min(proposalSuccessRate * 100, 100)}%` }}></div>
               </div>
             </div>
           </div>

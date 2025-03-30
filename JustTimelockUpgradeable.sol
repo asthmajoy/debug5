@@ -400,31 +400,76 @@ contract JustTimelockUpgradeable is
      * @return The appropriate threat level
      */
     function getThreatLevel(address target, bytes memory data) public view returns (ThreatLevel) {
-        // First check if the target address has a specific threat level
-        ThreatLevel addressLevel = addressThreatLevels[target];
-        if (addressLevel != ThreatLevel.LOW) {
-            return addressLevel;
-        }
-        
-        // Then check if the function selector has a specific threat level
-        if (data.length >= 4) {
-            // Extract the function selector (first 4 bytes)
-            bytes4 selector;
-            assembly {
-                // Load the first 32 bytes of data, then mask to get only first 4 bytes
-                selector := and(mload(add(data, 32)), 0xFFFFFFFF00000000000000000000000000000000000000000000000000000000)
-            }
-            
-            ThreatLevel functionLevel = functionThreatLevels[selector];
-            if (functionLevel != ThreatLevel.LOW) {
-                return functionLevel;
-            }
-        }
-        
-        // Default to LOW if no specific level is set
-        return ThreatLevel.LOW;
+    // First check if the target address has a specific threat level
+    ThreatLevel addressLevel = addressThreatLevels[target];
+    if (addressLevel != ThreatLevel.LOW) {
+        return addressLevel;
     }
     
+    // Check if this is a governance proposal execution
+    if (data.length >= 4) {
+        bytes4 selector;
+        assembly {
+            selector := and(mload(add(data, 32)), 0xFFFFFFFF)
+        }
+        
+        // This is the selector for executeProposalLogic with added parameters
+        if (selector == bytes4(keccak256("executeProposalLogic(uint256,uint8,address)"))) {
+            // Extract the proposal type and target
+            uint8 proposalType;
+            address proposalTarget;
+            
+            // Skip selector (4 bytes) and uint256 proposalId (32 bytes)
+            // to get to proposalType at position 36
+            assembly {
+                proposalType := mload(add(data, 36))
+                proposalTarget := mload(add(data, 68)) // 36+32=68 (after proposalType)
+            }
+            
+            // For General proposals, check the target address threat level
+            if (proposalType == 0) { // General
+                ThreatLevel targetAddressLevel = addressThreatLevels[proposalTarget];
+                if (targetAddressLevel != ThreatLevel.LOW) {
+                    return targetAddressLevel;
+                }
+                // Default General proposals to MEDIUM if no specific level set
+                return ThreatLevel.MEDIUM;
+            }
+            
+            // Determine threat level based on proposal type
+            if (proposalType == 5 || // TokenMint
+                proposalType == 6 || // TokenBurn
+                proposalType == 3) { // GovernanceChange
+                return ThreatLevel.HIGH;
+            } else if (
+                proposalType == 4 || // ExternalERC20Transfer
+                proposalType == 2 || // TokenTransfer
+                proposalType == 1) { // Withdrawal
+                return ThreatLevel.MEDIUM;
+            }
+            
+            // Default to LOW for Signaling proposals
+            return ThreatLevel.LOW;
+        }
+    }
+    
+    // Then check if the function selector has a specific threat level
+    if (data.length >= 4) {
+        bytes4 selector;
+        assembly {
+            selector := and(mload(add(data, 32)), 0xFFFFFFFF)
+        }
+        
+        ThreatLevel functionLevel = functionThreatLevels[selector];
+        if (functionLevel != ThreatLevel.LOW) {
+            return functionLevel;
+        }
+    }
+    
+    // Default to LOW if no specific level is set
+    return ThreatLevel.LOW;
+
+}
     /**
      * @notice Gets the delay for a specific threat level
      * @param level The threat level
