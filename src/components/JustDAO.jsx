@@ -1,4 +1,3 @@
-// Fixed JustDAODashboard.jsx with proper analytics access control and Governance tab
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useWeb3 } from '../contexts/Web3Context';
@@ -8,6 +7,8 @@ import { formatAddress } from '../utils/formatters';
 import { formatTokenAmount } from '../utils/tokenFormatters';
 import { PROPOSAL_STATES } from '../utils/constants';
 import { ethers } from 'ethers';
+import { DarkModeProvider, useDarkMode } from '../contexts/DarkModeContext';
+import DarkModeToggle from './DarkModeToggle';
 
 // Import components
 import SecuritySettingsTab from './SecuritySettingsTab';
@@ -43,7 +44,10 @@ const safeStringToNumber = (value) => {
   return isNaN(numValue) ? 0 : numValue;
 };
 
-const JustDAODashboard = () => {
+// The main component that needs to be wrapped with DarkModeProvider
+const JustDAOContent = () => {
+  const { isDarkMode } = useDarkMode();
+  
   // State for active tab
   const [activeTab, setActiveTab] = useState('dashboard');
   
@@ -358,16 +362,16 @@ const JustDAODashboard = () => {
   };
 
   return (
-    <div className="flex flex-col min-h-screen bg-gray-50">
+    <div className={`flex flex-col min-h-screen ${isDarkMode ? 'dark bg-gray-900' : 'bg-gray-50'}`}>
       {/* Header */}
-      <header className="bg-white shadow">
+      <header className="bg-white dark:bg-gray-800 shadow dark:shadow-gray-700">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
           <div className="flex items-center">
-            <h1 className="text-3xl font-bold text-indigo-600">JustDAO</h1>
+            <h1 className="text-3xl font-bold text-indigo-600 dark:text-indigo-400">JustDAO</h1>
           </div>
           <div className="flex items-center gap-4">
             {isConnected ? (
-              <div className="text-sm text-gray-700">
+              <div className="text-sm text-gray-700 dark:text-gray-300">
                 <div>{formatAddress(account)}</div>
                 <div className="flex gap-2">
                   <span>{formatTokenBasedOnWidth(userData.balance)} JST</span>
@@ -376,12 +380,16 @@ const JustDAODashboard = () => {
                 </div>
               </div>
             ) : (
-              <div className="text-sm text-gray-700">Not connected</div>
+              <div className="text-sm text-gray-700 dark:text-gray-300">Not connected</div>
             )}
+            
+            {/* Dark mode toggle */}
+            <DarkModeToggle />
+            
             {isConnected ? (
               <div className="flex gap-2">
                 <button 
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md flex items-center"
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md flex items-center dark:bg-indigo-700 dark:hover:bg-indigo-600"
                   onClick={handleFullRefresh}
                   disabled={isRefreshing}
                 >
@@ -402,7 +410,7 @@ const JustDAODashboard = () => {
                   Refresh
                 </button>
                 <button 
-                  className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md"
+                  className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md dark:bg-red-700 dark:hover:bg-red-600"
                   onClick={disconnectWallet}
                 >
                   Disconnect
@@ -410,7 +418,7 @@ const JustDAODashboard = () => {
               </div>
             ) : (
               <button 
-                className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md"
+                className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md dark:bg-indigo-700 dark:hover:bg-indigo-600"
                 onClick={connectWallet}
               >
                 Connect Wallet
@@ -421,32 +429,32 @@ const JustDAODashboard = () => {
       </header>
 
       {/* Navigation Tabs */}
-      <div className="bg-white shadow-sm mb-6">
+      <div className="bg-white dark:bg-gray-800 shadow-sm mb-6 dark:shadow-gray-700">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <nav className="flex overflow-x-auto">
             <div 
-              className={`py-4 px-6 cursor-pointer border-b-2 ${activeTab === 'dashboard' ? 'border-indigo-500 text-indigo-600' : 'border-transparent hover:text-gray-700 hover:border-gray-300'}`}
+              className={`py-4 px-6 cursor-pointer border-b-2 ${activeTab === 'dashboard' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent hover:text-gray-700 hover:border-gray-300 dark:text-gray-300 dark:hover:text-gray-100 dark:hover:border-gray-600'}`}
               onClick={() => setActiveTab('dashboard')}
               data-tab="dashboard"
             >
               Dashboard
             </div>
             <div 
-              className={`py-4 px-6 cursor-pointer border-b-2 ${activeTab === 'proposals' ? 'border-indigo-500 text-indigo-600' : 'border-transparent hover:text-gray-700 hover:border-gray-300'}`}
+              className={`py-4 px-6 cursor-pointer border-b-2 ${activeTab === 'proposals' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent hover:text-gray-700 hover:border-gray-300 dark:text-gray-300 dark:hover:text-gray-100 dark:hover:border-gray-600'}`}
               onClick={() => setActiveTab('proposals')}
               data-tab="proposals"
             >
               Proposals
             </div>
             <div 
-              className={`py-4 px-6 cursor-pointer border-b-2 ${activeTab === 'vote' ? 'border-indigo-500 text-indigo-600' : 'border-transparent hover:text-gray-700 hover:border-gray-300'}`}
+              className={`py-4 px-6 cursor-pointer border-b-2 ${activeTab === 'vote' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent hover:text-gray-700 hover:border-gray-300 dark:text-gray-300 dark:hover:text-gray-100 dark:hover:border-gray-600'}`}
               onClick={() => setActiveTab('vote')}
               data-tab="vote"
             >
               Vote
             </div>
             <div 
-              className={`py-4 px-6 cursor-pointer border-b-2 ${activeTab === 'delegation' ? 'border-indigo-500 text-indigo-600' : 'border-transparent hover:text-gray-700 hover:border-gray-300'}`}
+              className={`py-4 px-6 cursor-pointer border-b-2 ${activeTab === 'delegation' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent hover:text-gray-700 hover:border-gray-300 dark:text-gray-300 dark:hover:text-gray-100 dark:hover:border-gray-600'}`}
               onClick={() => setActiveTab('delegation')}
               data-tab="delegation"
             >
@@ -456,7 +464,7 @@ const JustDAODashboard = () => {
             {/* Governance tab - only visible to users with GOVERNANCE_ROLE */}
             {(userRoles.isGovernance || hasRole(ROLES.GOVERNANCE_ROLE) || hasRole('governance')) && (
               <div 
-                className={`py-4 px-6 cursor-pointer border-b-2 ${activeTab === 'governance' ? 'border-indigo-500 text-indigo-600' : 'border-transparent hover:text-gray-700 hover:border-gray-300'}`}
+                className={`py-4 px-6 cursor-pointer border-b-2 ${activeTab === 'governance' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent hover:text-gray-700 hover:border-gray-300 dark:text-gray-300 dark:hover:text-gray-100 dark:hover:border-gray-600'}`}
                 onClick={() => setActiveTab('governance')}
                 data-tab="governance"
               >
@@ -510,7 +518,7 @@ const JustDAODashboard = () => {
               
               return hasAnalyticsRole() && (
                 <div 
-                  className={`py-4 px-6 cursor-pointer border-b-2 ${activeTab === 'analytics' ? 'border-indigo-500 text-indigo-600' : 'border-transparent hover:text-gray-700 hover:border-gray-300'}`}
+                  className={`py-4 px-6 cursor-pointer border-b-2 ${activeTab === 'analytics' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent hover:text-gray-700 hover:border-gray-300 dark:text-gray-300 dark:hover:text-gray-100 dark:hover:border-gray-600'}`}
                   onClick={() => setActiveTab('analytics')}
                   data-tab="analytics"
                 >
@@ -522,7 +530,7 @@ const JustDAODashboard = () => {
             {/* Security tab - only visible to admin or guardian roles */}
             {(userRoles.isAdmin || userRoles.isGuardian || hasRole(ROLES.ADMIN_ROLE) || hasRole(ROLES.GUARDIAN_ROLE) || hasRole('admin') || hasRole('guardian')) && (
               <div 
-                className={`py-4 px-6 cursor-pointer border-b-2 ${activeTab === 'security' ? 'border-indigo-500 text-indigo-600' : 'border-transparent hover:text-gray-700 hover:border-gray-300'}`}
+                className={`py-4 px-6 cursor-pointer border-b-2 ${activeTab === 'security' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent hover:text-gray-700 hover:border-gray-300 dark:text-gray-300 dark:hover:text-gray-100 dark:hover:border-gray-600'}`}
                 onClick={() => {
                   setActiveTab('security');
                   setSecuritySubtab('emergency');
@@ -684,15 +692,15 @@ const JustDAODashboard = () => {
         {activeTab === 'security' && (
           <div>
             <div className="mb-6">
-              <h2 className="text-xl font-semibold">Security & Administration</h2>
-              <p className="text-gray-500">Manage security settings and administrative functions</p>
+              <h2 className="text-xl font-semibold dark:text-white">Security & Administration</h2>
+              <p className="text-gray-500 dark:text-gray-400">Manage security settings and administrative functions</p>
             </div>
             
             {/* Security Subtabs */}
-            <div className="bg-white p-4 rounded-lg shadow mb-6">
+            <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow dark:shadow-gray-700 mb-6">
               <div className="flex flex-wrap gap-2">
                 <button
-                  className={`px-3 py-1 rounded-full text-sm ${securitySubtab === 'emergency' ? 'bg-indigo-100 text-indigo-800' : 'bg-gray-100 text-gray-800'}`}
+                  className={`px-3 py-1 rounded-full text-sm ${securitySubtab === 'emergency' ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200' : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'}`}
                   onClick={() => setSecuritySubtab('emergency')}
                 >
                   Emergency Controls
@@ -700,7 +708,7 @@ const JustDAODashboard = () => {
                 
                 {/* Pending Transactions tab - visible to both admin and guardian roles */}
                 <button
-                  className={`px-3 py-1 rounded-full text-sm ${securitySubtab === 'pending' ? 'bg-indigo-100 text-indigo-800' : 'bg-gray-100 text-gray-800'}`}
+                  className={`px-3 py-1 rounded-full text-sm ${securitySubtab === 'pending' ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200' : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'}`}
                   onClick={() => setSecuritySubtab('pending')}
                 >
                   Pending Transactions
@@ -710,14 +718,14 @@ const JustDAODashboard = () => {
                 {(userRoles.isAdmin || hasRole(ROLES.ADMIN_ROLE) || hasRole('admin')) && (
                   <>
                     <button
-                      className={`px-3 py-1 rounded-full text-sm ${securitySubtab === 'roles' ? 'bg-indigo-100 text-indigo-800' : 'bg-gray-100 text-gray-800'}`}
+                      className={`px-3 py-1 rounded-full text-sm ${securitySubtab === 'roles' ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200' : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'}`}
                       onClick={() => setSecuritySubtab('roles')}
                     >
                       Role Management
                     </button>
                     
                     <button
-                      className={`px-3 py-1 rounded-full text-sm ${securitySubtab === 'timelock' ? 'bg-indigo-100 text-indigo-800' : 'bg-gray-100 text-gray-800'}`}
+                      className={`px-3 py-1 rounded-full text-sm ${securitySubtab === 'timelock' ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200' : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'}`}
                       onClick={() => setSecuritySubtab('timelock')}
                     >
                       Timelock Settings
@@ -734,12 +742,21 @@ const JustDAODashboard = () => {
       </main>
 
       {/* Footer */}
-      <footer className="bg-white border-t border-gray-200 py-4">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center text-gray-500 text-sm">
+      <footer className="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 py-4">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center text-gray-500 dark:text-gray-400 text-sm">
           JustDAO &copy; {new Date().getFullYear()} - Powered by JustDAO Governance Framework
         </div>
       </footer>
     </div>
+  );
+};
+
+// Wrapping the main component with DarkModeProvider
+const JustDAODashboard = () => {
+  return (
+    <DarkModeProvider>
+      <JustDAOContent />
+    </DarkModeProvider>
   );
 };
 

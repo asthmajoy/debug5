@@ -482,8 +482,8 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
   return (
     <div>
       <div className="mb-6">
-        <h2 className="text-xl font-semibold">Emergency Controls</h2>
-        <p className="text-gray-500">Guardian and emergency management functions</p>
+      <h2 className="text-xl font-semibold dark:text-white">Emergency Controls</h2>
+      <p className="text-gray-500">Guardian and emergency management functions</p>
       </div>
       
       {errorMessage && (

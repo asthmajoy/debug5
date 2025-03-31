@@ -6,6 +6,67 @@ import { addressesEqual, diagnoseMismatchedAddresses } from '../utils/addressUti
 import Loader from './Loader';
 import { ChevronDown, ChevronUp, Copy, Check, AlertTriangle, Clock, Shield } from 'lucide-react';
 import TimelockInfoDisplay from './TimelockInfoDisplay';
+import ProposalRichTextEditor from './ProposalRichTextEditor';
+
+
+
+
+// Function to parse proposal descriptions and extract HTML content
+function parseProposalDescription(rawDescription) {
+  if (!rawDescription) {
+    return { title: '', description: '', descriptionHtml: null };
+  }
+  
+  // Check if the description contains HTML content
+  const htmlMarkerIndex = rawDescription.indexOf('|||HTML:');
+  
+  if (htmlMarkerIndex !== -1) {
+    // Extract HTML content
+    const htmlContent = rawDescription.substring(htmlMarkerIndex + 8);
+    
+    // Extract the plain text portion
+    const plainTextPortion = rawDescription.substring(0, htmlMarkerIndex).trim();
+    
+    // The title is typically the first line
+    const firstLineBreak = plainTextPortion.indexOf('\n');
+    const title = firstLineBreak !== -1 
+      ? plainTextPortion.substring(0, firstLineBreak).trim() 
+      : plainTextPortion.trim();
+    
+    // The description is everything after the first line, but before the HTML marker
+    const description = firstLineBreak !== -1 
+      ? plainTextPortion.substring(firstLineBreak).trim() 
+      : '';
+      
+    return { title, description, descriptionHtml: htmlContent };
+  }
+  
+  // If no HTML marker is found, handle it as plain text only
+  const lines = rawDescription.split('\n');
+  const title = lines[0] || '';
+  const description = lines.length > 1 ? lines.slice(1).join('\n').trim() : '';
+  
+  return { title, description, descriptionHtml: null };
+}
+
+// Function to safely truncate HTML content
+function truncateHtml(html, maxLength = 200) {
+  if (!html) return '';
+  
+  // Create a temporary div to parse the HTML
+  const tempDiv = document.createElement('div');
+  tempDiv.innerHTML = html;
+  
+  // Get the text content
+  const textContent = tempDiv.textContent || tempDiv.innerText || '';
+  
+  // If the text is already short enough, return the original HTML
+  if (textContent.length <= maxLength) {
+    return html;
+  }
+  
+  return textContent.substring(0, maxLength) + '...';
+}
 
 // Helper function to get human-readable proposal state label
 function getProposalStateLabel(state) {
@@ -92,6 +153,7 @@ const ProposalsTab = ({
   const [newProposal, setNewProposal] = useState({
     title: '',
     description: '',
+    descriptionHtml: '',
     type: PROPOSAL_TYPES.GENERAL,
     target: '',
     callData: '',
@@ -322,6 +384,21 @@ const ProposalsTab = ({
     setLoading(globalLoading || Object.values(pendingTxs).some(tx => tx.status === 'pending'));
   }, [globalLoading, pendingTxs]);
 
+  // Process proposals to extract HTML content
+  useEffect(() => {
+    if (proposals && proposals.length > 0) {
+      // Process each proposal to extract HTML content if available
+      proposals.forEach(proposal => {
+        if (proposal.description && !proposal.descriptionHtml) {
+          const parsed = parseProposalDescription(proposal.description);
+          if (parsed.descriptionHtml) {
+            proposal.descriptionHtml = parsed.descriptionHtml;
+          }
+        }
+      });
+    }
+  }, [proposals]);
+
   const toggleProposalDetails = (proposalId) => {
     if (expandedProposalId === proposalId) {
       setExpandedProposalId(null);
@@ -336,26 +413,26 @@ const ProposalsTab = ({
     setTimeout(() => setCopiedText(null), 2000);
   };
 
-  // Enhanced renderAddress function for better display
-  const renderAddress = (address, label) => {
-    return (
-      <div className="flex items-center mb-2">
-        <span className="font-medium mr-2">{label}:</span>
-        <span className="font-mono text-sm break-all">{address}</span>
-        <button 
-          onClick={() => copyToClipboard(address)} 
-          className="ml-2 text-gray-500 hover:text-indigo-600 focus:outline-none"
-          title="Copy to clipboard"
-          aria-label={`Copy ${label} address`}
-        >
-          {copiedText === address ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
-        </button>
-        {copiedText === address && (
-          <span className="ml-2 text-xs text-green-600">Copied!</span>
-        )}
-      </div>
-    );
-  };
+ // Enhanced renderAddress function for better display
+ const renderAddress = (address, label) => {
+  return (
+    <div className="flex items-center mb-2">
+      <span className="font-medium mr-2 dark:text-gray-300">{label}:</span>
+      <span className="font-mono text-sm break-all dark:text-gray-400">{address}</span>
+      <button 
+        onClick={() => copyToClipboard(address)} 
+        className="ml-2 text-gray-500 hover:text-indigo-600 dark:text-gray-400 dark:hover:text-indigo-400 focus:outline-none"
+        title="Copy to clipboard"
+        aria-label={`Copy ${label} address`}
+      >
+        {copiedText === address ? <Check className="w-4 h-4 text-green-500 dark:text-green-400" /> : <Copy className="w-4 h-4" />}
+      </button>
+      {copiedText === address && (
+        <span className="ml-2 text-xs text-green-600 dark:text-green-400">Copied!</span>
+      )}
+    </div>
+  );
+};
 
   // Update proposal status after successful queue operation
   const updateProposalQueuedStatus = async (proposalId) => {
@@ -450,6 +527,15 @@ const ProposalsTab = ({
     }
   };
 
+  // Handler for rich text editor changes
+  const handleDescriptionChange = (htmlContent, plainText) => {
+    setNewProposal(prev => ({
+      ...prev,
+      descriptionHtml: htmlContent,
+      description: plainText
+    }));
+  };
+
   const handleSubmitProposal = async (e) => {
     e.preventDefault();
     setSubmitting(true);
@@ -469,7 +555,14 @@ const ProposalsTab = ({
         console.log("Handling as signaling proposal");
         
         // Skip validation entirely for signaling proposals
-        const description = `${newProposal.title}\n\n${newProposal.description}`;
+        // Format the description with the HTML content
+        let description;
+        if (newProposal.descriptionHtml) {
+          description = `${newProposal.title}\n\n${newProposal.description}\n\n|||HTML:${newProposal.descriptionHtml}`;
+        } else {
+          description = `${newProposal.title}\n\n${newProposal.description}`;
+        }
+        
         console.log('Submitting signaling proposal:', { description });
         
         try {
@@ -499,6 +592,7 @@ const ProposalsTab = ({
           setNewProposal({
             title: '',
             description: '',
+            descriptionHtml: '',
             type: PROPOSAL_TYPES.GENERAL,
             target: '',
             callData: '',
@@ -531,8 +625,13 @@ const ProposalsTab = ({
         return;
       }
       
-      // For other proposal types
-      let description = `${newProposal.title}\n\n${newProposal.description}`;
+      // For other proposal types with HTML content
+      let description;
+      if (newProposal.descriptionHtml) {
+        description = `${newProposal.title}\n\n${newProposal.description}\n\n|||HTML:${newProposal.descriptionHtml}`;
+      } else {
+        description = `${newProposal.title}\n\n${newProposal.description}`;
+      }
       
       // Add parameter details to description for governance changes to ensure they can be parsed later
       if (parseInt(newProposal.type) === PROPOSAL_TYPES.GOVERNANCE_CHANGE) {
@@ -603,6 +702,7 @@ const ProposalsTab = ({
       setNewProposal({
         title: '',
         description: '',
+        descriptionHtml: '',
         type: PROPOSAL_TYPES.GENERAL,
         target: '',
         callData: '',
@@ -1456,12 +1556,15 @@ const ProposalsTab = ({
     );
   };
 
+  // Check if the current proposal type is a signaling proposal
+  const isSignalingProposal = parseInt(newProposal.type) === PROPOSAL_TYPES.SIGNALING;
+
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
         <div>
-          <h2 className="text-xl font-semibold">Proposals</h2>
-          <p className="text-gray-500">View, create, and manage proposals</p>
+        <h2 className="text-xl font-semibold dark:text-white">Governance Proposals</h2>
+        <p className="text-gray-500">View, create, and manage proposals</p>
         </div>
         <button 
           className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md"
@@ -1472,13 +1575,13 @@ const ProposalsTab = ({
       </div>
       
       {/* Filter options */}
-      <div className="bg-white p-4 rounded-lg shadow mb-6">
-        <div className="flex flex-wrap gap-2">
+      <div className="bg-white p-4 rounded-lg shadow mb-6 dark:bg-gray-800 dark:shadow-gray-700/20">
+
+<div className="flex flex-wrap gap-2">
           {['all', 'active', 'pending', 'succeeded', 'executed', 'defeated', 'canceled', 'expired'].map(type => (
             <button
               key={type}
-              className={`px-3 py-1 rounded-full text-sm ${proposalType === type ? 'bg-indigo-100 text-indigo-800' : 'bg-gray-100 text-gray-800'}`}
-              onClick={() => setProposalType(type)}
+              className={`px-3 py-1 rounded-full text-sm ${proposalType === type ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/50 dark:text-indigo-200' : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'}`}              onClick={() => setProposalType(type)}
             >
               {type.charAt(0).toUpperCase() + type.slice(1)}
             </button>
@@ -1497,12 +1600,12 @@ const ProposalsTab = ({
           </div>
         ) : filteredProposals.length > 0 ? (
           filteredProposals.map((proposal, idx) => (
-            <div key={idx} className="bg-white p-6 rounded-lg shadow">
+           <div key={idx} className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow dark:shadow-gray-700/20">
               <div className="flex justify-between items-start mb-4">
-                <div>
-                  <h3 className="text-lg font-medium">{proposal.title}</h3>
-                  <p className="text-sm text-gray-500">Proposal #{proposal.id}</p>
-                </div>
+              <div>
+              <h3 className="text-lg font-medium dark:text-white">{proposal.title}</h3>
+              <p className="font-medium dark:text-white">Proposal #{proposal.id}</p>
+            </div>
                 <div className="flex items-center">
                   <span className={`text-xs px-2 py-1 rounded-full ${getStatusColor(proposal.stateLabel.toLowerCase())}`}>
                     {proposal.stateLabel}
@@ -1512,8 +1615,8 @@ const ProposalsTab = ({
               
               <div className="grid grid-cols-3 gap-4 mb-4 text-sm text-gray-500">
                 <div>
-                  <p className="font-medium">Type</p>
-                  <p>{(() => {
+                <p className="font-medium dark:text-white">Type</p>
+                <p className="font-small dark:text-white">{(() => {
                     // Robust type detection for signaling proposals
                     if (proposal.typeLabel && proposal.typeLabel !== "Unknown") {
                       return proposal.typeLabel;
@@ -1535,64 +1638,76 @@ const ProposalsTab = ({
                   })()}</p>
                 </div>
                 <div>
-                  <p className="font-medium">Created</p>
-                  <p>{formatRelativeTime(proposal.createdAt)}</p>
+                <p className="font-medium dark:text-white">Created</p>
+                <p className="font-small dark:text-white">{formatRelativeTime(proposal.createdAt)}</p>
                 </div>
                 <div>
-                  <p className="font-medium">Proposer</p>
-                  <p>{formatAddress(proposal.proposer)}</p>
+                <p className="font-medium dark:text-white">Proposer</p>
+                <p className="font-small dark:text-white">{formatAddress(proposal.proposer)}</p>
                 </div>
               </div>
               
               <div className="border-t pt-4 mb-4">
                 {expandedProposalId === proposal.id ? (
                   <div>
-                    <p className="text-sm text-gray-700 mb-4">{proposal.description}</p>
+                    {/* If there's HTML content available, display that, otherwise display plain text */}
+                    {proposal.descriptionHtml ? (
+                     <div 
+                     className="prose dark:prose-invert max-w-none text-sm text-gray-700 dark:text-gray-300 mb-4"
+                     dangerouslySetInnerHTML={{ __html: proposal.descriptionHtml }}
+                   />
+                    ) : (
+                      <p className="text-sm text-gray-700 dark:text-gray-300 mb-4 whitespace-pre-wrap">{proposal.description}</p>
+                    )}
                     <div className="mt-4 border-t pt-4">
-                      <h4 className="font-medium mb-3">Proposal Details</h4>
-                      {/* Display proposer address in full with copy button */}
+                    <h2 className="text-xl font-semibold dark:text-white">Proposal Details</h2>
+                    {/* Display proposer address in full with copy button */}
                       {renderAddress(proposal.proposer, "Proposer")}
                       
                       {/* Display proposal-specific details */}
                       {proposal.type === PROPOSAL_TYPES.GENERAL && (
-                        <div className="mt-2 bg-gray-50 p-4 rounded">
-                          {renderAddress(proposal.target, "Target")}
-                          <div className="mt-2">
-                            <p className="font-medium mb-1">Call Data:</p>
-                            <pre className="bg-gray-100 p-2 mt-1 rounded overflow-x-auto text-xs">{proposal.callData}</pre>
-                          </div>
+                        <div className="mt-2 bg-gray-50 dark:bg-gray-700/50 p-4 rounded">
+                        {renderAddress(proposal.target, "Target")}
+                        <div className="mt-2">
+                          <p className="font-medium mb-1 dark:text-gray-300">Call Data:</p>
+                          <pre className="bg-gray-100 dark:bg-gray-800 p-2 mt-1 rounded overflow-x-auto text-xs dark:text-gray-300">{proposal.callData}</pre>
                         </div>
+                      </div>
                       )}
                       
                       {(proposal.type === PROPOSAL_TYPES.WITHDRAWAL || 
                         proposal.type === PROPOSAL_TYPES.TOKEN_TRANSFER || 
                         proposal.type === PROPOSAL_TYPES.TOKEN_MINT || 
                         proposal.type === PROPOSAL_TYPES.TOKEN_BURN) && (
-                        <div className="mt-2 bg-gray-50 p-4 rounded">
+                          <div className="mt-2 bg-gray-50 dark:bg-gray-700/50 p-4 rounded">
                           {renderAddress(proposal.recipient, "Recipient")}
                           <p className="mt-2 flex items-center">
-                            <span className="font-medium mr-2">Amount:</span> 
-                            {typeof proposal.amount === 'string' ? proposal.amount : formatBigNumber(proposal.amount)} 
-                            {proposal.type === PROPOSAL_TYPES.WITHDRAWAL ? ' ETH' : ' JUST'}
+                            <span className="font-medium mr-2 dark:text-gray-300">Amount:</span> 
+                            <span className="dark:text-gray-300">
+                              {typeof proposal.amount === 'string' ? proposal.amount : formatBigNumber(proposal.amount)} 
+                              {proposal.type === PROPOSAL_TYPES.WITHDRAWAL ? ' ETH' : ' JUST'}
+                            </span>
                           </p>
                         </div>
                       )}
                       
                       {proposal.type === PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER && (
-                        <div className="mt-2 bg-gray-50 p-4 rounded">
-                          {renderAddress(proposal.recipient, "Recipient")}
-                          {renderAddress(proposal.token, "Token")}
-                          <p className="mt-2 flex items-center">
-                            <span className="font-medium mr-2">Amount:</span> 
+                        <div className="mt-2 bg-gray-50 dark:bg-gray-700/50 p-4 rounded">
+                        {renderAddress(proposal.recipient, "Recipient")}
+                        {renderAddress(proposal.token, "Token")}
+                        <p className="mt-2 flex items-center">
+                          <span className="font-medium mr-2 dark:text-gray-300">Amount:</span> 
+                          <span className="dark:text-gray-300">
                             {typeof proposal.amount === 'string' ? proposal.amount : formatBigNumber(proposal.amount)}
-                          </p>
-                        </div>
+                          </span>
+                        </p>
+                      </div>
                       )}
                       
                       {proposal.type === PROPOSAL_TYPES.GOVERNANCE_CHANGE && (
-                        <div className="mt-2 bg-gray-50 p-4 rounded">
-                          {/* Display governance parameters with debug info */}
-                          <div>
+                        <div className="mt-2 bg-gray-50 dark:bg-gray-700/50 p-4 rounded">
+                        {/* Display governance parameters with debug info */}
+                        <div className="dark:text-gray-300">
                             {/* First try to extract parameters from description if standard fields are missing */}
                             {proposal.type === PROPOSAL_TYPES.GOVERNANCE_CHANGE && (
                               <div>
@@ -1618,96 +1733,103 @@ const ProposalsTab = ({
                                     if (thresholdMatch || quorumMatch || durationMatch || stakeMatch) {
                                       return (
                                         <>
-                                          {thresholdMatch && (
-                                            <p className="mb-2 flex items-center">
-                                              <span className="font-medium mr-2">New Proposal Threshold:</span> 
-                                              {thresholdMatch[1]} JUST
-                                            </p>
-                                          )}
-                                          
-                                          {quorumMatch && (
-                                            <p className="mb-2 flex items-center">
-                                              <span className="font-medium mr-2">New Quorum:</span> 
-                                              {quorumMatch[1]} JUST
-                                            </p>
-                                          )}
-                                          
-                                          {durationMatch && (
-                                            <p className="mb-2 flex items-center">
-                                              <span className="font-medium mr-2">New Voting Duration:</span> 
-                                              {durationMatch[1]} seconds
-                                            </p>
-                                          )}
-                                          
-                                          {stakeMatch && (
-                                            <p className="mb-2 flex items-center">
-                                              <span className="font-medium mr-2">New Proposal Stake:</span> 
-                                              {stakeMatch[1]} JUST
-                                            </p>
-                                          )}
-                                          
-                                          {!(thresholdMatch || quorumMatch || durationMatch || stakeMatch) && (
-                                            <p className="text-gray-500 italic">No parameter changes found in description</p>
-                                          )}
-                                        </>
-                                      );
-                                    }
-                                  }
-                                  
-                                  // If has standard params or couldn't extract from description
-                                  return (
-                                    <>
-                                      <p className="mb-2 flex items-center">
-                                        <span className="font-medium mr-2">New Proposal Threshold:</span> 
-                                        {proposal.newThreshold && !ethers.BigNumber.from("0").eq(
-                                          ethers.BigNumber.from(proposal.newThreshold || "0")
-                                        )
-                                          ? formatBigNumber(proposal.newThreshold)
-                                          : "No Change"}
-                                      </p>
-                                      <p className="mb-2 flex items-center">
-                                        <span className="font-medium mr-2">New Quorum:</span> 
-                                        {proposal.newQuorum && !ethers.BigNumber.from("0").eq(
-                                          ethers.BigNumber.from(proposal.newQuorum || "0")
-                                        )
-                                          ? formatBigNumber(proposal.newQuorum)
-                                          : "No Change"}
-                                      </p>
-                                      <p className="mb-2 flex items-center">
-                                        <span className="font-medium mr-2">New Voting Duration:</span> 
-                                        {proposal.newVotingDuration && parseInt(proposal.newVotingDuration || "0") > 0
-                                          ? formatTime(proposal.newVotingDuration)
-                                          : "No Change"}
-                                      </p>
-                                      <p className="mb-2 flex items-center">
-                                        <span className="font-medium mr-2">New Proposal Stake:</span> 
-                                        {proposal.newProposalStake && !ethers.BigNumber.from("0").eq(
-                                          ethers.BigNumber.from(proposal.newProposalStake || "0")
-                                        )
-                                          ? formatBigNumber(proposal.newProposalStake)
-                                          : proposal.newTimelockDelay && !ethers.BigNumber.from("0").eq(
-                                              ethers.BigNumber.from(proposal.newTimelockDelay || "0")
-                                            )
-                                            ? formatBigNumber(proposal.newTimelockDelay) 
-                                            : "No Change"}
-                                      </p>
-                                    </>
-                                  );
-                                })()}
-                              </div>
-                            )}
-                          </div>
-                          
-                        </div>
+                  {thresholdMatch && (
+                    <p className="mb-2 flex items-center">
+                      <span className="font-medium mr-2 dark:text-gray-300">New Proposal Threshold:</span> 
+                      {thresholdMatch[1]} JUST
+                    </p>
+                  )}
+                  
+                  {quorumMatch && (
+                    <p className="mb-2 flex items-center">
+                      <span className="font-medium mr-2 dark:text-gray-300">New Quorum:</span> 
+                      {quorumMatch[1]} JUST
+                    </p>
+                  )}
+                  
+                  {durationMatch && (
+                    <p className="mb-2 flex items-center">
+                      <span className="font-medium mr-2 dark:text-gray-300">New Voting Duration:</span> 
+                      {durationMatch[1]} seconds
+                    </p>
+                  )}
+                  
+                  {stakeMatch && (
+                    <p className="mb-2 flex items-center">
+                      <span className="font-medium mr-2 dark:text-gray-300">New Proposal Stake:</span> 
+                      {stakeMatch[1]} JUST
+                    </p>
+                  )}
+                  
+                  {!(thresholdMatch || quorumMatch || durationMatch || stakeMatch) && (
+                    <p className="text-gray-500 dark:text-gray-400 italic">No parameter changes found in description</p>
+                  )}
+                </>
+              );
+            }
+          }
+          
+          // If has standard params or couldn't extract from description
+          return (
+            <>
+              <p className="mb-2 flex items-center">
+                <span className="font-medium mr-2 dark:text-gray-300">New Proposal Threshold:</span> 
+                <span className="dark:text-gray-300">
+                  {proposal.newThreshold && !ethers.BigNumber.from("0").eq(
+                    ethers.BigNumber.from(proposal.newThreshold || "0")
+                  )
+                    ? formatBigNumber(proposal.newThreshold)
+                    : "No Change"}
+                </span>
+              </p>
+              <p className="mb-2 flex items-center">
+                <span className="font-medium mr-2 dark:text-gray-300">New Quorum:</span> 
+                <span className="dark:text-gray-300">
+                  {proposal.newQuorum && !ethers.BigNumber.from("0").eq(
+                    ethers.BigNumber.from(proposal.newQuorum || "0")
+                  )
+                    ? formatBigNumber(proposal.newQuorum)
+                    : "No Change"}
+                </span>
+              </p>
+              <p className="mb-2 flex items-center">
+                <span className="font-medium mr-2 dark:text-gray-300">New Voting Duration:</span> 
+                <span className="dark:text-gray-300">
+                  {proposal.newVotingDuration && parseInt(proposal.newVotingDuration || "0") > 0
+                    ? formatTime(proposal.newVotingDuration)
+                    : "No Change"}
+                </span>
+              </p>
+              <p className="mb-2 flex items-center">
+                <span className="font-medium mr-2 dark:text-gray-300">New Proposal Stake:</span> 
+                <span className="dark:text-gray-300">
+                  {proposal.newProposalStake && !ethers.BigNumber.from("0").eq(
+                    ethers.BigNumber.from(proposal.newProposalStake || "0")
+                  )
+                    ? formatBigNumber(proposal.newProposalStake)
+                    : proposal.newTimelockDelay && !ethers.BigNumber.from("0").eq(
+                        ethers.BigNumber.from(proposal.newTimelockDelay || "0")
+                      )
+                      ? formatBigNumber(proposal.newTimelockDelay) 
+                      : "No Change"}
+                </span>
+              </p>
+            </>
+          );
+        })()}
+      </div>
+    )}
+  </div>
+</div>
                       )}
                       
                       {/* Display Signaling proposal details */}
                       {proposal.type === PROPOSAL_TYPES.SIGNALING && (
-                        <div className="mt-2 bg-gray-50 p-4 rounded">
-                          <p className="text-sm text-gray-600 italic">
-                            This is a signaling proposal. It serves as a community discussion or vote without executing any code.
-                          </p>
-                        </div>
+                        <div className="mt-2 bg-gray-50 dark:bg-gray-700/50 p-4 rounded">
+                        <p className="text-sm text-gray-600 dark:text-gray-400 italic">
+                          This is a signaling proposal. It serves as a community discussion or vote without executing any code.
+                        </p>
+                      </div>
                       )}
                       
                       {/* Add TimelockInfoDisplay component for queued proposals */}
@@ -1724,21 +1846,29 @@ const ProposalsTab = ({
                     </div>
                   </div>
                 ) : (
-                  <p className="text-sm text-gray-700 mb-2">{proposal.description.substring(0, 200)}...</p>
+                  // For collapsed view, display truncated content - prefer HTML if available
+                  proposal.descriptionHtml ? (
+                    <div 
+  className="text-sm text-gray-700 dark:text-gray-300 mb-2"
+  dangerouslySetInnerHTML={{ __html: truncateHtml(proposal.descriptionHtml, 200) }}
+/>
+                  ) : (
+<p className="text-sm text-gray-700 dark:text-gray-300 mb-2 whitespace-pre-wrap">{proposal.description}</p>
+                  )
                 )}
               </div>
               
               <div className="flex flex-wrap gap-2">
-                <button 
-                  className="text-indigo-600 border border-indigo-600 px-3 py-1 rounded-md text-sm hover:bg-indigo-50 flex items-center"
-                  onClick={() => toggleProposalDetails(proposal.id)}
-                >
-                  {expandedProposalId === proposal.id ? (
-                    <>View Less <ChevronUp className="w-4 h-4 ml-1" /></>
-                  ) : (
-                    <>View Details <ChevronDown className="w-4 h-4 ml-1" /></>
-                  )}
-                </button>
+              <button 
+  className="text-indigo-600 dark:text-indigo-300 border border-indigo-600 dark:border-indigo-300 px-3 py-1 rounded-md text-sm hover:bg-indigo-50 dark:hover:bg-indigo-900/40 flex items-center transition-colors"
+  onClick={() => toggleProposalDetails(proposal.id)}
+>
+  {expandedProposalId === proposal.id ? (
+    <>View Less <ChevronUp className="w-4 h-4 ml-1" /></>
+  ) : (
+    <>View Details <ChevronDown className="w-4 h-4 ml-1" /></>
+  )}
+</button>
                 
                 {proposal.state === PROPOSAL_STATES.ACTIVE && 
                  addressesEqual(account, proposal.proposer) && 
@@ -1762,41 +1892,41 @@ const ProposalsTab = ({
                     Queue
                   </button>
                 )}
-                
                 {/* Show Execute button only for QUEUED proposals that haven't been executed yet */}
-                {proposal.state === PROPOSAL_STATES.QUEUED && !proposal.isExecuted && (
-                  <button 
-                    className="bg-purple-500 hover:bg-purple-600 text-white px-3 py-1 rounded-md text-sm"
-                    onClick={() => handleProposalAction(executeProposal, proposal.id, 'executing')}
-                    disabled={loading}
-                  >
-                    Execute
-                  </button>
-                )}
-                
-                {/* Display claim stake button for defeated/canceled/expired proposals */}
-                {canClaimRefund(proposal) && (
-                  <button 
-                    className="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded-md text-sm flex items-center"
-                    onClick={() => handleProposalAction(claimRefund, proposal.id, 'claiming refund for')}
-                    disabled={loading}
-                  >
-                    <svg 
-                      xmlns="http://www.w3.org/2000/svg" 
-                      className="h-4 w-4 mr-1" 
-                      fill="none" 
-                      viewBox="0 0 24 24" 
-                      stroke="currentColor"
-                    >
-                      <path 
-                        strokeLinecap="round" 
-                        strokeLinejoin="round" 
-                        strokeWidth={2} 
-                        d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" 
-                      />
-                    </svg>
-                    Claim Stake Refund
-                  </button>
+{proposal.state === PROPOSAL_STATES.QUEUED && !proposal.isExecuted && (
+  <button 
+    className="bg-purple-500 dark:bg-purple-600 hover:bg-purple-600 dark:hover:bg-purple-500 text-white px-3 py-1 rounded-md text-sm shadow-sm hover:shadow-md dark:shadow-purple-700/30 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-purple-500 dark:focus:ring-purple-400 focus:ring-opacity-50 disabled:opacity-60 disabled:cursor-not-allowed"
+    onClick={() => handleProposalAction(executeProposal, proposal.id, 'executing')}
+    disabled={loading}
+  >
+    Execute
+  </button>
+)}
+
+{/* Display claim stake button for defeated/canceled/expired proposals */}
+{canClaimRefund(proposal) && (
+  <button 
+    className="bg-green-500 dark:bg-green-600 hover:bg-green-600 dark:hover:bg-green-500 text-white px-3 py-1 rounded-md text-sm shadow-sm hover:shadow-md dark:shadow-green-700/30 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-green-500 dark:focus:ring-green-400 focus:ring-opacity-50 disabled:opacity-60 disabled:cursor-not-allowed flex items-center"
+    onClick={() => handleProposalAction(claimRefund, proposal.id, 'claiming refund for')}
+    disabled={loading}
+  >
+    <svg 
+      xmlns="http://www.w3.org/2000/svg" 
+      className="h-4 w-4 mr-1" 
+      fill="none" 
+      viewBox="0 0 24 24" 
+      stroke="currentColor"
+    >
+      <path 
+        strokeLinecap="round" 
+        strokeLinejoin="round" 
+        strokeWidth={2} 
+        d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" 
+      />
+    </svg>
+    Claim Stake Refund
+  </button>
+
                 )}
               </div>
             </div>
@@ -1808,14 +1938,14 @@ const ProposalsTab = ({
         )}
       </div>
      
-      {/* Create Proposal Modal */}
+      {/* Create Proposal Modal with Rich Text Editor */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg max-w-2xl w-full p-6 max-h-screen overflow-y-auto">
-            <h2 className="text-xl font-semibold mb-4">Create New Proposal</h2>
-            
+<div className="bg-white rounded-lg max-w-2xl w-full p-6 max-h-screen overflow-y-auto dark:bg-gray-800">
+
+<h2 className="text-xl font-semibold mb-4 dark:text-white">Create New Proposal</h2>            
             {transactionError && (
-              <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+              <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4 dark:bg-red-900/20 dark:border-red-700 dark:text-red-400">
                 <p className="font-bold">Error</p>
                 <p>{transactionError}</p>
               </div>
@@ -1823,10 +1953,11 @@ const ProposalsTab = ({
             
             <form onSubmit={handleSubmitProposal} className="space-y-4" noValidate>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Proposal Title</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Proposal Title</label>
                 <input 
                   type="text" 
-                  className="w-full rounded-md border border-gray-300 p-2" 
+className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
+
                   placeholder="Enter proposal title" 
                   value={newProposal.title}
                   onChange={(e) => setNewProposal({...newProposal, title: e.target.value})}
@@ -1834,10 +1965,11 @@ const ProposalsTab = ({
               </div>
               
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Proposal Type</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Proposal Type</label>
                 <select 
-                  className="w-full rounded-md border border-gray-300 p-2"
-                  value={newProposal.type}
+className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
+
+value={newProposal.type}
                   onChange={(e) => {
                     console.log("Type changed to:", e.target.value);
                     setNewProposal({...newProposal, type: e.target.value})
@@ -1855,42 +1987,46 @@ const ProposalsTab = ({
               </div>
               
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-                <textarea 
-                  className="w-full rounded-md border border-gray-300 p-2" 
-                  rows="4" 
-                  placeholder="Describe your proposal"
-                  value={newProposal.description}
-                  onChange={(e) => setNewProposal({...newProposal, description: e.target.value})}
-                ></textarea>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
+                {/* Replace textarea with the rich text editor component */}
+                <ProposalRichTextEditor
+                initialValue={newProposal.descriptionHtml || ''}
+                onChange={handleDescriptionChange}
+                height="250px"
+                placeholder="Describe your proposal in detail..."
+                isSignalingProposal={isSignalingProposal}
+                darkMode={true} // Add this prop to enable dark mode styling
+              />
               </div>
               
               {/* Fields for GENERAL proposal type */}
               {parseInt(newProposal.type) === PROPOSAL_TYPES.GENERAL && (
                 <>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Target Address</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Target Address</label>
                     <input 
                       type="text" 
-                      className="w-full rounded-md border border-gray-300 p-2" 
+                      className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
+
                       placeholder="0x..." 
                       value={newProposal.target}
                       onChange={(e) => setNewProposal({...newProposal, target: e.target.value})}
                       required
                     />
-                    <p className="text-xs text-gray-500 mt-1">The contract address that will be called</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The contract address that will be called</p>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Call Data</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Call Data</label>
                     <input 
                       type="text" 
-                      className="w-full rounded-md border border-gray-300 p-2" 
+                      className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
+
                       placeholder="0x..." 
                       value={newProposal.callData}
                       onChange={(e) => setNewProposal({...newProposal, callData: e.target.value})}
                       required
                     />
-                    <p className="text-xs text-gray-500 mt-1">The encoded function call data</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The encoded function call data</p>
                   </div>
                 </>
               )}
@@ -1899,29 +2035,31 @@ const ProposalsTab = ({
               {parseInt(newProposal.type) === PROPOSAL_TYPES.WITHDRAWAL && (
                 <>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Recipient Address</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Recipient Address</label>
                     <input 
                       type="text" 
-                      className="w-full rounded-md border border-gray-300 p-2" 
+                      className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
+
                       placeholder="0x..." 
                       value={newProposal.recipient}
                       onChange={(e) => setNewProposal({...newProposal, recipient: e.target.value})}
                       required
                     />
-                    <p className="text-xs text-gray-500 mt-1">The address that will receive the ETH</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The address that will receive the ETH</p>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Amount (ETH)</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Amount (ETH)</label>
                     <input 
                       type="number" 
                       step="0.000000000000000001"
-                      className="w-full rounded-md border border-gray-300 p-2" 
+                      className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
+
                       placeholder="Amount" 
                       value={newProposal.amount}
                       onChange={(e) => setNewProposal({...newProposal, amount: e.target.value})}
                       required
                     />
-                    <p className="text-xs text-gray-500 mt-1">Amount of ETH to withdraw</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Amount of ETH to withdraw</p>
                   </div>
                 </>
               )}
@@ -1930,29 +2068,31 @@ const ProposalsTab = ({
               {parseInt(newProposal.type) === PROPOSAL_TYPES.TOKEN_TRANSFER && (
                 <>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Recipient Address</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Recipient Address</label>
                     <input 
                       type="text" 
-                      className="w-full rounded-md border border-gray-300 p-2" 
+                      className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
+
                       placeholder="0x..." 
                       value={newProposal.recipient}
                       onChange={(e) => setNewProposal({...newProposal, recipient: e.target.value})}
                       required
                     />
-                    <p className="text-xs text-gray-500 mt-1">The address that will receive the JUST tokens</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The address that will receive the JUST tokens</p>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Amount (JUST)</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Amount (JUST)</label>
                     <input 
                       type="number"
                       step="0.000000000000000001"
-                      className="w-full rounded-md border border-gray-300 p-2" 
+                      className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
+
                       placeholder="Amount" 
                       value={newProposal.amount}
                       onChange={(e) => setNewProposal({...newProposal, amount: e.target.value})}
                       required
                     />
-                    <p className="text-xs text-gray-500 mt-1">Amount of JUST tokens to transfer</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Amount of JUST tokens to transfer</p>
                   </div>
                 </>
               )}
@@ -1961,29 +2101,31 @@ const ProposalsTab = ({
               {parseInt(newProposal.type) === PROPOSAL_TYPES.TOKEN_MINT && (
                 <>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Recipient Address</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Recipient Address</label>
                     <input 
                       type="text" 
-                      className="w-full rounded-md border border-gray-300 p-2" 
+                      className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
+
                       placeholder="0x..." 
                       value={newProposal.recipient}
                       onChange={(e) => setNewProposal({...newProposal, recipient: e.target.value})}
                       required
                     />
-                    <p className="text-xs text-gray-500 mt-1">The address that will receive the minted JUST tokens</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The address that will receive the minted JUST tokens</p>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Amount (JUST)</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Amount (JUST)</label>
                     <input 
                       type="number"
                       step="0.000000000000000001"
-                      className="w-full rounded-md border border-gray-300 p-2" 
+                      className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
+
                       placeholder="Amount" 
                       value={newProposal.amount}
                       onChange={(e) => setNewProposal({...newProposal, amount: e.target.value})}
                       required
                     />
-                    <p className="text-xs text-gray-500 mt-1">Amount of JUST tokens to mint</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Amount of JUST tokens to mint</p>
                   </div>
                 </>
               )}
@@ -1992,29 +2134,31 @@ const ProposalsTab = ({
               {parseInt(newProposal.type) === PROPOSAL_TYPES.TOKEN_BURN && (
                 <>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Address to Burn From</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Address to Burn From</label>
                     <input 
                       type="text" 
-                      className="w-full rounded-md border border-gray-300 p-2" 
+                      className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
+
                       placeholder="0x..." 
                       value={newProposal.recipient}
                       onChange={(e) => setNewProposal({...newProposal, recipient: e.target.value})}
                       required
                     />
-                    <p className="text-xs text-gray-500 mt-1">The address from which JUST tokens will be burned</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The address from which JUST tokens will be burned</p>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Amount (JUST)</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Amount (JUST)</label>
                     <input 
                       type="number"
                       step="0.000000000000000001"
-                      className="w-full rounded-md border border-gray-300 p-2" 
+                      className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
+
                       placeholder="Amount" 
                       value={newProposal.amount}
                       onChange={(e) => setNewProposal({...newProposal, amount: e.target.value})}
                       required
                     />
-                    <p className="text-xs text-gray-500 mt-1">Amount of JUST tokens to burn</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Amount of JUST tokens to burn</p>
                   </div>
                 </>
               )}
@@ -2023,41 +2167,44 @@ const ProposalsTab = ({
               {parseInt(newProposal.type) === PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER && (
                 <>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Token Address</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Token Address</label>
                     <input 
                       type="text" 
-                      className="w-full rounded-md border border-gray-300 p-2" 
+                      className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
+
                       placeholder="0x..." 
                       value={newProposal.token}
                       onChange={(e) => setNewProposal({...newProposal, token: e.target.value})}
                       required
                     />
-                    <p className="text-xs text-gray-500 mt-1">The address of the ERC20 token to transfer</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The address of the ERC20 token to transfer</p>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Recipient Address</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Recipient Address</label>
                     <input 
                       type="text" 
-                      className="w-full rounded-md border border-gray-300 p-2" 
+                      className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
+
                       placeholder="0x..." 
                       value={newProposal.recipient}
                       onChange={(e) => setNewProposal({...newProposal, recipient: e.target.value})}
                       required
                     />
-                    <p className="text-xs text-gray-500 mt-1">The address that will receive the tokens</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The address that will receive the tokens</p>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Amount</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Amount</label>
                     <input 
                       type="number"
                       step="0.000000000000000001"
-                      className="w-full rounded-md border border-gray-300 p-2" 
+                      className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
+
                       placeholder="Amount" 
                       value={newProposal.amount}
                       onChange={(e) => setNewProposal({...newProposal, amount: e.target.value})}
                       required
                     />
-                    <p className="text-xs text-gray-500 mt-1">Amount of tokens to transfer</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Amount of tokens to transfer</p>
                   </div>
                 </>
               )}
@@ -2066,130 +2213,145 @@ const ProposalsTab = ({
               {parseInt(newProposal.type) === PROPOSAL_TYPES.GOVERNANCE_CHANGE && (
                 <>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">New Proposal Threshold</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">New Proposal Threshold</label>
                     <input 
                       type="number"
                       step="0.000000000000000001"
-                      className="w-full rounded-md border border-gray-300 p-2" 
+                      className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
+
                       placeholder="New threshold (in JUST tokens)" 
                       value={newProposal.newThreshold}
                       onChange={(e) => setNewProposal({...newProposal, newThreshold: e.target.value})}
                     />
-                    <p className="text-xs text-gray-500 mt-1">The new minimum amount of JUST tokens needed to create proposals</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The new minimum amount of JUST tokens needed to create proposals</p>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">New Quorum</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">New Quorum</label>
                     <input 
                       type="number"
                       step="0.000000000000000001"
-                      className="w-full rounded-md border border-gray-300 p-2" 
+                      className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
+
                       placeholder="New quorum (in JUST tokens)" 
                       value={newProposal.newQuorum}
                       onChange={(e) => setNewProposal({...newProposal, newQuorum: e.target.value})}
                     />
-                    <p className="text-xs text-gray-500 mt-1">The new minimum voting power required for a proposal to pass</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The new minimum voting power required for a proposal to pass</p>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">New Voting Duration</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">New Voting Duration</label>
                     <input 
                       type="number"
-                      className="w-full rounded-md border border-gray-300 p-2" 
+                      className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
+
                       placeholder="New voting duration (in seconds)" 
                       value={newProposal.newVotingDuration}
                       onChange={(e) => setNewProposal({...newProposal, newVotingDuration: e.target.value})}
                     />
-                    <p className="text-xs text-gray-500 mt-1">The new duration of the voting period in seconds</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The new duration of the voting period in seconds</p>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">New Proposal Stake</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">New Proposal Stake</label>
                     <input 
                       type="number"
                       step="0.000000000000000001"
-                      className="w-full rounded-md border border-gray-300 p-2" 
+                      className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
+
                       placeholder="New proposal stake (in JUST tokens)" 
                       value={newProposal.newProposalStake}
                       onChange={(e) => setNewProposal({...newProposal, newProposalStake: e.target.value})}
                     />
-                    <p className="text-xs text-gray-500 mt-1">The new amount of JUST tokens required as stake when creating a proposal</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The new amount of JUST tokens required as stake when creating a proposal</p>
                   </div>
                 </>
               )}
               
               {/* Fields for SIGNALING proposal type - NEW */}
               {parseInt(newProposal.type) === PROPOSAL_TYPES.SIGNALING && (
-                <div className="bg-yellow-50 border border-yellow-200 p-4 rounded-md">
-                  <p className="text-sm text-yellow-800 mb-2">
+                <div className="bg-indigo-50 border border-indigo-200 p-4 rounded-md dark:bg-indigo-900/20 dark:border-indigo-700">
+
+<p className="text-sm text-indigo-800 mb-2">
                     <strong>Signaling Proposal Information:</strong>
                   </p>
-                  <p className="text-sm text-yellow-700">
-                    A signaling proposal is used for community polls, sentiment gathering, or discussion topics without any on-chain actions.
+                  <p className="text-sm text-indigo-700 dark:text-indigo-300 mt-2">
+                  A signaling proposal is used for community polls, sentiment gathering, or discussion topics without any on-chain actions.
                     Only title and description are required. A proposal deposit will still be required.
+                  </p>
+                  <p className="text-sm text-indigo-700 dark:text-indigo-300 mt-2">
+
+Use the rich text editor above to format your proposal clearly. You can add headers, bullet points, and formatting to make your signaling proposal more structured and easier to read.
                   </p>
                 </div>
               )}
-              
               <div className="flex justify-end space-x-2 pt-4">
-                <button 
-                  type="button"
-                  className="px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50"
-                  onClick={() => setShowCreateModal(false)}
-                  disabled={submitting}
-                >
-                  Cancel
-                </button>
-                {parseInt(newProposal.type) === PROPOSAL_TYPES.SIGNALING ? (
-                  // Special button for signaling proposals that bypasses form validation
-                  <button 
-                    type="button"
-                    className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:bg-indigo-400"
-                    disabled={submitting}
-                    onClick={async () => {
-                      try {
-                        setSubmitting(true);
-                        const description = `${newProposal.title}\n\n${newProposal.description}`;
-                        await createSignalingProposal(description);
-                        setShowCreateModal(false);
-                        setNewProposal({
-                          title: '',
-                          description: '',
-                          type: PROPOSAL_TYPES.GENERAL,
-                          target: '',
-                          callData: '',
-                          amount: '',
-                          recipient: '',
-                          token: '',
-                          newThreshold: '',
-                          newQuorum: '',
-                          newVotingDuration: '',
-                          newProposalStake: ''
-                        });
-                      } catch (error) {
-                        console.error("Error creating signaling proposal:", error);
-                        setTransactionError(error.message || 'Error creating signaling proposal');
-                      } finally {
-                        setSubmitting(false);
-                      }
-                    }}
-                  >
-                    {submitting ? 'Creating Signaling Proposal...' : 'Create Signaling Proposal'}
-                  </button>
-                ) : (
-                  // Regular submit button for other proposal types
-                  <button 
-                    type="submit"
-                    className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:bg-indigo-400"
-                    disabled={submitting}
-                  >
-                    {submitting ? 'Creating Proposal...' : 'Create Proposal'}
-                  </button>
-                )}
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+              <button 
+  type="button"
+  className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 dark:text-gray-200"
+  onClick={() => setShowCreateModal(false)}
+  disabled={submitting}
+>
+  Cancel
+</button>
+  {parseInt(newProposal.type) === PROPOSAL_TYPES.SIGNALING ? (
+    // Special button for signaling proposals that bypasses form validation
+    <button 
+      type="button"
+      className="px-4 py-2 bg-indigo-600 dark:bg-indigo-500 text-white rounded-md hover:bg-indigo-700 dark:hover:bg-indigo-400 disabled:bg-indigo-400 dark:disabled:bg-indigo-700 disabled:cursor-not-allowed shadow-sm hover:shadow-md dark:shadow-indigo-700/30 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 dark:focus:ring-offset-gray-800"
+      disabled={submitting || !newProposal.title || !newProposal.description}
+      onClick={async () => {
+        try {
+          setSubmitting(true);
+          // Use the content from the rich text editor
+          let description;
+          if (newProposal.descriptionHtml) {
+            description = `${newProposal.title}\n\n${newProposal.description}\n\n|||HTML:${newProposal.descriptionHtml}`;
+          } else {
+            description = `${newProposal.title}\n\n${newProposal.description}`;
+          }
+          await createSignalingProposal(description);
+          setShowCreateModal(false);
+          setNewProposal({
+            title: '',
+            description: '',
+            descriptionHtml: '',
+            type: PROPOSAL_TYPES.GENERAL,
+            target: '',
+            callData: '',
+            amount: '',
+            recipient: '',
+            token: '',
+            newThreshold: '',
+            newQuorum: '',
+            newVotingDuration: '',
+            newProposalStake: ''
+          });
+        } catch (error) {
+          console.error("Error creating signaling proposal:", error);
+          setTransactionError(error.message || 'Error creating signaling proposal');
+        } finally {
+          setSubmitting(false);
+        }
+      }}
+    >
+      {submitting ? 'Creating Signaling Proposal...' : 'Create Signaling Proposal'}
+    </button>
+  ) : (
+    // Regular submit button for other proposal types
+    <button 
+      type="submit"
+      className="px-4 py-2 bg-indigo-600 dark:bg-indigo-500 text-white rounded-md hover:bg-indigo-700 dark:hover:bg-indigo-400 disabled:bg-indigo-400 dark:disabled:bg-indigo-700 disabled:cursor-not-allowed shadow-sm hover:shadow-md dark:shadow-indigo-700/30 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 dark:focus:ring-offset-gray-800"
+      disabled={submitting}
+    >
+      {submitting ? 'Creating Proposal...' : 'Create Proposal'}
+    </button>
+  )}
+</div>
+</form>
+</div>
+</div>
+)}
+</div>
+);
 };
 
 export default ProposalsTab;

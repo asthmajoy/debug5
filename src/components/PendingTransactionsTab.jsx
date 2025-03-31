@@ -1143,7 +1143,9 @@ const PendingTransactionsTab = ({ contracts, account }) => {
   return (
     <div>
       <div className="mb-6">
-        <h2 className="text-xl font-semibold">Pending Transactions</h2>
+      <h2 className="text-xl font-semibold dark:text-white">Pending Transactions</h2>
+
+        
         <p className="text-gray-500">Manage active proposals and pending timelock transactions</p>
       </div>
       

@@ -18,15 +18,15 @@ function getThreatLevelLabel(level) {
 function getThreatLevelColor(level) {
   switch (Number(level)) {
     case 0: // LOW
-      return 'bg-green-100 text-green-800';
+      return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400';
     case 1: // MEDIUM
-      return 'bg-yellow-100 text-yellow-800';
+      return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400';
     case 2: // HIGH
-      return 'bg-orange-100 text-orange-800';
+      return 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400';
     case 3: // CRITICAL
-      return 'bg-red-100 text-red-800';
+      return 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400';
     default:
-      return 'bg-gray-100 text-gray-800';
+      return 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-400';
   }
 }
 
@@ -204,17 +204,17 @@ const TimelockInfoDisplay = ({
   const info = timelockInfo[proposal.id];
   
   return (
-    <div className="mt-4 border border-gray-200 rounded-lg overflow-hidden">
-      <div className="bg-gray-50 px-4 py-2 border-b border-gray-200 flex justify-between items-center">
-        <h5 className="font-medium text-gray-700">Timelock Information</h5>
+    <div className="mt-4 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+      <div className="bg-gray-50 dark:bg-gray-800 px-4 py-2 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
+        <h5 className="font-medium text-gray-700 dark:text-gray-300">Timelock Information</h5>
         {isLoading ? (
-          <div className="h-5 w-5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+          <div className="h-5 w-5 border-2 border-indigo-500 dark:border-indigo-400 border-t-transparent rounded-full animate-spin"></div>
         ) : (
           <button 
             onClick={() => {
               setRetryCount(prev => prev + 1);
             }}
-            className="text-xs text-indigo-500 hover:text-indigo-700 flex items-center"
+            className="text-xs text-indigo-500 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 flex items-center"
             disabled={isLoading}
           >
             <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
@@ -225,9 +225,9 @@ const TimelockInfoDisplay = ({
         )}
       </div>
       
-      <div className="p-4 space-y-3">
+      <div className="p-4 space-y-3 dark:bg-gray-800">
         {error && (
-          <div className="bg-red-50 text-red-700 p-2 rounded-md text-sm flex items-center mb-3">
+          <div className="bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 p-2 rounded-md text-sm flex items-center mb-3">
             <AlertTriangle className="w-4 h-4 mr-2" />
             {error}
           </div>
@@ -235,7 +235,7 @@ const TimelockInfoDisplay = ({
       
         <div className="flex flex-wrap md:flex-nowrap gap-4">
           <div className="min-w-[200px]">
-            <p className="text-sm text-gray-600 mb-1">Threat Level</p>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Threat Level</p>
             <span 
               className={`inline-block text-xs px-2 py-1 rounded ${
                 getThreatLevelColor(info?.level || 0)
@@ -246,12 +246,12 @@ const TimelockInfoDisplay = ({
           </div>
           
           <div className="min-w-[200px]">
-            <p className="text-sm text-gray-600 mb-1">Status</p>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Status</p>
             <span className={`inline-block text-xs px-2 py-1 rounded flex items-center ${
-              !info?.eta ? 'bg-gray-100 text-gray-800' :
+              !info?.eta ? 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-400' :
               Math.floor(Date.now() / 1000) >= info.eta ? 
-                'bg-green-100 text-green-800' : 
-                'bg-yellow-100 text-yellow-800'
+                'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' : 
+                'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
             }`}>
               {!info?.eta ? 'Unknown' :
                Math.floor(Date.now() / 1000) >= info.eta ? (
@@ -269,9 +269,9 @@ const TimelockInfoDisplay = ({
           </div>
         </div>
         
-        <div className="pt-2 border-t border-gray-100">
-          <p className="text-sm text-gray-600 mb-1">Executable After</p>
-          <p className="text-sm font-medium">
+        <div className="pt-2 border-t border-gray-100 dark:border-gray-700">
+          <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Executable After</p>
+          <p className="text-sm font-medium dark:text-gray-300">
             {info?.eta 
               ? new Date(info.eta * 1000).toLocaleString() 
               : "Unknown"}
@@ -279,18 +279,18 @@ const TimelockInfoDisplay = ({
         </div>
         
         {info?.txHash && (
-          <div className="pt-2 border-t border-gray-100">
-            <p className="text-sm text-gray-600 mb-1">Transaction Hash</p>
+          <div className="pt-2 border-t border-gray-100 dark:border-gray-700">
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Transaction Hash</p>
             <div className="flex items-center">
-              <span className="text-sm font-mono truncate">
+              <span className="text-sm font-mono truncate dark:text-gray-300">
                 {info.txHash.substring(0, 10) + '...' + info.txHash.substring(info.txHash.length - 8)}
               </span>
               <button 
                 onClick={() => copyToClipboard(info.txHash)} 
-                className="ml-2 text-gray-500 hover:text-indigo-600"
+                className="ml-2 text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400"
               >
                 {copiedText === info.txHash 
-                  ? <Check className="w-4 h-4 text-green-500" /> 
+                  ? <Check className="w-4 h-4 text-green-500 dark:text-green-400" /> 
                   : <Copy className="w-4 h-4" />}
               </button>
             </div>
@@ -298,18 +298,18 @@ const TimelockInfoDisplay = ({
         )}
         
         {proposal.timelockTxHash && !info?.txHash && (
-          <div className="pt-2 border-t border-gray-100">
-            <p className="text-sm text-gray-600 mb-1">Transaction Hash (From Proposal)</p>
+          <div className="pt-2 border-t border-gray-100 dark:border-gray-700">
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Transaction Hash (From Proposal)</p>
             <div className="flex items-center">
-              <span className="text-sm font-mono truncate">
+              <span className="text-sm font-mono truncate dark:text-gray-300">
                 {proposal.timelockTxHash.substring(0, 10) + '...' + proposal.timelockTxHash.substring(proposal.timelockTxHash.length - 8)}
               </span>
               <button 
                 onClick={() => copyToClipboard(proposal.timelockTxHash)} 
-                className="ml-2 text-gray-500 hover:text-indigo-600"
+                className="ml-2 text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400"
               >
                 {copiedText === proposal.timelockTxHash 
-                  ? <Check className="w-4 h-4 text-green-500" /> 
+                  ? <Check className="w-4 h-4 text-green-500 dark:text-green-400" /> 
                   : <Copy className="w-4 h-4" />}
               </button>
             </div>

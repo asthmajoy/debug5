@@ -138,7 +138,9 @@ const TimelockSettingsTab = ({ contracts }) => {
   return (
     <div>
       <div className="mb-6">
-        <h2 className="text-xl font-semibold">Timelock Settings</h2>
+      <h2 className="text-xl font-semibold dark:text-white">Timelock Settings</h2>
+
+        
         <p className="text-gray-500">Manage delayed execution settings for governance actions</p>
       </div>
       

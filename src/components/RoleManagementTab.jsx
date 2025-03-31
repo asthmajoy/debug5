@@ -470,7 +470,9 @@ const EnhancedRoleManagementTab = ({ contracts, account }) => {
     <div>
       <div className="flex justify-between items-center mb-6">
         <div>
-          <h2 className="text-xl font-semibold">Role Management</h2>
+        <h2 className="text-xl font-semibold dark:text-white">Role Management</h2>
+
+         
           <p className="text-gray-500">Assign and manage roles across DAO contracts</p>
         </div>
         <div className="flex gap-2">
