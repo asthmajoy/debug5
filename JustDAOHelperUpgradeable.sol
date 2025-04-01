@@ -310,26 +310,121 @@ contract JustDAOHelperUpgradeable is
         // Total depth would be backward + new delegation + forward
         return backwardDepth + 1 + forwardDepth;
     }
-    
- /**
- * @notice Improved cycle detection for diamond patterns and complex delegation structures
- * @param delegator The account that would delegate
- * @param delegatee The account that would be delegated to
- * @return wouldCreateCycle True if delegation would create a cycle
+   
+   /**
+ * @notice Unified cycle detection for all patterns including diamond patterns
+ * @dev Detects both direct cycles and diamond pattern cycles without helper functions
  */
 function wouldCreateDelegationCycle(address delegator, address delegatee) public view returns (bool) {
     // Quick checks first
     if (delegator == delegatee) return false;
     if (justToken.getDelegate(delegatee) == delegator) return true;
     
-    // Check if the delegation graph is too complex for on-chain analysis
-    uint256 delegationComplexity = _estimateDelegationComplexity(delegatee);
-    if (delegationComplexity > MAX_SAFE_DELEGATION_COMPLEXITY) {
-        // For very complex structures, require off-chain analysis
+    // Check delegation complexity based on direct delegators and chain depth
+    uint256 directDelegatorsCount = justToken.getDelegatorsOf(delegatee).length;
+    if (directDelegatorsCount == 0) return false;
+    
+    // Complexity check - using 500 as the safe threshold
+    uint256 chainDepth = getDelegationDepth(delegatee);
+    uint256 complexity = directDelegatorsCount * (chainDepth + 1);
+    if (complexity > 500) {
         revert DelegationTooComplex();
     }
     
-    return _isInUpstreamChain(delegatee, delegator);
+    // Unified BFS implementation to detect all types of cycles
+    uint8 maxDepth = justToken.MAX_DELEGATION_DEPTH();
+    address[50] memory queue;
+    uint8 queueStart = 0;
+    uint8 queueEnd = 0;
+    uint256[8] memory visitedBitmap;
+    
+    // Cache delegator's delegate for diamond pattern checks
+    address delegatorDelegate = justToken.getDelegate(delegator);
+    
+    // Start BFS with delegatee
+    queue[queueEnd++] = delegatee;
+    
+    // Mark delegatee as visited (inline _markVisited logic)
+    {
+        uint256 index = uint256(uint160(delegatee)) % 256;
+        uint256 slotIndex = index / 32;
+        uint256 bitPosition = 1 << (index % 32);
+        visitedBitmap[slotIndex] |= bitPosition;
+    }
+    
+    while (queueStart < queueEnd && queueEnd < 50) {
+        address current = queue[queueStart++];
+        
+        // Check direct path
+        address currentDelegate = justToken.getDelegate(current);
+        if (currentDelegate != address(0) && currentDelegate != current) {
+            if (currentDelegate == delegator) return true;
+            
+            // Check if visited (inline _isVisited logic)
+            bool isVisited;
+            {
+                uint256 index = uint256(uint160(currentDelegate)) % 256;
+                uint256 slotIndex = index / 32;
+                uint256 bitPosition = 1 << (index % 32);
+                isVisited = visitedBitmap[slotIndex] & bitPosition != 0;
+            }
+            
+            if (!isVisited) {
+                queue[queueEnd++] = currentDelegate;
+                
+                // Mark as visited (inline _markVisited logic)
+                {
+                    uint256 index = uint256(uint160(currentDelegate)) % 256;
+                    uint256 slotIndex = index / 32;
+                    uint256 bitPosition = 1 << (index % 32);
+                    visitedBitmap[slotIndex] |= bitPosition;
+                }
+            }
+        }
+        
+        // Check diamond patterns
+        address[] memory nodeDelegators = justToken.getDelegatorsOf(current);
+        for (uint256 i = 0; i < nodeDelegators.length && queueEnd < 50;) {
+            address nodeDelegator = nodeDelegators[i];
+            
+            // Skip self-delegation
+            if (nodeDelegator == current) {
+                unchecked { i++; }
+                continue;
+            }
+            
+            // Direct diamond pattern check
+            if (nodeDelegator == delegator) return true;
+            if (justToken.getDelegate(nodeDelegator) == delegator) return true;
+            if (delegatorDelegate == nodeDelegator) return true;
+            
+            // Check if visited (inline _isVisited logic)
+            bool isVisited;
+            {
+                uint256 index = uint256(uint160(nodeDelegator)) % 256;
+                uint256 slotIndex = index / 32;
+                uint256 bitPosition = 1 << (index % 32);
+                isVisited = visitedBitmap[slotIndex] & bitPosition != 0;
+            }
+            
+            // Add to queue if not visited
+            if (!isVisited) {
+                queue[queueEnd++] = nodeDelegator;
+                
+                // Mark as visited (inline _markVisited logic)
+                {
+                    uint256 index = uint256(uint160(nodeDelegator)) % 256;
+                    uint256 slotIndex = index / 32;
+                    uint256 bitPosition = 1 << (index % 32);
+                    visitedBitmap[slotIndex] |= bitPosition;
+                }
+            }
+            
+            unchecked { i++; }
+        }
+    }
+    
+    return false;
 }
 
 function _estimateDelegationComplexity(address node) internal view returns (uint256) {
@@ -941,35 +1036,11 @@ function checkDiamondPatternCycle(address delegator, address delegatee) public v
         
         return (voted, votingPower);
     }
+ 
+
     
-    /**
-     * @notice Calculate DAO participation metrics
-     * @param lastNProposals Number of most recent proposals to analyze
-     * @return uniqueVoters Total unique voters across proposals
-     * @return averageParticipation Average participation rate (basis points of total token supply)
-     * @return delegateParticipation Rate of participation via delegates (basis points)
-     */
-    function calculateDAOParticipationMetrics(uint256 lastNProposals)
-        external view returns (
-            uint256 uniqueVoters,
-            uint256 averageParticipation,
-            uint256 delegateParticipation
-        )
-    {
-        // This is a placeholder implementation that would be replaced with actual logic
-        // In a real implementation we would need to:
-        // 1. Get the last N proposal IDs from the governance contract
-        // 2. For each proposal, calculate participation metrics
-        // 3. Aggregate and return stats
-        
-        // For now, return dummy values
-        uniqueVoters = 250;
-        averageParticipation = 7500; // 75% in basis points
-        delegateParticipation = 4000; // 40% in basis points
-        
-        return (uniqueVoters, averageParticipation, delegateParticipation);
-    }
-    
+
+
     /**
      * @notice Get all delegators in a delegation tree (recursive delegations) - first level
      * @dev Entry point that handles initial setup and avoids stack-too-deep errors
