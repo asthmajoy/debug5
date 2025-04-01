@@ -52,7 +52,7 @@ contract JustTokenUpgradeable is
     error DC(); // DelegCycle
     error DDL(); // DelegationDepthLimit
     error TEU(); // TransferExceedsUnlocked
-    error NEU(); // NotEnoughUnlocked
+    error NU(); // NotUnlocked
     error NAT(); // NotAdminOrTimelock
     error LCS(); // LessThanCurrSupply
     error TZA(); // TimelockZeroAddr
@@ -79,8 +79,7 @@ contract JustTokenUpgradeable is
     
     // Token parameters
     uint256 public maxTokenSupply;
-    uint256 public minLockDuration;
-    uint256 public maxLockDuration;
+ 
     uint8 public constant MAX_DELEGATION_DEPTH = 8;
 
     // Delegation mapping - who is this account delegating to
@@ -146,7 +145,6 @@ contract JustTokenUpgradeable is
     event GovernanceRoleChanged(address indexed account, bool isGranted);
     event TimelockUpdated(address indexed oldTimelock, address indexed newTimelock);
     event MaxTokenSupplyUpdated(uint256 oldSupply, uint256 newSupply);
-    event LockDurationsUpdated(uint256 oldMinDuration, uint256 oldMaxDuration, uint256 newMinDuration, uint256 newMaxDuration);
     event SnapshotMetricsUpdated(uint256 indexed snapshotId, uint256 totalSupply, uint256 activeDelegates);
     
     /**
@@ -162,7 +160,7 @@ contract JustTokenUpgradeable is
      */
     function _checkUnlockedTokens(address account, uint256 amount) internal view {
         if (balanceOf(account) < amount + _lockedTokens[account])
-            revert NEU();
+            revert NU();
     }
     
     /**
@@ -171,9 +169,8 @@ contract JustTokenUpgradeable is
     function initialize(
         string memory name,
         string memory symbol,
-        address admin,
-        uint256 minLockDurationParam,
-        uint256 maxLockDurationParam
+        address admin
+
     ) public initializer {
         if (admin == address(0)) revert ZA();
         
@@ -194,8 +191,7 @@ contract JustTokenUpgradeable is
         
         // Initialize with safe defaults
         maxTokenSupply = 1000000 * 10**18; // 1 million tokens
-        minLockDuration = minLockDurationParam;
-        maxLockDuration = maxLockDurationParam;
+    
     }
     
     /**
@@ -866,9 +862,16 @@ contract JustTokenUpgradeable is
         if (from == address(0)) revert ZAd();
         if (amount == 0) revert ANP();
         
-        // Check if token holder has enough unlocked tokens
-        if (balanceOf(from) - _lockedTokens[from] < amount)
-            revert TEU();
+        // Remove locked tokens when burning
+        if (_lockedTokens[from] > 0) {
+            if (amount >= _lockedTokens[from]) {
+                // If burn amount covers all locked tokens
+                _lockedTokens[from] = 0;
+            } else {
+                // Reduce locked tokens if burn is partial
+                _lockedTokens[from] -= amount;
+            }
+        }
         
         _burn(from, amount);
         emit TokensBurned(from, amount, totalSupply());
