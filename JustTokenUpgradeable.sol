@@ -362,21 +362,21 @@ contract JustTokenUpgradeable is
             address leaf = _allDelegates[i];
             
             // For each account, follow its delegation chain
-            address current = leaf;
+            address currentNode = leaf;
             uint8 chainLength = 0;
             bool containsDelegator = false;
             
-            while (current != address(0) && chainLength <= MAX_DELEGATION_DEPTH) {
-                if (current == delegator) {
+            while (currentNode != address(0) && chainLength <= MAX_DELEGATION_DEPTH) {
+                if (currentNode == delegator) {
                     containsDelegator = true;
                     break;
                 }
                 
-                address next = _delegates[current];
-                if (next == address(0) || next == current) break;
+                address next = _delegates[currentNode];
+                if (next == address(0) || next == currentNode) break;
                 
                 chainLength++;
-                current = next;
+                currentNode = next;
             }
             
             // If chain contains delegator, record its length to delegator
@@ -1010,14 +1010,16 @@ contract JustTokenUpgradeable is
     
     // Safety Functions
     function rescueETH() external onlyRole(ADMIN_ROLE) nonReentrant {
+        // CHECKS
         uint256 balance = address(this).balance;
         if (balance == 0) revert NO();
         
-        // Set a gas limit for the transfer to prevent potential reentrancy attack vectors
+        // EFFECTS - Emit event before external call
+        emit ETHRescued(msg.sender, balance);
+        
+        // INTERACTIONS - External call comes last
         (bool success, ) = payable(msg.sender).call{value: balance, gas: 30000}("");
         if (!success) revert ETF();
-        
-        emit ETHRescued(msg.sender, balance);
     }
     
     function rescueERC20(address tokenAddress) external onlyRole(ADMIN_ROLE) nonReentrant {
