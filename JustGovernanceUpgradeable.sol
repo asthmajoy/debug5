@@ -104,6 +104,8 @@ contract JustGovernanceUpgradeable is
     error NoVotingPower();
     error LastAdminRole(); 
     error TimelockError();
+    error TimelockNotConfigured();
+    error ExecutionFailed(bytes data);
 
     // ==================== CONSTANTS ====================
     // Role-based access control
@@ -282,6 +284,8 @@ contract JustGovernanceUpgradeable is
     event ContractInitialized(address indexed token, address indexed timelock, address indexed admin);
     event VoteCast(uint256 indexed proposalId, address indexed voter, uint8 support, uint256 votingPower);
     event TimelockTransactionSubmitted(uint256 indexed proposalId, bytes32 indexed txHash);
+    event Debug(string message, bytes data);
+    event ExecutionDetails(bytes32 txHash, bool success, bytes returnData);
     
     // ==================== MODIFIERS ====================
     /**
@@ -513,13 +517,22 @@ contract JustGovernanceUpgradeable is
         } else {
             // Check if it's expired in the timelock
             if (proposal.timelockTxHash != bytes32(0)) {
-                (,, , uint256 eta, uint8 executed) = timelock.getTransaction(proposal.timelockTxHash);
-                if (executed != 2 && block.timestamp > eta + timelock.gracePeriod()) {
+                (,, , uint256 eta, uint8 state) = timelock.getTransaction(proposal.timelockTxHash);
+                if (state != 2 && block.timestamp > eta + timelock.gracePeriod()) {
                     return ProposalState.Expired;
                 }
             }
             return ProposalState.Queued;
         }
+    }
+
+    /**
+     * @notice Get the proposal type for a specific proposal ID
+     * This function is used by the timelock to determine the threat level
+     */
+    function getProposalType(uint256 proposalId) external view returns (uint8) {
+        if (proposalId >= _proposals.length) revert GovernanceError();
+        return _proposals[proposalId].pType;
     }
 
     /**
@@ -695,6 +708,7 @@ contract JustGovernanceUpgradeable is
         nonReentrant
     {
         if (getProposalState(proposalId) != ProposalState.Succeeded) revert NotSucceeded();
+        if (address(timelock) == address(0)) revert TimelockNotConfigured();
         
         ProposalData storage proposal = _proposals[proposalId];
         
@@ -730,6 +744,7 @@ contract JustGovernanceUpgradeable is
         nonReentrant
     {
         if (proposalId >= _proposals.length) revert GovernanceError();
+        if (address(timelock) == address(0)) revert TimelockNotConfigured();
         
         ProposalData storage proposal = _proposals[proposalId];
         uint8 flags = proposal.flags;
@@ -792,7 +807,18 @@ contract JustGovernanceUpgradeable is
         
         // Execute from timelock
         if (!timelock.queuedTransactions(txHash)) revert TimelockError();
-        timelock.executeTransaction(txHash);
+        
+        // Try to execute the transaction and handle potential failures
+        try timelock.executeTransaction(txHash) returns (bytes memory returnData) {
+            // Execution succeeded - event is emitted in executeProposalLogic
+            emit ExecutionDetails(txHash, true, returnData);
+        } catch (bytes memory reason) {
+            // Log execution failure
+            emit ExecutionDetails(txHash, false, reason);
+            
+            // Revert with detailed information
+            revert ExecutionFailed(reason);
+        }
     }
     
     /**
