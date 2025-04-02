@@ -18,3 +18,115 @@ code {
 }
 
 /* You can add other custom styles below */
+/* Add this to your app's CSS file */
+
+/* Improvements for Quill editor */
+.ql-container {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 16px;
+  height: auto !important;
+}
+
+.ql-editor {
+  min-height: 250px;
+  padding: 1rem;
+}
+
+.ql-editor h1 {
+  font-size: 2em;
+  font-weight: bold;
+}
+
+.ql-editor h2 {
+  font-size: 1.5em;
+  font-weight: bold;
+}
+
+.ql-editor h3 {
+  font-size: 1.17em;
+  font-weight: bold;
+}
+
+/* Better hover states for toolbar buttons */
+.ql-toolbar button:hover {
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+/* Dark mode styles */
+.quill-editor-dark .ql-container {
+  background-color: #1e1e1e;
+  color: #e0e0e0;
+  border-color: #444;
+}
+
+.quill-editor-dark .ql-toolbar {
+  background-color: #2d2d2d;
+  border-color: #444;
+  color: #e0e0e0;
+}
+
+.quill-editor-dark .ql-editor {
+  color: #e0e0e0;
+}
+
+.quill-editor-dark .ql-stroke {
+  stroke: #e0e0e0;
+}
+
+.quill-editor-dark .ql-fill {
+  fill: #e0e0e0;
+}
+
+.quill-editor-dark .ql-picker {
+  color: #e0e0e0;
+}
+
+.quill-editor-dark .ql-picker-options {
+  background-color: #2d2d2d;
+  border-color: #444;
+}
+
+.quill-editor-dark .ql-tooltip {
+  background-color: #2d2d2d;
+  border-color: #444;
+  color: #e0e0e0;
+}
+
+/* Make the preview mode consistent with editor */
+.prose {
+  max-width: none;
+  color: inherit;
+}
+
+.prose h1 {
+  font-size: 2em;
+  font-weight: bold;
+  margin-top: 1em;
+  margin-bottom: 0.5em;
+}
+
+.prose h2 {
+  font-size: 1.5em;
+  font-weight: bold;
+  margin-top: 1em;
+  margin-bottom: 0.5em;
+}
+
+.prose h3 {
+  font-size: 1.17em;
+  font-weight: bold;
+  margin-top: 1em;
+  margin-bottom: 0.5em;
+}
+
+.prose ul, .prose ol {
+  padding-left: 2em;
+}
+
+.prose ul {
+  list-style-type: disc;
+}
+
+.prose ol {
+  list-style-type: decimal;
+}

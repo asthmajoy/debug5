@@ -1,9 +1,12 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { BarChart, PieChart, LineChart, AreaChart } from 'lucide-react';
 import { ethers } from 'ethers';
 import { useWeb3 } from '../contexts/Web3Context';
 import { formatPercentage, formatNumber, formatBigNumber } from '../utils/formatters';
 import useGovernanceParams from '../hooks/useGovernanceParams';
+
+// Cache duration in milliseconds (5 minutes)
+const CACHE_DURATION = 5 * 60 * 1000;
 
 const AnalyticsTab = () => {
   const { contracts, contractsReady, account, provider } = useWeb3();
@@ -23,17 +26,30 @@ const AnalyticsTab = () => {
   const [healthScore, setHealthScore] = useState(null);
   const [delegationAnalytics, setDelegationAnalytics] = useState(null);
   
+  // Cache references
+  const cacheRef = useRef({
+    proposal: { data: null, timestamp: 0 },
+    voter: { data: null, timestamp: 0 },
+    token: { data: null, timestamp: 0 },
+    timelock: { data: null, timestamp: 0 },
+    delegation: { data: null, timestamp: 0 },
+    health: { data: null, timestamp: 0 }
+  });
+  
+  // Track component mount state
+  const isMountedRef = useRef(true);
+  
   // Threat level states to match VoteTab
-  const THREAT_LEVELS = {
+  const THREAT_LEVELS = useMemo(() => ({
     LOW: 0,
     MEDIUM: 1,
     HIGH: 2,
     CRITICAL: 3
-  };
+  }), []);
   const [threatLevelDelays, setThreatLevelDelays] = useState({});
 
   // Improved BigNumber to Number conversion
-  const formatBigNumberToNumber = (bn) => {
+  const formatBigNumberToNumber = useCallback((bn) => {
     if (!bn) return 0;
     if (typeof bn === 'number') return bn;
     
@@ -70,24 +86,24 @@ const AnalyticsTab = () => {
     }
     
     return 0;
-  };
+  }, []);
 
   // Helper function to check if an address is self-delegated
-  const isSelfDelegated = (delegator, delegate) => {
+  const isSelfDelegated = useCallback((delegator, delegate) => {
     if (!delegator || !delegate) return true;
     const normalizedDelegator = delegator.toLowerCase();
     const normalizedDelegate = delegate.toLowerCase();
     return normalizedDelegator === normalizedDelegate || 
            delegate === ethers.constants.AddressZero;
-  };
+  }, []);
 
   // Safely get property value with fallback
-  const safeGet = (obj, path, defaultValue = 0) => {
+  const safeGet = useCallback((obj, path, defaultValue = 0) => {
     if (!obj) return defaultValue;
     const keys = path.split('.');
     return keys.reduce((o, key) => 
       (o && o[key] !== undefined) ? o[key] : defaultValue, obj);
-  };
+  }, []);
 
   // Debug function to check contract connectivity
   const checkContractConnectivity = useCallback(async () => {
@@ -192,15 +208,40 @@ const AnalyticsTab = () => {
     }
   }, [contractsReady, contracts, account, provider]);
 
+  // Helper function to check cache validity
+  const isCacheValid = useCallback((type) => {
+    const cache = cacheRef.current[type];
+    return cache && 
+           cache.data && 
+           cache.timestamp > 0 && 
+           (Date.now() - cache.timestamp) < CACHE_DURATION;
+  }, []);
+  
+  // Helper function to update cache
+  const updateCache = useCallback((type, data) => {
+    cacheRef.current[type] = {
+      data,
+      timestamp: Date.now()
+    };
+  }, []);
+
   // COMPLETELY REWRITTEN: New approach to load delegation analytics
   const loadDelegationAnalytics = useCallback(async () => {
     if (!contractsReady || !contracts.justToken) {
-      setError("Token contract not available");
+      if (isMountedRef.current) setError("Token contract not available");
       return;
     }
     
+    // Check cache first
+    if (isCacheValid('delegation')) {
+      if (isMountedRef.current) {
+        setDelegationAnalytics(cacheRef.current.delegation.data);
+        return;
+      }
+    }
+    
     try {
-      setLoading(true);
+      if (isMountedRef.current) setLoading(true);
       
       // 1. Get all delegations directly from on-chain data
       const directDelegations = [];
@@ -304,28 +345,34 @@ const AnalyticsTab = () => {
       // Sort by power in descending order
       topDelegates.sort((a, b) => parseFloat(b.delegatedPower) - parseFloat(a.delegatedPower));
       
-      // 5. Set the analytics state
-      setDelegationAnalytics({
+      // 5. Prepare analytics data
+      const analyticsData = {
         delegations: directDelegations,
         topDelegates: topDelegates,
         totalSupply: totalSupplyEther
-      });
+      };
       
-      console.log("Updated delegation analytics:", {
-        delegations: directDelegations,
-        topDelegates: topDelegates,
-        totalSupply: totalSupplyEther
-      });
+      // Update cache
+      updateCache('delegation', analyticsData);
+      
+      // Update state if component is still mounted
+      if (isMountedRef.current) {
+        setDelegationAnalytics(analyticsData);
+      }
       
     } catch (error) {
       console.error("Error loading delegation analytics:", error);
-      setError(`Failed to load delegation analytics: ${error.message}`);
+      if (isMountedRef.current) {
+        setError(`Failed to load delegation analytics: ${error.message}`);
+      }
     } finally {
-      setLoading(false);
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
     }
-  }, [contracts, contractsReady, account]);
+  }, [contracts, contractsReady, account, isSelfDelegated]);
 
-  // Direct proposal counting implementation - similar to DashboardTab
+  // Direct proposal counting implementation
   const countProposalsDirectly = useCallback(async () => {
     if (!contracts.governance) {
       console.warn("Governance contract not available for direct proposal counting");
@@ -343,8 +390,6 @@ const AnalyticsTab = () => {
     }
 
     try {
-      console.log("Directly counting proposals in AnalyticsTab...");
-      
       // State names for logging and mapping
       const stateNames = [
         'active',     // 0
@@ -399,7 +444,6 @@ const AnalyticsTab = () => {
           let proposalVotes = null;
           try {
             proposalVotes = await contracts.governance.getProposalVotes(id);
-            console.log(`Got votes for proposal ${id}:`, proposalVotes);
           } catch (votesErr) {
             console.warn(`Could not get votes for proposal ${id}:`, votesErr.message);
           }
@@ -424,10 +468,6 @@ const AnalyticsTab = () => {
           continue;
         }
       }
-      
-      console.log("Direct proposal count results:", proposalDetails);
-      console.log("State breakdown:", stateCounts);
-      console.log(`Found ${foundProposals} total proposals with ${stateCounts.active} active`);
       
       // Calculate success rate
       const successfulProposals = stateCounts.succeeded + stateCounts.queued + stateCounts.executed;
@@ -476,8 +516,6 @@ const AnalyticsTab = () => {
                 totalVotes.mul(10000).div(totalSupply).toString()
               ) / 100; // Convert basis points to percentage
               
-              console.log(`Proposal ${proposal.id} turnout: ${turnoutPercentage}%`);
-              
               totalTurnout += turnoutPercentage;
               sampleCount++;
             }
@@ -488,7 +526,6 @@ const AnalyticsTab = () => {
         
         if (sampleCount > 0) {
           avgVotingTurnout = totalTurnout / sampleCount;
-          console.log(`Average voting turnout across ${sampleCount} proposals: ${avgVotingTurnout}%`);
         }
       }
       
@@ -523,37 +560,61 @@ const AnalyticsTab = () => {
   // Load proposal analytics using direct counting method
   const loadProposalAnalytics = useCallback(async () => {
     if (!contractsReady || !contracts.governance) {
-      setError("Governance contract not available");
+      if (isMountedRef.current) setError("Governance contract not available");
       return;
     }
     
+    // Check cache first
+    if (isCacheValid('proposal')) {
+      if (isMountedRef.current) {
+        setProposalAnalytics(cacheRef.current.proposal.data);
+        return;
+      }
+    }
+    
     try {
-      setLoading(true);
+      if (isMountedRef.current) setLoading(true);
       
       // Use the direct proposal counting method
       const directAnalytics = await countProposalsDirectly();
       
-      setProposalAnalytics(directAnalytics);
+      // Update cache
+      updateCache('proposal', directAnalytics);
       
-      console.log("Updated proposal analytics:", directAnalytics);
+      // Update state if component is still mounted
+      if (isMountedRef.current) {
+        setProposalAnalytics(directAnalytics);
+      }
       
     } catch (error) {
       console.error("Error loading proposal analytics:", error);
-      setError(`Failed to load proposal analytics: ${error.message}. Check console for details.`);
+      if (isMountedRef.current) {
+        setError(`Failed to load proposal analytics: ${error.message}. Check console for details.`);
+      }
     } finally {
-      setLoading(false);
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
     }
-  }, [contracts, contractsReady, countProposalsDirectly]);
+  }, [contracts, contractsReady, countProposalsDirectly, isCacheValid, updateCache]);
 
   // Load voter analytics with proper self-delegation handling
   const loadVoterAnalytics = useCallback(async () => {
     if (!contractsReady || !contracts.governance || !contracts.justToken) {
-      setError("Governance or Token contract not available");
+      if (isMountedRef.current) setError("Governance or Token contract not available");
       return;
     }
     
+    // Check cache first
+    if (isCacheValid('voter')) {
+      if (isMountedRef.current) {
+        setVoterAnalytics(cacheRef.current.voter.data);
+        return;
+      }
+    }
+    
     try {
-      setLoading(true);
+      if (isMountedRef.current) setLoading(true);
       // Get total token holders (approximation)
       const totalSupply = await contracts.justToken.totalSupply();
       
@@ -561,7 +622,6 @@ const AnalyticsTab = () => {
       let snapshotId;
       try {
         snapshotId = await contracts.justToken.getCurrentSnapshotId();
-        console.log("Current snapshot ID:", snapshotId.toString());
       } catch (err) {
         console.warn("Failed to get snapshot ID:", err.message);
         snapshotId = ethers.BigNumber.from(0);
@@ -646,37 +706,50 @@ const AnalyticsTab = () => {
         }
       }
       
-      setVoterAnalytics({
+      const voterData = {
         totalDelegators: delegatorCount,
         totalDelegates: delegateCount,
         participationRate,
         activeDelegated: ethers.utils.formatEther(totalDelegated)
-      });
+      };
       
-      console.log("Updated voter analytics:", {
-        totalDelegators: delegatorCount,
-        totalDelegates: delegateCount,
-        participationRate,
-        activeDelegated: ethers.utils.formatEther(totalDelegated)
-      });
+      // Update cache
+      updateCache('voter', voterData);
+      
+      // Update state if component is still mounted
+      if (isMountedRef.current) {
+        setVoterAnalytics(voterData);
+      }
       
     } catch (error) {
       console.error("Error loading voter analytics:", error);
-      setError(`Failed to load voter analytics: ${error.message}. Check console for details.`);
+      if (isMountedRef.current) {
+        setError(`Failed to load voter analytics: ${error.message}. Check console for details.`);
+      }
     } finally {
-      setLoading(false);
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
     }
-  }, [contracts, contractsReady, account, delegationAnalytics, proposalAnalytics]);
+  }, [contracts, contractsReady, account, delegationAnalytics, proposalAnalytics, isSelfDelegated]);
   
   // Modified loadTokenAnalytics function to handle self-delegation properly
   const loadTokenAnalytics = useCallback(async () => {
     if (!contractsReady || !contracts.justToken) {
-      setError("Token contract not available");
+      if (isMountedRef.current) setError("Token contract not available");
       return;
     }
     
+    // Check cache first
+    if (isCacheValid('token')) {
+      if (isMountedRef.current) {
+        setTokenAnalytics(cacheRef.current.token.data);
+        return;
+      }
+    }
+    
     try {
-      setLoading(true);
+      if (isMountedRef.current) setLoading(true);
       // Get basic token information
       const totalSupply = await contracts.justToken.totalSupply();
       
@@ -695,9 +768,7 @@ const AnalyticsTab = () => {
       let totalDelegated = ethers.BigNumber.from(0);
       
       try {
-        console.log("Retrieving snapshot metrics for ID:", snapshotId.toString());
         const metrics = await contracts.justToken.getSnapshotMetrics(snapshotId);
-        console.log("Snapshot metrics:", metrics);
         
         // Handle different return formats
         if (Array.isArray(metrics)) {
@@ -751,26 +822,43 @@ const AnalyticsTab = () => {
         percentageDelegated
       };
       
-      setTokenAnalytics(tokenAnalyticsData);
-      console.log("Updated token analytics:", tokenAnalyticsData);
+      // Update cache
+      updateCache('token', tokenAnalyticsData);
+      
+      // Update state if component is still mounted
+      if (isMountedRef.current) {
+        setTokenAnalytics(tokenAnalyticsData);
+      }
       
     } catch (error) {
       console.error("Error loading token analytics:", error);
-      setError(`Failed to load token analytics: ${error.message}. Check console for details.`);
+      if (isMountedRef.current) {
+        setError(`Failed to load token analytics: ${error.message}. Check console for details.`);
+      }
     } finally {
-      setLoading(false);
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
     }
-  }, [contracts, contractsReady, delegationAnalytics]);
+  }, [contracts, contractsReady, delegationAnalytics, isSelfDelegated, formatBigNumberToNumber]);
 
   // Load timelock analytics - Updated to match VoteTab approach
   const loadTimelockAnalytics = useCallback(async () => {
     if (!contractsReady || !contracts.timelock) {
-      setError("Timelock contract not available");
+      if (isMountedRef.current) setError("Timelock contract not available");
       return;
     }
     
+    // Check cache first
+    if (isCacheValid('timelock')) {
+      if (isMountedRef.current) {
+        setTimelockAnalytics(cacheRef.current.timelock.data);
+        return;
+      }
+    }
+    
     try {
-      setLoading(true);
+      if (isMountedRef.current) setLoading(true);
       
       // Fetch all timelock parameters
       const minDelay = await contracts.timelock.minDelay();
@@ -793,7 +881,6 @@ const AnalyticsTab = () => {
       // Get minExecutorTokenThreshold - try with multiple approaches
       try {
         executorThreshold = await contracts.timelock.minExecutorTokenThreshold();
-        console.log("Executor threshold:", executorThreshold.toString());
       } catch (err) {
         console.warn("Falling back to default executor threshold:", err.message);
       }
@@ -873,19 +960,36 @@ const AnalyticsTab = () => {
         pendingTransactions: formatBigNumberToNumber(pendingCount)
       };
       
-      setTimelockAnalytics(timelockAnalyticsData);
-      console.log("Updated timelock analytics:", timelockAnalyticsData);
+      // Update cache
+      updateCache('timelock', timelockAnalyticsData);
+      
+      // Update state if component is still mounted
+      if (isMountedRef.current) {
+        setTimelockAnalytics(timelockAnalyticsData);
+      }
       
     } catch (error) {
       console.error("Error loading timelock analytics:", error);
-      setError(`Failed to load timelock analytics: ${error.message}`);
+      if (isMountedRef.current) {
+        setError(`Failed to load timelock analytics: ${error.message}`);
+      }
     } finally {
-      setLoading(false);
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
     }
-  }, [contracts, contractsReady, THREAT_LEVELS]);
+  }, [contracts, contractsReady, THREAT_LEVELS, formatBigNumberToNumber]);
 
   // Calculate governance health score based on available metrics - simplified
   const calculateHealthScore = useCallback(() => {
+    // Check cache first
+    if (isCacheValid('health')) {
+      if (isMountedRef.current) {
+        setHealthScore(cacheRef.current.health.data);
+        return;
+      }
+    }
+    
     // Only calculate if we have all the necessary data
     if (!proposalAnalytics || !voterAnalytics || !tokenAnalytics || !timelockAnalytics) {
       console.log("Missing data for health score calculation");
@@ -938,11 +1042,17 @@ const AnalyticsTab = () => {
         ]
       };
       
-      setHealthScore(healthScoreData);
+      // Update cache
+      updateCache('health', healthScoreData);
+      
+      // Update state if component is still mounted
+      if (isMountedRef.current) {
+        setHealthScore(healthScoreData);
+      }
     } catch (error) {
       console.error("Error calculating health score:", error);
     }
-  }, [proposalAnalytics, voterAnalytics, tokenAnalytics, timelockAnalytics]);
+  }, [proposalAnalytics, voterAnalytics, tokenAnalytics, timelockAnalytics, isCacheValid, updateCache]);
 
   // Check contract connectivity when component mounts - simplified to prevent loop
   useEffect(() => {
@@ -964,7 +1074,14 @@ const AnalyticsTab = () => {
     return () => {
       mounted = false;
     };
-  }, [contractsReady]); // Only depend on contractsReady
+  }, [contractsReady, checkContractConnectivity]); // Only depend on contractsReady
+
+  // Reset mounted ref when component unmounts
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   // Load data based on selected metric - simplified to prevent loop
   useEffect(() => {
@@ -973,7 +1090,6 @@ const AnalyticsTab = () => {
       return;
     }
     
-    let isMounted = true;
     setLoading(true);
     setError(null);
     
@@ -982,64 +1098,74 @@ const AnalyticsTab = () => {
         // Load data based on selected tab
         switch (selectedMetric) {
           case 'proposal':
-            if (isMounted) await loadProposalAnalytics();
+            await loadProposalAnalytics();
             break;
           case 'voter':
-            if (isMounted) await loadVoterAnalytics();
+            await loadVoterAnalytics();
             break;
           case 'token':
-            if (isMounted) await loadTokenAnalytics();
+            await loadTokenAnalytics();
             break;
           case 'timelock':
-            if (isMounted) await loadTimelockAnalytics();
+            await loadTimelockAnalytics();
             break;
           case 'health':
-            if (isMounted) {
-              // Health score depends on all other metrics being loaded first
-              try {
-                await loadProposalAnalytics();
-                if (!isMounted) return;
-                await loadVoterAnalytics();
-                if (!isMounted) return;
-                await loadTokenAnalytics();
-                if (!isMounted) return;
-                await loadTimelockAnalytics();
-                if (!isMounted) return;
-                calculateHealthScore();
-              } catch (healthErr) {
-                console.error("Error calculating health score:", healthErr);
-              }
+            // Health score depends on all other metrics being loaded first
+            try {
+              // Check if we already have the required data
+              if (!proposalAnalytics) await loadProposalAnalytics();
+              if (!isMountedRef.current) return;
+              
+              if (!voterAnalytics) await loadVoterAnalytics();
+              if (!isMountedRef.current) return;
+              
+              if (!tokenAnalytics) await loadTokenAnalytics();
+              if (!isMountedRef.current) return;
+              
+              if (!timelockAnalytics) await loadTimelockAnalytics();
+              if (!isMountedRef.current) return;
+              
+              calculateHealthScore();
+            } catch (healthErr) {
+              console.error("Error calculating health score:", healthErr);
             }
             break;
           case 'delegation':
-            if (isMounted) await loadDelegationAnalytics();
+            await loadDelegationAnalytics();
             break;
           default:
             break;
         }
       } catch (err) {
-        if (isMounted) {
+        if (isMountedRef.current) {
           console.error(`Error loading ${selectedMetric} analytics:`, err);
           setError(`Failed to load analytics: ${err.message}`);
         }
       } finally {
-        if (isMounted) {
+        if (isMountedRef.current) {
           setLoading(false);
         }
       }
     };
     
     loadData();
-    
-    // Cleanup function to prevent state updates after unmount
-    return () => {
-      isMounted = false;
-    };
-  }, [selectedMetric, contractsReady]);
+  }, [
+    selectedMetric, 
+    contractsReady, 
+    loadProposalAnalytics, 
+    loadVoterAnalytics, 
+    loadTokenAnalytics, 
+    loadTimelockAnalytics, 
+    loadDelegationAnalytics, 
+    calculateHealthScore,
+    proposalAnalytics,
+    voterAnalytics,
+    tokenAnalytics,
+    timelockAnalytics
+  ]);
 
   // Helper function to format time durations in a human-readable way
-  // Identical to the one used in VoteTab
-  const formatTimeDuration = (seconds) => {
+  const formatTimeDuration = useCallback((seconds) => {
     if (!seconds || isNaN(seconds)) return "0 minutes";
     
     const days = Math.floor(seconds / 86400);
@@ -1053,10 +1179,10 @@ const AnalyticsTab = () => {
     } else {
       return `${minutes} minute${minutes !== 1 ? 's' : ''}`;
     }
-  };
+  }, []);
 
   // Format seconds to a human-readable duration
-  const formatDuration = (seconds) => {
+  const formatDuration = useCallback((seconds) => {
     if (!seconds) return "0 seconds";
     
     const days = Math.floor(seconds / 86400);
@@ -1072,23 +1198,23 @@ const AnalyticsTab = () => {
     } else {
       return `${seconds} second${seconds !== 1 ? 's' : ''}`;
     }
-  };
+  }, []);
   
   // Format token amount
-  const formatTokenAmount = (amount) => {
+  const formatTokenAmount = useCallback((amount) => {
     if (!amount) return "0";
     return parseFloat(amount).toLocaleString(undefined, {
       minimumFractionDigits: 0,
       maximumFractionDigits: 2
     });
-  };
+  }, []);
 
   // Simple progress bar component
   const ProgressBar = ({ value, max, color = "bg-blue-500" }) => {
     const percentage = max > 0 ? (value / max) * 100 : 0;
     
     return (
-      <div className="w-full bg-gray-200 rounded-full h-2.5">
+      <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5">
         <div
           className={`${color} h-2.5 rounded-full`}
           style={{ width: `${percentage}%` }}
@@ -1098,37 +1224,37 @@ const AnalyticsTab = () => {
   };
 
   // Get threat level name from value - same as VoteTab
-  const getThreatLevelName = (level) => {
+  const getThreatLevelName = useCallback((level) => {
     const keys = Object.keys(THREAT_LEVELS);
     const values = Object.values(THREAT_LEVELS);
     const index = values.indexOf(level);
     return keys[index];
-  };
+  }, [THREAT_LEVELS]);
 
   // Render contract connectivity debug info
   const renderDebugInfo = () => {
     if (!connectionDetails) return null;
     
     return (
-      <div className="bg-gray-100 p-4 mb-6 rounded-lg text-sm">
-        <h3 className="font-bold mb-2">Contract Connection Details:</h3>
-        <div>Connected: {connectionDetails.connected ? 'Yes' : 'No'}</div>
-        {connectionDetails.message && <div className="text-red-500">{connectionDetails.message}</div>}
-        {connectionDetails.networkId && <div>Network ID: {connectionDetails.networkId}</div>}
-        {connectionDetails.account && <div>Account: {connectionDetails.account}</div>}
+      <div className="bg-gray-100 dark:bg-gray-800 p-4 mb-6 rounded-lg text-sm">
+        <h3 className="font-bold mb-2 dark:text-white">Contract Connection Details:</h3>
+        <div className="dark:text-gray-300">Connected: {connectionDetails.connected ? 'Yes' : 'No'}</div>
+        {connectionDetails.message && <div className="text-red-500 dark:text-red-400">{connectionDetails.message}</div>}
+        {connectionDetails.networkId && <div className="dark:text-gray-300">Network ID: {connectionDetails.networkId}</div>}
+        {connectionDetails.account && <div className="dark:text-gray-300">Account: {connectionDetails.account}</div>}
         
         {connectionDetails.contracts && (
           <div className="mt-2">
-            <div className="font-bold">Contracts:</div>
+            <div className="font-bold dark:text-white">Contracts:</div>
             <ul className="pl-4">
               {Object.entries(connectionDetails.contracts).map(([name, details]) => (
-                <li key={name} className="mb-1">
+                <li key={name} className="mb-1 dark:text-gray-300">
                   <strong>{name}:</strong>{' '}
                   {typeof details === 'string' ? details : (
                     details.error ? (
-                      <span className="text-red-500">{details.error}</span>
+                      <span className="text-red-500 dark:text-red-400">{details.error}</span>
                     ) : (
-                      <span className="text-green-500">
+                      <span className="text-green-500 dark:text-green-400">
                         Connected {details.address && `(${details.address.slice(0, 6)}...${details.address.slice(-4)})`}
                       </span>
                     )
@@ -1146,42 +1272,42 @@ const AnalyticsTab = () => {
   const renderMetricButtons = () => (
     <div className="flex flex-wrap gap-2 mb-6">
       <button
-        className={`flex items-center px-4 py-2 rounded-lg ${selectedMetric === 'proposal' ? 'bg-blue-500 text-white' : 'bg-gray-100'}`}
+        className={`flex items-center px-4 py-2 rounded-lg ${selectedMetric === 'proposal' ? 'bg-blue-500 text-white dark:bg-blue-600' : 'bg-gray-100 dark:bg-gray-700 dark:text-gray-200'}`}
         onClick={() => setSelectedMetric('proposal')}
       >
         <BarChart className="w-4 h-4 mr-2" />
         Proposals
       </button>
       <button
-        className={`flex items-center px-4 py-2 rounded-lg ${selectedMetric === 'voter' ? 'bg-blue-500 text-white' : 'bg-gray-100'}`}
+        className={`flex items-center px-4 py-2 rounded-lg ${selectedMetric === 'voter' ? 'bg-blue-500 text-white dark:bg-blue-600' : 'bg-gray-100 dark:bg-gray-700 dark:text-gray-200'}`}
         onClick={() => setSelectedMetric('voter')}
       >
         <PieChart className="w-4 h-4 mr-2" />
         Voters
       </button>
       <button
-        className={`flex items-center px-4 py-2 rounded-lg ${selectedMetric === 'token' ? 'bg-blue-500 text-white' : 'bg-gray-100'}`}
+        className={`flex items-center px-4 py-2 rounded-lg ${selectedMetric === 'token' ? 'bg-blue-500 text-white dark:bg-blue-600' : 'bg-gray-100 dark:bg-gray-700 dark:text-gray-200'}`}
         onClick={() => setSelectedMetric('token')}
       >
         <LineChart className="w-4 h-4 mr-2" />
         Tokens
       </button>
       <button
-        className={`flex items-center px-4 py-2 rounded-lg ${selectedMetric === 'timelock' ? 'bg-blue-500 text-white' : 'bg-gray-100'}`}
+        className={`flex items-center px-4 py-2 rounded-lg ${selectedMetric === 'timelock' ? 'bg-blue-500 text-white dark:bg-blue-600' : 'bg-gray-100 dark:bg-gray-700 dark:text-gray-200'}`}
         onClick={() => setSelectedMetric('timelock')}
       >
         <AreaChart className="w-4 h-4 mr-2" />
         Timelock
       </button>
       <button
-        className={`flex items-center px-4 py-2 rounded-lg ${selectedMetric === 'health' ? 'bg-blue-500 text-white' : 'bg-gray-100'}`}
+        className={`flex items-center px-4 py-2 rounded-lg ${selectedMetric === 'health' ? 'bg-blue-500 text-white dark:bg-blue-600' : 'bg-gray-100 dark:bg-gray-700 dark:text-gray-200'}`}
         onClick={() => setSelectedMetric('health')}
       >
         <BarChart className="w-4 h-4 mr-2" />
         Health Score
       </button>
       <button
-        className={`flex items-center px-4 py-2 rounded-lg ${selectedMetric === 'delegation' ? 'bg-blue-500 text-white' : 'bg-gray-100'}`}
+        className={`flex items-center px-4 py-2 rounded-lg ${selectedMetric === 'delegation' ? 'bg-blue-500 text-white dark:bg-blue-600' : 'bg-gray-100 dark:bg-gray-700 dark:text-gray-200'}`}
         onClick={() => setSelectedMetric('delegation')}
       >
         <PieChart className="w-4 h-4 mr-2" />
@@ -1192,7 +1318,7 @@ const AnalyticsTab = () => {
 
   // COMPLETELY REWRITTEN: New implementation of renderDelegationAnalytics
   const renderDelegationAnalytics = () => {
-    if (!delegationAnalytics) return <div>No delegation data available</div>;
+    if (!delegationAnalytics) return <div className="dark:text-gray-300">No delegation data available</div>;
     
     // Ensure we have arrays of data
     const delegations = delegationAnalytics.delegations || [];
@@ -1205,12 +1331,12 @@ const AnalyticsTab = () => {
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Top Delegates Card */}
-        <div className="bg-white p-4 rounded-lg shadow">
-          <h3 className="text-lg font-medium mb-2">Top Delegates</h3>
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow dark:shadow-gray-700">
+          <h3 className="text-lg font-medium mb-2 dark:text-white">Top Delegates</h3>
           <div className="overflow-x-auto">
             <table className="min-w-full">
               <thead>
-                <tr className="text-left text-xs font-semibold text-gray-500">
+                <tr className="text-left text-xs font-semibold text-gray-500 dark:text-gray-400">
                   <th className="p-2">Address</th>
                   <th className="p-2">Delegated Power</th>
                   <th className="p-2">Percentage</th>
@@ -1219,17 +1345,17 @@ const AnalyticsTab = () => {
               <tbody>
                 {topDelegates.length > 0 ? (
                   topDelegates.map((delegate, index) => (
-                    <tr key={index} className="border-t">
-                      <td className="p-2 font-mono text-xs">
+                    <tr key={index} className="border-t dark:border-gray-700">
+                      <td className="p-2 font-mono text-xs dark:text-gray-300">
                         {delegate.address.substring(0, 6)}...{delegate.address.substring(delegate.address.length - 4)}
                       </td>
-                      <td className="p-2">{formatTokenAmount(delegate.delegatedPower)}</td>
-                      <td className="p-2">{formatPercentage(delegate.percentage / 100)}</td>
+                      <td className="p-2 dark:text-gray-300">{formatTokenAmount(delegate.delegatedPower)}</td>
+                      <td className="p-2 dark:text-gray-300">{formatPercentage(delegate.percentage / 100)}</td>
                     </tr>
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={3} className="p-2 text-center text-gray-500">No delegate data available</td>
+                    <td colSpan={3} className="p-2 text-center text-gray-500 dark:text-gray-400">No delegate data available</td>
                   </tr>
                 )}
               </tbody>
@@ -1238,12 +1364,12 @@ const AnalyticsTab = () => {
         </div>
         
         {/* Delegation Chains Card */}
-        <div className="bg-white p-4 rounded-lg shadow">
-          <h3 className="text-lg font-medium mb-2">Delegation Chains</h3>
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow dark:shadow-gray-700">
+          <h3 className="text-lg font-medium mb-2 dark:text-white">Delegation Chains</h3>
           <div className="overflow-x-auto">
             <table className="min-w-full">
               <thead>
-                <tr className="text-left text-xs font-semibold text-gray-500">
+                <tr className="text-left text-xs font-semibold text-gray-500 dark:text-gray-400">
                   <th className="p-2">Delegator</th>
                   <th className="p-2">Delegate</th>
                   <th className="p-2">Power</th>
@@ -1253,20 +1379,20 @@ const AnalyticsTab = () => {
               <tbody>
                 {delegations.length > 0 ? (
                   delegations.map((delegation, index) => (
-                    <tr key={index} className="border-t">
-                      <td className="p-2 font-mono text-xs">
+                    <tr key={index} className="border-t dark:border-gray-700">
+                      <td className="p-2 font-mono text-xs dark:text-gray-300">
                         {delegation.address.substring(0, 6)}...{delegation.address.substring(delegation.address.length - 4)}
                       </td>
-                      <td className="p-2 font-mono text-xs">
+                      <td className="p-2 font-mono text-xs dark:text-gray-300">
                         {delegation.delegate.substring(0, 6)}...{delegation.delegate.substring(delegation.delegate.length - 4)}
                       </td>
-                      <td className="p-2">{formatTokenAmount(delegation.votingPower)}</td>
-                      <td className="p-2">{delegation.depth}</td>
+                      <td className="p-2 dark:text-gray-300">{formatTokenAmount(delegation.votingPower)}</td>
+                      <td className="p-2 dark:text-gray-300">{delegation.depth}</td>
                     </tr>
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={4} className="p-2 text-center text-gray-500">No delegation data available</td>
+                    <td colSpan={4} className="p-2 text-center text-gray-500 dark:text-gray-400">No delegation data available</td>
                   </tr>
                 )}
               </tbody>
@@ -1275,8 +1401,8 @@ const AnalyticsTab = () => {
         </div>
         
         {/* Delegation Concentration Card */}
-        <div className="bg-white p-4 rounded-lg shadow col-span-1 md:col-span-2">
-          <h3 className="text-lg font-medium mb-2">Delegation Concentration</h3>
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow dark:shadow-gray-700 col-span-1 md:col-span-2">
+          <h3 className="text-lg font-medium mb-2 dark:text-white">Delegation Concentration</h3>
           {topDelegates.length > 0 ? (
             <>
               <div className="h-8 w-full flex items-center">
@@ -1287,19 +1413,19 @@ const AnalyticsTab = () => {
                   return (
                     <div
                       key={index}
-                      className={`h-8 ${index % 2 === 0 ? 'bg-blue-500' : 'bg-blue-700'}`}
+                      className={`h-8 ${index % 2 === 0 ? 'bg-blue-500 dark:bg-blue-600' : 'bg-blue-700 dark:bg-blue-800'}`}
                       style={{ width: `${width}%` }}
                       title={`${delegate.address}: ${formatPercentage(delegate.percentage / 100)}`}
                     ></div>
                   );
                 })}
               </div>
-              <div className="mt-2 text-sm text-gray-600">
+              <div className="mt-2 text-sm text-gray-600 dark:text-gray-400">
                 Top {topDelegates.length} delegates control {formatPercentage(Math.min(100, totalDelegatedPercentage) / 100)} of delegated voting power
               </div>
             </>
           ) : (
-            <div className="p-4 text-center text-gray-500">
+            <div className="p-4 text-center text-gray-500 dark:text-gray-400">
               No delegation data available. Delegations occur when token holders delegate their voting power to other addresses.
             </div>
           )}
@@ -1310,39 +1436,39 @@ const AnalyticsTab = () => {
 
   // Render proposal analytics
   const renderProposalAnalytics = () => {
-    if (!proposalAnalytics) return <div>No proposal data available</div>;
+    if (!proposalAnalytics) return <div className="dark:text-gray-300">No proposal data available</div>;
     
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <div className="bg-white p-4 rounded-lg shadow">
-          <h3 className="text-lg font-medium mb-2">Proposal Overview</h3>
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow dark:shadow-gray-700">
+          <h3 className="text-lg font-medium mb-2 dark:text-white">Proposal Overview</h3>
           <div className="grid grid-cols-2 gap-2">
-            <div>Total Proposals:</div>
-            <div className="font-bold text-right">{proposalAnalytics.totalProposals}</div>
-            <div>Active:</div>
-            <div className="font-bold text-right">{proposalAnalytics.activeProposals}</div>
-            <div>Succeeded:</div>
-            <div className="font-bold text-right">{proposalAnalytics.succeededProposals}</div>
-            <div>Queued:</div>
-            <div className="font-bold text-right">{proposalAnalytics.queuedProposals || 0}</div>
-            <div>Executed:</div>
-            <div className="font-bold text-right">{proposalAnalytics.executedProposals}</div>
-            <div>Defeated:</div>
-            <div className="font-bold text-right">{proposalAnalytics.defeatedProposals}</div>
-            <div>Canceled:</div>
-            <div className="font-bold text-right">{proposalAnalytics.canceledProposals}</div>
-            <div>Expired:</div>
-            <div className="font-bold text-right">{proposalAnalytics.expiredProposals || 0}</div>
+            <div className="dark:text-gray-300">Total Proposals:</div>
+            <div className="font-bold text-right dark:text-gray-200">{proposalAnalytics.totalProposals}</div>
+            <div className="dark:text-gray-300">Active:</div>
+            <div className="font-bold text-right dark:text-gray-200">{proposalAnalytics.activeProposals}</div>
+            <div className="dark:text-gray-300">Succeeded:</div>
+            <div className="font-bold text-right dark:text-gray-200">{proposalAnalytics.succeededProposals}</div>
+            <div className="dark:text-gray-300">Queued:</div>
+            <div className="font-bold text-right dark:text-gray-200">{proposalAnalytics.queuedProposals || 0}</div>
+            <div className="dark:text-gray-300">Executed:</div>
+            <div className="font-bold text-right dark:text-gray-200">{proposalAnalytics.executedProposals}</div>
+            <div className="dark:text-gray-300">Defeated:</div>
+            <div className="font-bold text-right dark:text-gray-200">{proposalAnalytics.defeatedProposals}</div>
+            <div className="dark:text-gray-300">Canceled:</div>
+            <div className="font-bold text-right dark:text-gray-200">{proposalAnalytics.canceledProposals}</div>
+            <div className="dark:text-gray-300">Expired:</div>
+            <div className="font-bold text-right dark:text-gray-200">{proposalAnalytics.expiredProposals || 0}</div>
           </div>
         </div>
         
-        <div className="bg-white p-4 rounded-lg shadow">
-          <h3 className="text-lg font-medium mb-2">Success Metrics</h3>
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow dark:shadow-gray-700">
+          <h3 className="text-lg font-medium mb-2 dark:text-white">Success Metrics</h3>
           <div className="grid grid-cols-1 gap-4">
             <div>
               <div className="flex justify-between mb-1">
-                <span>Success Rate:</span>
-                <span className="font-bold">{formatPercentage(proposalAnalytics.successRate / 100)}</span>
+                <span className="dark:text-gray-300">Success Rate:</span>
+                <span className="font-bold dark:text-gray-200">{formatPercentage(proposalAnalytics.successRate / 100)}</span>
               </div>
               <ProgressBar 
                 value={proposalAnalytics.successRate} 
@@ -1353,8 +1479,8 @@ const AnalyticsTab = () => {
             
             <div>
               <div className="flex justify-between mb-1">
-                <span>Avg Voting Turnout:</span>
-                <span className="font-bold">{formatPercentage(proposalAnalytics.avgVotingTurnout / 100)}</span>
+                <span className="dark:text-gray-300">Avg Voting Turnout:</span>
+                <span className="font-bold dark:text-gray-200">{formatPercentage(proposalAnalytics.avgVotingTurnout / 100)}</span>
               </div>
               <ProgressBar 
                 value={proposalAnalytics.avgVotingTurnout} 
@@ -1365,8 +1491,8 @@ const AnalyticsTab = () => {
             
             <div>
               <div className="flex justify-between mb-1">
-                <span>Execution Rate:</span>
-                <span className="font-bold">
+                <span className="dark:text-gray-300">Execution Rate:</span>
+                <span className="font-bold dark:text-gray-200">
                   {formatPercentage(proposalAnalytics.totalProposals > 0 ? 
                     (proposalAnalytics.executedProposals / proposalAnalytics.totalProposals) : 0)}
                 </span>
@@ -1380,67 +1506,67 @@ const AnalyticsTab = () => {
           </div>
         </div>
         
-        <div className="bg-white p-4 rounded-lg shadow">
-          <h3 className="text-lg font-medium mb-2">Proposal Distribution</h3>
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow dark:shadow-gray-700">
+          <h3 className="text-lg font-medium mb-2 dark:text-white">Proposal Distribution</h3>
           {proposalAnalytics.totalProposals > 0 ? (
             <div>
               {/* Simple visual representation instead of a chart */}
               <div className="flex items-center mb-2">
                 <div 
-                  className="h-4 bg-yellow-400" 
+                  className="h-4 bg-yellow-400 dark:bg-yellow-500" 
                   style={{ width: `${(proposalAnalytics.activeProposals / proposalAnalytics.totalProposals) * 100}%` }}
                 ></div>
                 <div 
-                  className="h-4 bg-green-400" 
+                  className="h-4 bg-green-400 dark:bg-green-500" 
                   style={{ width: `${(proposalAnalytics.succeededProposals / proposalAnalytics.totalProposals) * 100}%` }}
                 ></div>
                 <div 
-                  className="h-4 bg-purple-400" 
+                  className="h-4 bg-purple-400 dark:bg-purple-500" 
                   style={{ width: `${(proposalAnalytics.queuedProposals / proposalAnalytics.totalProposals) * 100}%` }}
                 ></div>
                 <div 
-                  className="h-4 bg-blue-400" 
+                  className="h-4 bg-blue-400 dark:bg-blue-500" 
                   style={{ width: `${(proposalAnalytics.executedProposals / proposalAnalytics.totalProposals) * 100}%` }}
                 ></div>
                 <div 
-                  className="h-4 bg-red-400" 
+                  className="h-4 bg-red-400 dark:bg-red-500" 
                   style={{ width: `${(proposalAnalytics.defeatedProposals / proposalAnalytics.totalProposals) * 100}%` }}
                 ></div>
                 <div 
-                  className="h-4 bg-gray-400" 
+                  className="h-4 bg-gray-400 dark:bg-gray-500" 
                   style={{ width: `${(proposalAnalytics.canceledProposals / proposalAnalytics.totalProposals) * 100}%` }}
                 ></div>
               </div>
               
               <div className="grid grid-cols-3 gap-3 text-sm">
                 <div className="flex items-center mb-2">
-                  <div className="w-3 h-3 bg-yellow-400 mr-2"></div>
-                  <span>Active</span>
+                  <div className="w-3 h-3 bg-yellow-400 dark:bg-yellow-500 mr-2"></div>
+                  <span className="dark:text-gray-300">Active</span>
                 </div>
                 <div className="flex items-center mb-2">
-                  <div className="w-3 h-3 bg-green-400 mr-2"></div>
-                  <span>Succeeded</span>
+                  <div className="w-3 h-3 bg-green-400 dark:bg-green-500 mr-2"></div>
+                  <span className="dark:text-gray-300">Succeeded</span>
                 </div>
                 <div className="flex items-center mb-2">
-                  <div className="w-3 h-3 bg-purple-400 mr-2"></div>
-                  <span>Queued</span>
+                  <div className="w-3 h-3 bg-purple-400 dark:bg-purple-500 mr-2"></div>
+                  <span className="dark:text-gray-300">Queued</span>
                 </div>
                 <div className="flex items-center">
-                  <div className="w-3 h-3 bg-blue-400 mr-2"></div>
-                  <span>Executed</span>
+                  <div className="w-3 h-3 bg-blue-400 dark:bg-blue-500 mr-2"></div>
+                  <span className="dark:text-gray-300">Executed</span>
                 </div>
                 <div className="flex items-center">
-                  <div className="w-3 h-3 bg-red-400 mr-2"></div>
-                  <span>Defeated</span>
+                  <div className="w-3 h-3 bg-red-400 dark:bg-red-500 mr-2"></div>
+                  <span className="dark:text-gray-300">Defeated</span>
                 </div>
                 <div className="flex items-center">
-                  <div className="w-3 h-3 bg-gray-400 mr-2"></div>
-                  <span>Canceled</span>
+                  <div className="w-3 h-3 bg-gray-400 dark:bg-gray-500 mr-2"></div>
+                  <span className="dark:text-gray-300">Canceled</span>
                 </div>
               </div>
             </div>
           ) : (
-            <div className="text-gray-500">No proposals created yet</div>
+            <div className="text-gray-500 dark:text-gray-400">No proposals created yet</div>
           )}
         </div>
       </div>
@@ -1449,51 +1575,51 @@ const AnalyticsTab = () => {
 
   // Render voter analytics
   const renderVoterAnalytics = () => {
-    if (!voterAnalytics) return <div>No voter data available</div>;
+    if (!voterAnalytics) return <div className="dark:text-gray-300">No voter data available</div>;
     
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="bg-white p-4 rounded-lg shadow">
-          <h3 className="text-lg font-medium mb-2">Delegation Overview</h3>
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow dark:shadow-gray-700">
+          <h3 className="text-lg font-medium mb-2 dark:text-white">Delegation Overview</h3>
           <div className="grid grid-cols-2 gap-2">
-            <div>Total Delegators:</div>
-            <div className="font-bold text-right">{voterAnalytics.totalDelegators}</div>
-            <div>Total Delegates:</div>
-            <div className="font-bold text-right">{voterAnalytics.totalDelegates}</div>
+            <div className="dark:text-gray-300">Total Delegators:</div>
+            <div className="font-bold text-right dark:text-gray-200">{voterAnalytics.totalDelegators}</div>
+            <div className="dark:text-gray-300">Total Delegates:</div>
+            <div className="font-bold text-right dark:text-gray-200">{voterAnalytics.totalDelegates}</div>
             
-            <div>Active Voting Power:</div>
-            <div className="font-bold text-right">{formatTokenAmount(voterAnalytics.activeDelegated)} JUST</div>
+            <div className="dark:text-gray-300">Active Voting Power:</div>
+            <div className="font-bold text-right dark:text-gray-200">{formatTokenAmount(voterAnalytics.activeDelegated)} JUST</div>
           </div>
         </div>
         
-        <div className="bg-white p-4 rounded-lg shadow">
-          <h3 className="text-lg font-medium mb-2">Voter Engagement</h3>
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow dark:shadow-gray-700">
+          <h3 className="text-lg font-medium mb-2 dark:text-white">Voter Engagement</h3>
           <div className="grid grid-cols-1 gap-4">
             <div>
               <div className="flex justify-between mb-1">
-                <span>Governance Participation:</span>
-                <span className="font-bold">{formatPercentage(voterAnalytics.participationRate)}</span>
+                <span className="dark:text-gray-300">Governance Participation:</span>
+                <span className="font-bold dark:text-gray-200">{formatPercentage(voterAnalytics.participationRate)}</span>
               </div>
               <ProgressBar 
                 value={voterAnalytics.participationRate * 100} 
                 max={100} 
                 color="bg-green-500" 
               />
-              <div className="text-sm text-gray-500 mt-1">
+              <div className="text-sm text-gray-500 dark:text-gray-400 mt-1">
                 Percentage of token holders actively participating in governance
               </div>
             </div>
             
             <div>
               <div className="flex justify-between mb-1">
-                <span>Delegation Ratio:</span>
-                <span className="font-bold">
+                <span className="dark:text-gray-300">Delegation Ratio:</span>
+                <span className="font-bold dark:text-gray-200">
                   {voterAnalytics.totalDelegators > 0 ? 
                     (voterAnalytics.totalDelegates / voterAnalytics.totalDelegators).toFixed(2) : 
                     '0.00'} delegates per delegator
                 </span>
               </div>
-              <div className="text-sm text-gray-600 mt-1">
+              <div className="text-sm text-gray-600 dark:text-gray-400 mt-1">
                 The ratio of delegates to delegators indicates how decentralized governance decisions are.
                 A lower ratio means fewer delegates are representing more token holders.
               </div>
@@ -1506,29 +1632,29 @@ const AnalyticsTab = () => {
 
   // Render token analytics
   const renderTokenAnalytics = () => {
-    if (!tokenAnalytics) return <div>No token data available</div>;
+    if (!tokenAnalytics) return <div className="dark:text-gray-300">No token data available</div>;
     
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <div className="bg-white p-4 rounded-lg shadow">
-          <h3 className="text-lg font-medium mb-2">Token Supply</h3>
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow dark:shadow-gray-700">
+          <h3 className="text-lg font-medium mb-2 dark:text-white">Token Supply</h3>
           <div className="grid grid-cols-2 gap-2">
-            <div>Total Supply:</div>
-            <div className="font-bold text-right">{formatTokenAmount(tokenAnalytics.totalSupply)} JUST</div>
-            <div>Active Holders:</div>
-            <div className="font-bold text-right">{tokenAnalytics.activeHolders}</div>
-            <div>Active Delegates:</div>
-            <div className="font-bold text-right">{tokenAnalytics.activeDelegates}</div>
+            <div className="dark:text-gray-300">Total Supply:</div>
+            <div className="font-bold text-right dark:text-gray-200">{formatTokenAmount(tokenAnalytics.totalSupply)} JUST</div>
+            <div className="dark:text-gray-300">Active Holders:</div>
+            <div className="font-bold text-right dark:text-gray-200">{tokenAnalytics.activeHolders}</div>
+            <div className="dark:text-gray-300">Active Delegates:</div>
+            <div className="font-bold text-right dark:text-gray-200">{tokenAnalytics.activeDelegates}</div>
           </div>
         </div>
         
-        <div className="bg-white p-4 rounded-lg shadow">
-          <h3 className="text-lg font-medium mb-2">Delegation Status</h3>
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow dark:shadow-gray-700">
+          <h3 className="text-lg font-medium mb-2 dark:text-white">Delegation Status</h3>
           <div className="grid grid-cols-2 gap-2">
-            <div>Total Delegated:</div>
-            <div className="font-bold text-right">{formatTokenAmount(tokenAnalytics.totalDelegated)} JUST</div>
-            <div>Percentage of Supply:</div>
-            <div className="font-bold text-right">{formatPercentage(tokenAnalytics.percentageDelegated / 100)}</div>
+            <div className="dark:text-gray-300">Total Delegated:</div>
+            <div className="font-bold text-right dark:text-gray-200">{formatTokenAmount(tokenAnalytics.totalDelegated)} JUST</div>
+            <div className="dark:text-gray-300">Percentage of Supply:</div>
+            <div className="font-bold text-right dark:text-gray-200">{formatPercentage(tokenAnalytics.percentageDelegated / 100)}</div>
           </div>
           
           <div className="mt-4">
@@ -1537,23 +1663,23 @@ const AnalyticsTab = () => {
               max={100} 
               color="bg-blue-500" 
             />
-            <div className="text-sm text-gray-500 mt-1">
+            <div className="text-sm text-gray-500 dark:text-gray-400 mt-1">
               Percentage of total token supply that has been delegated
             </div>
           </div>
         </div>
         
-        <div className="bg-white p-4 rounded-lg shadow">
-          <h3 className="text-lg font-medium mb-2">Token Distribution</h3>
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow dark:shadow-gray-700">
+          <h3 className="text-lg font-medium mb-2 dark:text-white">Token Distribution</h3>
           <div className="text-center pt-4">
-            <div className="text-4xl font-bold">{tokenAnalytics.activeHolders}</div>
-            <div className="text-gray-500">Active Token Holders</div>
+            <div className="text-4xl font-bold dark:text-gray-200">{tokenAnalytics.activeHolders}</div>
+            <div className="text-gray-500 dark:text-gray-400">Active Token Holders</div>
           </div>
           
           <div className="mt-4">
             <div className="flex justify-between mb-1">
-              <span>Holders / Delegates Ratio:</span>
-              <span className="font-bold">
+              <span className="dark:text-gray-300">Holders / Delegates Ratio:</span>
+              <span className="font-bold dark:text-gray-200">
                 {tokenAnalytics.activeDelegates > 0 ? 
                   `${(tokenAnalytics.activeHolders / tokenAnalytics.activeDelegates).toFixed(2)}:1` : 
                   '0:0'}
@@ -1567,33 +1693,33 @@ const AnalyticsTab = () => {
 
   // Render timelock analytics - Updated to include properly formatted executor threshold
   const renderTimelockAnalytics = () => {
-    if (!timelockAnalytics) return <div>No timelock data available</div>;
+    if (!timelockAnalytics) return <div className="dark:text-gray-300">No timelock data available</div>;
     
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="bg-white p-4 rounded-lg shadow">
-          <h3 className="text-lg font-medium mb-2">Timelock Configuration</h3>
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow dark:shadow-gray-700">
+          <h3 className="text-lg font-medium mb-2 dark:text-white">Timelock Configuration</h3>
           <div className="grid grid-cols-2 gap-2">
-            <div>Minimum Delay:</div>
-            <div className="font-bold text-right">{formatDuration(timelockAnalytics.minDelay)}</div>
-            <div>Maximum Delay:</div>
-            <div className="font-bold text-right">{formatDuration(timelockAnalytics.maxDelay)}</div>
-            <div>Grace Period:</div>
-            <div className="font-bold text-right">{formatDuration(timelockAnalytics.gracePeriod)}</div>
-            <div>Pending Transactions:</div>
-            <div className="font-bold text-right">{timelockAnalytics.pendingTransactions}</div>
-            <div>Executor Threshold:</div>
-            <div className="font-bold text-right">{formatTokenAmount(timelockAnalytics.executorThreshold)} JUST</div>
+            <div className="dark:text-gray-300">Minimum Delay:</div>
+            <div className="font-bold text-right dark:text-gray-200">{formatDuration(timelockAnalytics.minDelay)}</div>
+            <div className="dark:text-gray-300">Maximum Delay:</div>
+            <div className="font-bold text-right dark:text-gray-200">{formatDuration(timelockAnalytics.maxDelay)}</div>
+            <div className="dark:text-gray-300">Grace Period:</div>
+            <div className="font-bold text-right dark:text-gray-200">{formatDuration(timelockAnalytics.gracePeriod)}</div>
+            <div className="dark:text-gray-300">Pending Transactions:</div>
+            <div className="font-bold text-right dark:text-gray-200">{timelockAnalytics.pendingTransactions}</div>
+            <div className="dark:text-gray-300">Executor Threshold:</div>
+            <div className="font-bold text-right dark:text-gray-200">{formatTokenAmount(timelockAnalytics.executorThreshold)} JUST</div>
           </div>
         </div>
         
-        <div className="bg-white p-4 rounded-lg shadow">
-          <h3 className="text-lg font-medium mb-2">Threat Level Delays</h3>
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow dark:shadow-gray-700">
+          <h3 className="text-lg font-medium mb-2 dark:text-white">Threat Level Delays</h3>
           <div className="space-y-3">
             <div>
               <div className="flex justify-between mb-1">
-                <span>Low Threat:</span>
-                <span className="font-bold">{formatDuration(timelockAnalytics.lowThreatDelay)}</span>
+                <span className="dark:text-gray-300">Low Threat:</span>
+                <span className="font-bold dark:text-gray-200">{formatDuration(timelockAnalytics.lowThreatDelay)}</span>
               </div>
               <ProgressBar 
                 value={timelockAnalytics.lowThreatDelay} 
@@ -1604,8 +1730,8 @@ const AnalyticsTab = () => {
             
             <div>
               <div className="flex justify-between mb-1">
-                <span>Medium Threat:</span>
-                <span className="font-bold">{formatDuration(timelockAnalytics.mediumThreatDelay)}</span>
+                <span className="dark:text-gray-300">Medium Threat:</span>
+                <span className="font-bold dark:text-gray-200">{formatDuration(timelockAnalytics.mediumThreatDelay)}</span>
               </div>
               <ProgressBar 
                 value={timelockAnalytics.mediumThreatDelay} 
@@ -1616,8 +1742,8 @@ const AnalyticsTab = () => {
             
             <div>
               <div className="flex justify-between mb-1">
-                <span>High Threat:</span>
-                <span className="font-bold">{formatDuration(timelockAnalytics.highThreatDelay)}</span>
+                <span className="dark:text-gray-300">High Threat:</span>
+                <span className="font-bold dark:text-gray-200">{formatDuration(timelockAnalytics.highThreatDelay)}</span>
               </div>
               <ProgressBar 
                 value={timelockAnalytics.highThreatDelay} 
@@ -1628,8 +1754,8 @@ const AnalyticsTab = () => {
             
             <div>
               <div className="flex justify-between mb-1">
-                <span>Critical Threat:</span>
-                <span className="font-bold">{formatDuration(timelockAnalytics.criticalThreatDelay)}</span>
+                <span className="dark:text-gray-300">Critical Threat:</span>
+                <span className="font-bold dark:text-gray-200">{formatDuration(timelockAnalytics.criticalThreatDelay)}</span>
               </div>
               <ProgressBar 
                 value={timelockAnalytics.criticalThreatDelay} 
@@ -1646,44 +1772,44 @@ const AnalyticsTab = () => {
   // Render governance parameters section like in VoteTab
   const renderGovernanceParams = () => {
     return (
-      <div className="bg-white p-6 rounded-lg shadow mb-6">
+      <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow dark:shadow-gray-700 mb-6">
         <div className="mb-4">
-          <h3 className="text-lg font-medium">Governance Parameters</h3>
-          {govParams.loading && <div className="text-sm text-gray-500">Loading...</div>}
-          {govParams.error && <div className="text-sm text-red-500">{govParams.error}</div>}
+          <h3 className="text-lg font-medium dark:text-white">Governance Parameters</h3>
+          {govParams.loading && <div className="text-sm text-gray-500 dark:text-gray-400">Loading...</div>}
+          {govParams.error && <div className="text-sm text-red-500 dark:text-red-400">{govParams.error}</div>}
         </div>
         
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-          <div className="bg-indigo-50 p-3 rounded-lg">
-            <div className="text-sm text-indigo-700 font-medium">Quorum</div>
-            <div className="text-lg font-bold">{govParams.formattedQuorum || '0 JUST'}</div>
+          <div className="bg-indigo-50 dark:bg-indigo-900 p-3 rounded-lg">
+            <div className="text-sm text-indigo-700 dark:text-indigo-300 font-medium">Quorum</div>
+            <div className="text-lg font-bold dark:text-indigo-100">{govParams.formattedQuorum || '0 JUST'}</div>
           </div>
-          <div className="bg-indigo-50 p-3 rounded-lg">
-            <div className="text-sm text-indigo-700 font-medium">Voting Duration</div>
-            <div className="text-lg font-bold">{govParams.formattedDuration || '0 days'}</div>
+          <div className="bg-indigo-50 dark:bg-indigo-900 p-3 rounded-lg">
+            <div className="text-sm text-indigo-700 dark:text-indigo-300 font-medium">Voting Duration</div>
+            <div className="text-lg font-bold dark:text-indigo-100">{govParams.formattedDuration || '0 days'}</div>
           </div>
-          <div className="bg-indigo-50 p-3 rounded-lg">
-            <div className="text-sm text-indigo-700 font-medium">Proposal Threshold</div>
-            <div className="text-lg font-bold">{govParams.formattedThreshold || '0 JUST'}</div>
+          <div className="bg-indigo-50 dark:bg-indigo-900 p-3 rounded-lg">
+            <div className="text-sm text-indigo-700 dark:text-indigo-300 font-medium">Proposal Threshold</div>
+            <div className="text-lg font-bold dark:text-indigo-100">{govParams.formattedThreshold || '0 JUST'}</div>
           </div>
-          <div className="bg-indigo-50 p-3 rounded-lg">
-            <div className="text-sm text-indigo-700 font-medium">Proposal Stake</div>
-            <div className="text-lg font-bold">{govParams.formattedStake || '0 JUST'}</div>
+          <div className="bg-indigo-50 dark:bg-indigo-900 p-3 rounded-lg">
+            <div className="text-sm text-indigo-700 dark:text-indigo-300 font-medium">Proposal Stake</div>
+            <div className="text-lg font-bold dark:text-indigo-100">{govParams.formattedStake || '0 JUST'}</div>
           </div>
         </div>
         
         <div className="grid grid-cols-3 md:grid-cols-3 gap-3 mx-auto max-w-3xl">
-          <div className="p-3 rounded-lg border border-gray-200">
-            <div className="text-sm text-gray-700 font-medium">Defeated Refund</div>
-            <div className="text-lg">{govParams.defeatedRefundPercentage || '0'}%</div>
+          <div className="p-3 rounded-lg border border-gray-200 dark:border-gray-700">
+            <div className="text-sm text-gray-700 dark:text-gray-300 font-medium">Defeated Refund</div>
+            <div className="text-lg dark:text-gray-200">{govParams.defeatedRefundPercentage || '0'}%</div>
           </div>
-          <div className="p-3 rounded-lg border border-gray-200">
-            <div className="text-sm text-gray-700 font-medium">Canceled Refund</div>
-            <div className="text-lg">{govParams.canceledRefundPercentage || '0'}%</div>
+          <div className="p-3 rounded-lg border border-gray-200 dark:border-gray-700">
+            <div className="text-sm text-gray-700 dark:text-gray-300 font-medium">Canceled Refund</div>
+            <div className="text-lg dark:text-gray-200">{govParams.canceledRefundPercentage || '0'}%</div>
           </div>
-          <div className="p-3 rounded-lg border border-gray-200">
-            <div className="text-sm text-gray-700 font-medium">Expired Refund</div>
-            <div className="text-lg">{govParams.expiredRefundPercentage || '0'}%</div>
+          <div className="p-3 rounded-lg border border-gray-200 dark:border-gray-700">
+            <div className="text-sm text-gray-700 dark:text-gray-300 font-medium">Expired Refund</div>
+            <div className="text-lg dark:text-gray-200">{govParams.expiredRefundPercentage || '0'}%</div>
           </div>
         </div>
       </div>
@@ -1692,55 +1818,55 @@ const AnalyticsTab = () => {
 
   // Render health score
   const renderHealthScore = () => {
-    if (!healthScore) return <div>No health score data available. Please ensure all analytics tabs have been loaded.</div>;
+    if (!healthScore) return <div className="dark:text-gray-300">No health score data available. Please ensure all analytics tabs have been loaded.</div>;
     
     const getScoreColor = (score) => {
-      if (score >= 80) return "text-green-600";
-      if (score >= 60) return "text-yellow-600";
-      if (score >= 40) return "text-orange-600";
-      return "text-red-600";
+      if (score >= 80) return "text-green-600 dark:text-green-400";
+      if (score >= 60) return "text-yellow-600 dark:text-yellow-400";
+      if (score >= 40) return "text-orange-600 dark:text-orange-400";
+      return "text-red-600 dark:text-red-400";
     };
     
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="bg-white p-4 rounded-lg shadow col-span-1 md:col-span-2">
-          <h3 className="text-lg font-medium mb-4">Governance Health Score</h3>
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow dark:shadow-gray-700 col-span-1 md:col-span-2">
+          <h3 className="text-lg font-medium mb-4 dark:text-white">Governance Health Score</h3>
           <div className="flex items-center justify-center mb-6">
             <div className="text-center">
               <div className={`text-6xl font-bold ${getScoreColor(healthScore.overall)}`}>
                 {healthScore.overall}
               </div>
-              <div className="text-gray-500 mt-2">out of 100</div>
+              <div className="text-gray-500 dark:text-gray-400 mt-2">out of 100</div>
             </div>
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-            <div className="bg-gray-50 p-3 rounded text-center">
-              <div className="text-sm text-gray-500">Proposal Success</div>
+            <div className="bg-gray-50 dark:bg-gray-700 p-3 rounded text-center">
+              <div className="text-sm text-gray-500 dark:text-gray-400">Proposal Success</div>
               <div className={`text-xl font-bold ${getScoreColor(healthScore.components[0] * 5)}`}>
                 {healthScore.components[0]}/20
               </div>
             </div>
-            <div className="bg-gray-50 p-3 rounded text-center">
-              <div className="text-sm text-gray-500">Participation</div>
+            <div className="bg-gray-50 dark:bg-gray-700 p-3 rounded text-center">
+              <div className="text-sm text-gray-500 dark:text-gray-400">Participation</div>
               <div className={`text-xl font-bold ${getScoreColor(healthScore.components[1] * 5)}`}>
                 {healthScore.components[1]}/20
               </div>
             </div>
-            <div className="bg-gray-50 p-3 rounded text-center">
-              <div className="text-sm text-gray-500">Delegation</div>
+            <div className="bg-gray-50 dark:bg-gray-700 p-3 rounded text-center">
+              <div className="text-sm text-gray-500 dark:text-gray-400">Delegation</div>
               <div className={`text-xl font-bold ${getScoreColor(healthScore.components[2] * 5)}`}>
                 {healthScore.components[2]}/20
               </div>
             </div>
-            <div className="bg-gray-50 p-3 rounded text-center">
-              <div className="text-sm text-gray-500">Activity</div>
+            <div className="bg-gray-50 dark:bg-gray-700 p-3 rounded text-center">
+              <div className="text-sm text-gray-500 dark:text-gray-400">Activity</div>
               <div className={`text-xl font-bold ${getScoreColor(healthScore.components[3] * 5)}`}>
                 {healthScore.components[3]}/20
               </div>
             </div>
-            <div className="bg-gray-50 p-3 rounded text-center">
-              <div className="text-sm text-gray-500">Security</div>
+            <div className="bg-gray-50 dark:bg-gray-700 p-3 rounded text-center">
+              <div className="text-sm text-gray-500 dark:text-gray-400">Security</div>
               <div className={`text-xl font-bold ${getScoreColor(healthScore.components[4] * 5)}`}>
                 {healthScore.components[4]}/20
               </div>
@@ -1748,17 +1874,17 @@ const AnalyticsTab = () => {
           </div>
         </div>
         
-        <div className="bg-white p-4 rounded-lg shadow">
-          <h3 className="text-lg font-medium mb-2">Interpretation</h3>
-          <p className="text-gray-700 mb-4">
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow dark:shadow-gray-700">
+          <h3 className="text-lg font-medium mb-2 dark:text-white">Interpretation</h3>
+          <p className="text-gray-700 dark:text-gray-300 mb-4">
             {healthScore.overall >= 80 && "Your DAO governance is in excellent health with strong participation and balanced decision-making."}
             {healthScore.overall >= 60 && healthScore.overall < 80 && "Your DAO governance is functioning well, though there's room for improvement in some areas."}
             {healthScore.overall >= 40 && healthScore.overall < 60 && "Your DAO governance needs attention in several key areas to improve effectiveness."}
             {healthScore.overall < 40 && "Your DAO governance is struggling and requires significant improvements across multiple dimensions."}
           </p>
           
-          <h4 className="font-medium mt-4">Recommendations</h4>
-          <ul className="list-disc pl-5 mt-2 space-y-1 text-gray-700">
+          <h4 className="font-medium mt-4 dark:text-white">Recommendations</h4>
+          <ul className="list-disc pl-5 mt-2 space-y-1 text-gray-700 dark:text-gray-300">
             {healthScore.components[0] < 10 && (
               <li>Improve proposal success rate by enhancing planning and community discussion before submission</li>
             )}
@@ -1777,13 +1903,13 @@ const AnalyticsTab = () => {
           </ul>
         </div>
         
-        <div className="bg-white p-4 rounded-lg shadow">
-          <h3 className="text-lg font-medium mb-2">Score Breakdown</h3>
-          <p className="text-gray-700 mb-4">
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow dark:shadow-gray-700">
+          <h3 className="text-lg font-medium mb-2 dark:text-white">Score Breakdown</h3>
+          <p className="text-gray-700 dark:text-gray-300 mb-4">
             The governance health score is calculated based on five key dimensions:
           </p>
           
-          <div className="space-y-2 text-sm">
+          <div className="space-y-2 text-sm dark:text-gray-300">
             <div>
               <span className="font-medium">Proposal Success (20%):</span> Measures proposal success rate and execution
             </div>
@@ -1808,12 +1934,10 @@ const AnalyticsTab = () => {
   // Main render function
   return (
     <div className="p-4">
-                    <h2 className="text-xl font-semibold dark:text-white">DAO Governance Analytics</h2>
-
-      <h2 className="text-2xl font-bold mb-6"></h2>
+      <h2 className="text-xl font-semibold dark:text-white">DAO Governance Analytics</h2>
       
       {!contractsReady && (
-        <div className="bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-3 rounded mb-4">
+        <div className="bg-yellow-100 dark:bg-yellow-900 border border-yellow-400 dark:border-yellow-700 text-yellow-700 dark:text-yellow-300 px-4 py-3 rounded mb-4">
           <strong>Wallet not connected!</strong> Please connect your wallet to access contract data.
         </div>
       )}
@@ -1821,17 +1945,14 @@ const AnalyticsTab = () => {
       {/* Add Governance Parameters section from VoteTab - only if we have data */}
       {contractsReady && renderGovernanceParams()}
       
-      {/* Hide debug info in production */}
-      {/* {renderDebugInfo()} */}
       {renderMetricButtons()}
-      
       
       {loading ? (
         <div className="flex justify-center items-center py-12">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 dark:border-blue-400"></div>
         </div>
       ) : error ? (
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
+        <div className="bg-red-100 dark:bg-red-900 border border-red-400 dark:border-red-700 text-red-700 dark:text-red-300 px-4 py-3 rounded">
           {error}
         </div>
       ) : (
@@ -1845,22 +1966,22 @@ const AnalyticsTab = () => {
           
           {/* Show appropriate message when data is missing */}
           {selectedMetric === 'proposal' && !proposalAnalytics && !loading && !error && (
-            <div className="text-center py-8">No proposal data available</div>
+            <div className="text-center py-8 dark:text-gray-300">No proposal data available</div>
           )}
           {selectedMetric === 'voter' && !voterAnalytics && !loading && !error && (
-            <div className="text-center py-8">No voter data available</div>
+            <div className="text-center py-8 dark:text-gray-300">No voter data available</div>
           )}
           {selectedMetric === 'token' && !tokenAnalytics && !loading && !error && (
-            <div className="text-center py-8">No token data available</div>
+            <div className="text-center py-8 dark:text-gray-300">No token data available</div>
           )}
           {selectedMetric === 'timelock' && !timelockAnalytics && !loading && !error && (
-            <div className="text-center py-8">No timelock data available</div>
+            <div className="text-center py-8 dark:text-gray-300">No timelock data available</div>
           )}
           {selectedMetric === 'health' && !healthScore && !loading && !error && (
-            <div className="text-center py-8">No health score data available. Ensure all analytics tabs have been loaded.</div>
+            <div className="text-center py-8 dark:text-gray-300">No health score data available. Ensure all analytics tabs have been loaded.</div>
           )}
           {selectedMetric === 'delegation' && !delegationAnalytics && !loading && !error && (
-            <div className="text-center py-8">No delegation data available</div>
+            <div className="text-center py-8 dark:text-gray-300">No delegation data available</div>
           )}
         </div>
       )}

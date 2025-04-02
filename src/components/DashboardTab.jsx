@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Clock, ArrowRight, RefreshCw } from 'lucide-react';
+import { Clock, ArrowRight, RefreshCw, Users, FileText, Layers } from 'lucide-react';
 import { formatPercentage, formatCountdown } from '../utils/formatters';
 import { formatTokenAmount } from '../utils/tokenFormatters';
 import Loader from './Loader';
 import blockchainDataCache from '../utils/blockchainDataCache';
 import { useWeb3 } from '../contexts/Web3Context';
 import DismissibleMintNotice from './DismissibleMintNotice';
+
 
 // Cache expiration time in milliseconds (1 minute)
 const CACHE_EXPIRATION = 60 * 1000;
@@ -410,7 +411,10 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
                 <p className="text-gray-500 dark:text-gray-400">Token Holders</p>
-                <p className="text-2xl font-bold dark:text-white">{formatNumberDisplay(stats.totalHolders)}</p>
+                <p className="text-2xl font-bold dark:text-white flex items-center">
+  <Users className="h-5 w-5 mr-2 text-blue-500 dark:text-blue-400" />
+  {formatNumberDisplay(stats.totalHolders)}
+</p>
                 {stats.totalHolders === 0 && <p className="text-xs text-orange-500 dark:text-orange-400"></p>}
               </div>
               <div>
@@ -419,13 +423,23 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
                 {stats.circulatingSupply === "0" && <p className="text-xs text-orange-500 dark:text-orange-400"></p>}
               </div>
               <div>
-                <p className="text-gray-500 dark:text-gray-400">Active Proposals</p>
-                <p className="text-2xl font-bold dark:text-white">{directStats.activeProposalsCount}</p>
-              </div>
-              <div>
-                <p className="text-gray-500 dark:text-gray-400">Total Proposals</p>
-                <p className="text-2xl font-bold dark:text-white">{directStats.totalProposalsCount}</p>
-              </div>
+              <p className="text-gray-500 dark:text-gray-400">
+                Active <br /> Proposals
+              </p>
+              <p className="text-2xl font-bold dark:text-white flex items-center">
+              <FileText className="h-5 w-5 mr-2 text-green-500 dark:text-green-400" />
+              {directStats.activeProposalsCount}
+              </p>
+            </div>
+            <div>
+              <p className="text-gray-500 dark:text-gray-400">
+                Total <br /> Proposals
+              </p>
+              <p className="text-2xl font-bold dark:text-white flex items-center">
+                <Layers className="h-5 w-5 mr-2 text-purple-500 dark:text-purple-400" />
+                {directStats.totalProposalsCount}
+              </p>
+            </div>
             </div>
           )}
         </div>

@@ -37,7 +37,9 @@ export function useDAOStats() {
       // 2. Try to get transfer events to find holders
       const filter = contracts.token.filters.Transfer();
       const blockNumber = await contracts.token.provider.getBlockNumber();
-      const fromBlock = Math.max(0, blockNumber - 10000); // Last 10,000 blocks should be sufficient
+      
+      // Look back further in history to catch more transfer events
+      const fromBlock = Math.max(0, blockNumber - 50000); // Increased from 10000 to 50000
       
       console.log(`Querying transfer events from block ${fromBlock} to ${blockNumber}`);
       const events = await contracts.token.queryFilter(filter, fromBlock);
@@ -56,6 +58,26 @@ export function useDAOStats() {
         }
       }
       
+      // Check early blocks if we didn't start from block 0
+      if (fromBlock > 0) {
+        try {
+          console.log("Checking initial token distribution events...");
+          const initialEvents = await contracts.token.queryFilter(filter, 0, Math.min(1000, fromBlock - 1));
+          for (const event of initialEvents) {
+            if (event.args) {
+              if (event.args.from !== ethers.constants.AddressZero) {
+                potentialHolders.add(event.args.from.toLowerCase());
+              }
+              if (event.args.to !== ethers.constants.AddressZero) {
+                potentialHolders.add(event.args.to.toLowerCase());
+              }
+            }
+          }
+        } catch (error) {
+          console.warn("Error checking initial token events:", error);
+        }
+      }
+      
       console.log(`Found ${potentialHolders.size} potential token holders from events`);
       
       // 4. Check relevant contract addresses
@@ -63,6 +85,8 @@ export function useDAOStats() {
       if (contracts.governance?.address) contractAddresses.push(contracts.governance.address.toLowerCase());
       if (contracts.analyticsHelper?.address) contractAddresses.push(contracts.analyticsHelper.address.toLowerCase());
       if (contracts.timelock?.address) contractAddresses.push(contracts.timelock.address.toLowerCase());
+      // Add the token contract itself as a potential holder
+      if (contracts.token?.address) contractAddresses.push(contracts.token.address.toLowerCase());
       
       // Add these addresses to potential holders
       contractAddresses.forEach(addr => potentialHolders.add(addr));
@@ -99,7 +123,8 @@ export function useDAOStats() {
         const likelyHolders = [
           account, // Connected wallet
           contracts.governance?.address,
-          contracts.timelock?.address
+          contracts.timelock?.address,
+          contracts.token?.address, // Added token contract itself
         ].filter(Boolean);
         
         // Add some early addresses (often used for token distribution)
@@ -129,23 +154,67 @@ export function useDAOStats() {
     } catch (error) {
       console.error("Error in token holder count:", error);
       
-      // Try a simplified approach as last resort
+      // Try a simplified approach as last resort - FIXED to count all holders
       try {
-        // Just try to count any address with positive balance
+        let fallbackCount = 0;
+        
+        // Check connected wallet's signer
         if (contracts.token.signer) {
-          const signerBalance = await contracts.token.balanceOf(contracts.token.signer.address);
-          if (!signerBalance.isZero()) return 1;
+          try {
+            const signerBalance = await contracts.token.balanceOf(contracts.token.signer.address);
+            if (!signerBalance.isZero()) {
+              fallbackCount++;
+              console.log("Found holder: signer");
+            }
+          } catch (e) {}
         }
         
+        // Check current account
         if (account) {
-          const accountBalance = await contracts.token.balanceOf(account);
-          if (!accountBalance.isZero()) return 1;
+          try {
+            const accountBalance = await contracts.token.balanceOf(account);
+            if (!accountBalance.isZero()) {
+              fallbackCount++;
+              console.log("Found holder: account");
+            }
+          } catch (e) {}
         }
         
+        // Check governance contract
         if (contracts.governance?.address) {
-          const govBalance = await contracts.token.balanceOf(contracts.governance.address);
-          if (!govBalance.isZero()) return 1;
+          try {
+            const govBalance = await contracts.token.balanceOf(contracts.governance.address);
+            if (!govBalance.isZero()) {
+              fallbackCount++;
+              console.log("Found holder: governance");
+            }
+          } catch (e) {}
         }
+        
+        // Check token contract itself
+        if (contracts.token?.address) {
+          try {
+            const tokenBalance = await contracts.token.balanceOf(contracts.token.address);
+            if (!tokenBalance.isZero()) {
+              fallbackCount++;
+              console.log("Found holder: token contract");
+            }
+          } catch (e) {}
+        }
+        
+        // Check timelock contract
+        if (contracts.timelock?.address) {
+          try {
+            const timelockBalance = await contracts.token.balanceOf(contracts.timelock.address);
+            if (!timelockBalance.isZero()) {
+              fallbackCount++;
+              console.log("Found holder: timelock");
+            }
+          } catch (e) {}
+        }
+        
+        console.log(`Fallback method found ${fallbackCount} token holders`);
+        return fallbackCount;
       } catch (e) {
         console.error("Final fallback for holders also failed:", e);
       }

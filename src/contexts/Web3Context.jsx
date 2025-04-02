@@ -6,7 +6,6 @@ import { ethers } from 'ethers';
 import JustTokenABI from '../config/abis/JustTokenUpgradeable.json';
 import JustGovernanceABI from '../config/abis/JustGovernanceUpgradeable.json';
 import JustTimelockABI from '../config/abis/JustTimelockUpgradeable.json';
-import JustAnalyticsHelperABI from '../config/abis/JustAnalyticsHelperUpgradeable.json';
 import JustDAOHelperABI from '../config/abis/JustDAOHelperUpgradeable.json';
 import { CONTRACT_ADDRESSES } from '../utils/constants.js';
 
@@ -110,21 +109,6 @@ export function Web3Provider({ children }) {
       } catch (error) {
         console.error("Error initializing timelock contract:", error);
         newContractErrors.timelock = error.message;
-      }
-      
-      // Initialize analytics helper contract
-      try {
-        const analyticsHelperContract = new ethers.Contract(
-          CONTRACT_ADDRESSES.analyticsHelper,
-          JustAnalyticsHelperABI.abi,
-          signer
-        );
-        
-        newContracts.analyticsHelper = analyticsHelperContract;
-        console.log("Analytics helper contract initialized successfully");
-      } catch (error) {
-        console.error("Error initializing analytics helper contract:", error);
-        newContractErrors.analyticsHelper = error.message;
       }
       
       // Initialize DAO helper contract

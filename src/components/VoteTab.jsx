@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
 import useGovernanceParams from '../hooks/useGovernanceParams';
-import { Clock, Check, X, X as XIcon, Calendar, Users, BarChart2, Settings } from 'lucide-react';
+import { Clock, Check, X, X as XIcon, Calendar, Users, BarChart2, Settings, ChevronLeft, ChevronRight } from 'lucide-react';
 import { PROPOSAL_STATES, VOTE_TYPES, THREAT_LEVELS } from '../utils/constants';
 import { formatCountdown } from '../utils/formatters';
 import Loader from './Loader';
 import blockchainDataCache from '../utils/blockchainDataCache';
 import { useWeb3 } from '../contexts/Web3Context';
 import { useBlockchainData } from '../contexts/BlockchainDataContext';
+import { normalizeVoteData, formatVoteTotal } from '../utils/voteUtils';
 
 // Function to parse proposal descriptions and extract HTML content
 function parseProposalDescription(rawDescription) {
@@ -145,6 +146,10 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
   const [quorum, setQuorum] = useState(null);
   const [proposalVoteData, setProposalVoteData] = useState({});
   
+  // Add pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(5);
+  
   // Replace govParams state with the hook
   const govParams = useGovernanceParams();
   
@@ -155,6 +160,15 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
   const [currentThreatLevel, setCurrentThreatLevel] = useState(THREAT_LEVELS.LOW);
   const [threatLevelDelays, setThreatLevelDelays] = useState({});
   const [autoScroll, setAutoScroll] = useState(true);
+  
+  // Debug logging for proposals
+  useEffect(() => {
+    console.log('VoteTab received proposals:', proposals?.length || 0);
+    if (proposals?.length > 0) {
+      const proposalIds = proposals.map(p => Number(p.id));
+      console.log('Proposal ID range:', Math.min(...proposalIds), 'to', Math.max(...proposalIds));
+    }
+  }, [proposals]);
   
   // Helper function to ensure vote count consistency
   const ensureVoteCountConsistency = (data, proposalId) => {
@@ -203,7 +217,7 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
     
     const interval = setInterval(() => {
       cycleThreatLevel('next');
-    }, 3000); // Change every 3 seconds
+    }, 10000); // Change every 3 seconds
     
     return () => clearInterval(interval); // Clean up on unmount
   }, [autoScroll]);
@@ -251,6 +265,7 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
    */
   const isInactiveProposal = useCallback((proposal) => {
     // Check if proposal state is anything other than ACTIVE
+    if (!proposal) return true;
     return proposal.state !== PROPOSAL_STATES.ACTIVE;
   }, [PROPOSAL_STATES]);
 
@@ -905,7 +920,7 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
   
   // When govParams changes, update the quorum state for backward compatibility
   useEffect(() => {
-    setQuorum(govParams.quorum.toString());
+    setQuorum(govParams.quorum?.toString());
   }, [govParams.quorum]);
 
   // Helper function to format time durations in a human-readable way
@@ -926,18 +941,49 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
   };
 
   // Filter proposals based on vote status
-  const filteredProposals = proposals.filter(proposal => {
+  const filteredProposals = proposals.filter(p => {
+    // Safety check for null/undefined proposal
+    if (!p) return false;
+    
     // Check if we've locally voted on this proposal
-    const locallyVoted = votedProposals[proposal.id] !== undefined;
+    const locallyVoted = votedProposals[p.id] !== undefined;
     
     if (voteFilter === 'active') {
       // Only check if proposal is active, don't exclude based on vote status
-      return proposal.state === PROPOSAL_STATES.ACTIVE;
+      return p.state === PROPOSAL_STATES.ACTIVE;
     } else if (voteFilter === 'voted') {
-      return proposal.hasVoted || locallyVoted;
+      return p.hasVoted || locallyVoted;
     }
     return true; // 'all' filter
   });
+  
+  // Sort proposals by ID in descending order (newest first)
+  const sortedProposals = [...filteredProposals].sort((a, b) => Number(b.id) - Number(a.id));
+  
+  // Calculate pagination
+  const indexOfLastItem = currentPage * itemsPerPage;
+  const indexOfFirstItem = indexOfLastItem - itemsPerPage;
+  const currentProposals = sortedProposals.slice(indexOfFirstItem, indexOfLastItem);
+  const totalPages = Math.ceil(sortedProposals.length / itemsPerPage);
+  
+  // Pagination navigation functions
+  const goToPage = (pageNumber) => {
+    if (pageNumber > 0 && pageNumber <= totalPages) {
+      setCurrentPage(pageNumber);
+    }
+  };
+  
+  const goToNextPage = () => {
+    if (currentPage < totalPages) {
+      setCurrentPage(currentPage + 1);
+    }
+  };
+  
+  const goToPreviousPage = () => {
+    if (currentPage > 1) {
+      setCurrentPage(currentPage - 1);
+    }
+  };
 
   // Check if the user has voted on the proposal (either from data or local state)
   const hasUserVoted = useCallback((proposal) => {
@@ -990,9 +1036,9 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
         // Full prose styling for expanded view with dark mode support
         return (
           <div 
-            className="prose prose-sm dark:prose-invert max-w-none mb-4"
-            dangerouslySetInnerHTML={{ __html: htmlContent }}
-          />
+  className="prose prose-sm max-w-none mb-4 dark:prose-invert dark:text-gray-200"
+  dangerouslySetInnerHTML={{ __html: htmlContent }}
+/>
         );
       }
     } else {
@@ -1280,7 +1326,10 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
                   ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200 font-medium' 
                   : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
               }`}
-              onClick={() => setVoteFilter(filter)}
+              onClick={() => {
+                setVoteFilter(filter);
+                setCurrentPage(1); // Reset to the first page on filter change
+              }}
             >
               {filter.charAt(0).toUpperCase() + filter.slice(1)}
             </button>
@@ -1295,158 +1344,233 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
             <Loader size="large" text="Loading proposals..." />
           </div>
         ) : filteredProposals.length > 0 ? (
-          filteredProposals.map((proposal, idx) => {
-            // Get voting power for this proposal
-            const votingPower = votingPowers[proposal.id] || "0";
-            const hasVotingPower = parseFloat(votingPower) > 0;
-            
-            // Check if the user has voted
-            const userVoted = hasUserVoted(proposal);
-            const voteType = getUserVoteType(proposal);
-            
-            // Get vote data
-            const voteData = getVoteData(proposal);
-            
-            // Get proposal state info for status display
-            const stateInfo = getProposalStateInfo(proposal);
-            
-            return (
-              <div key={idx} className="bg-white dark:bg-gray-800 p-8 rounded-lg shadow-md">
-                <div className="flex justify-between items-start mb-5">
-                  <div>
-                    <h3 className="text-xl font-medium mb-1 dark:text-white">{proposal.title}</h3>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">Proposal #{proposal.id}</p>
-                  </div>
-                  <span className={`text-sm ${stateInfo.color} px-3 py-1 rounded-full flex items-center`}>
-                    {proposal.state === PROPOSAL_STATES.ACTIVE ? (
-                      <>
-                        <Clock className="w-4 h-4 mr-1" />
-                        {formatCountdown(proposal.deadline)}
-                      </>
-                    ) : (
-                      stateInfo.label
-                    )}
-                  </span>
-                </div>
-                
-                {/* Render proposal description with HTML support */}
-                {renderProposalDescription(proposal, true, 200)}
-                
-                {/* Vote data display */}
-                <div className="mb-6">
-                  {/* Vote percentages */}
-                  <div className="grid grid-cols-3 gap-4 text-sm sm:text-base mb-3">
-                    <div className="text-green-600 dark:text-green-400 font-medium">Yes: {voteData.yesPercentage.toFixed(1)}%</div>
-                    <div className="text-red-600 dark:text-red-400 font-medium text-center">No: {voteData.noPercentage.toFixed(1)}%</div>
-                    <div className="text-gray-600 dark:text-gray-400 font-medium text-right">Abstain: {voteData.abstainPercentage.toFixed(1)}%</div>
+          <>
+            {currentProposals.map((proposal, idx) => {
+              // Get voting power for this proposal
+              const votingPower = votingPowers[proposal.id] || "0";
+              const hasVotingPower = parseFloat(votingPower) > 0;
+              
+              // Check if the user has voted
+              const userVoted = hasUserVoted(proposal);
+              const voteType = getUserVoteType(proposal);
+              
+              // Get vote data
+              const voteData = getVoteData(proposal);
+              
+              // Get proposal state info for status display
+              const stateInfo = getProposalStateInfo(proposal);
+              
+              return (
+                <div key={idx} className="bg-white dark:bg-gray-800 p-8 rounded-lg shadow-md">
+                  <div className="flex justify-between items-start mb-5">
+                    <div>
+                      <h3 className="text-xl font-medium mb-1 dark:text-white">{proposal.title}</h3>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">Proposal #{proposal.id}</p>
+                    </div>
+                    <span className={`text-sm ${stateInfo.color} px-3 py-1 rounded-full flex items-center`}>
+                      {proposal.state === PROPOSAL_STATES.ACTIVE ? (
+                        <>
+                          <Clock className="w-4 h-4 mr-1" />
+                          {formatCountdown(proposal.deadline)}
+                        </>
+                      ) : (
+                        stateInfo.label
+                      )}
+                    </span>
                   </div>
                   
-                  {/* Vote bar - colors remain the same for clarity */}
-                  {renderVoteBar(proposal)}
+                  {/* Render proposal description with HTML support */}
+                  {renderProposalDescription(proposal, true, 200)}
                   
-                  {/* Vote counts */}
-                  <div className="grid grid-cols-3 gap-4 text-sm text-gray-500 dark:text-gray-400 mt-2">
-                    <div>{voteData.yesVoters || 0} voter{(voteData.yesVoters || 0) !== 1 && 's'}</div>
-                    <div className="text-center">{voteData.noVoters || 0} voter{(voteData.noVoters || 0) !== 1 && 's'}</div>
-                    <div className="text-right">{voteData.abstainVoters || 0} voter{(voteData.abstainVoters || 0) !== 1 && 's'}</div>
-                  </div>
-                  
-                  {/* Voting power section */}
-                  <div className="mt-5 border-t dark:border-gray-700 pt-4 text-sm text-gray-600 dark:text-gray-400">
-                    {/* Display voting power values */}
-                    <div className="grid grid-cols-3 gap-4 text-sm text-gray-600 dark:text-gray-400 mt-1">
-                      <div>{formatToFiveDecimals(voteData.yesVotingPower || 0)} JST</div>
-                      <div className="text-center">{formatToFiveDecimals(voteData.noVotingPower || 0)} JST</div>
-                      <div className="text-right">{formatToFiveDecimals(voteData.abstainVotingPower || 0)} JST</div>
+                  {/* Vote data display */}
+                  <div className="mb-6">
+                    {/* Vote percentages */}
+                    <div className="grid grid-cols-3 gap-4 text-sm sm:text-base mb-3">
+                      <div className="text-green-600 dark:text-green-400 font-medium">Yes: {voteData.yesPercentage.toFixed(1)}%</div>
+                      <div className="text-red-600 dark:text-red-400 font-medium text-center">No: {voteData.noPercentage.toFixed(1)}%</div>
+                      <div className="text-gray-600 dark:text-gray-400 font-medium text-right">Abstain: {voteData.abstainPercentage.toFixed(1)}%</div>
+                    </div>
+                    
+                    {/* Vote bar - colors remain the same for clarity */}
+                    {renderVoteBar(proposal)}
+                    
+                    {/* Vote counts */}
+                    <div className="grid grid-cols-3 gap-4 text-sm text-gray-500 dark:text-gray-400 mt-2">
+                      <div>{voteData.yesVoters || 0} voter{(voteData.yesVoters || 0) !== 1 && 's'}</div>
+                      <div className="text-center">{voteData.noVoters || 0} voter{(voteData.noVoters || 0) !== 1 && 's'}</div>
+                      <div className="text-right">{voteData.abstainVoters || 0} voter{(voteData.abstainVoters || 0) !== 1 && 's'}</div>
+                    </div>
+                    
+                    {/* Voting power section */}
+                    <div className="mt-5 border-t dark:border-gray-700 pt-4 text-sm text-gray-600 dark:text-gray-400">
+                      {/* Display voting power values */}
+                      <div className="grid grid-cols-3 gap-4 text-sm text-gray-600 dark:text-gray-400 mt-1">
+                        <div>{formatToFiveDecimals(voteData.yesVotingPower || 0)} JST</div>
+                        <div className="text-center">{formatToFiveDecimals(voteData.noVotingPower || 0)} JST</div>
+                        <div className="text-right">{formatToFiveDecimals(voteData.abstainVotingPower || 0)} JST</div>
+                      </div>
+                    </div>
+                    
+                    {/* Total voters count */}
+                    <div className="text-sm text-gray-500 dark:text-gray-400 mt-3 text-right">
+                      Total voters: {voteData.totalVoters || 0}
                     </div>
                   </div>
                   
-                  {/* Total voters count */}
-                  <div className="text-sm text-gray-500 dark:text-gray-400 mt-3 text-right">
-                    Total voters: {voteData.totalVoters || 0}
+                  {userVoted ? (
+                    <div className="flex items-center text-base text-gray-700 dark:text-gray-300 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                      <span className="mr-2">You voted:</span>
+                      <span className="px-3 py-1 rounded-full text-sm bg-blue-100 dark:bg-blue-800 text-blue-800 dark:text-blue-200 font-medium">
+                        {getVoteTypeText(voteType)}
+                      </span>
+                    </div>
+                  ) : proposal.state === PROPOSAL_STATES.ACTIVE && (
+                    <div>
+                      {hasVotingPower ? (
+                        <div>
+                          <div className="mb-3 text-base text-gray-700 dark:text-gray-300 p-3 bg-indigo-50 dark:bg-indigo-900/20 rounded-lg">
+                            Your voting power: <span className="font-medium">{formatToFiveDecimals(votingPower)} JST</span>
+                          </div>
+                          
+                          {govParams.quorum > 0 && (
+                            <div className="mt-5 mb-5">
+                              <div className="flex justify-between text-sm text-gray-700 dark:text-gray-300 mb-2">
+                                <span className="font-medium">Quorum Progress</span>
+                                <span>
+                                  {formatNumberDisplay(voteData.totalVotingPower || 0)} / {govParams.formattedQuorum} JST
+                                  ({Math.min(100, Math.round(((voteData.totalVotingPower || 0) / (govParams.quorum || 1)) * 100))}%)
+                                </span>
+                              </div>
+                              <div className="w-full h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                                <div 
+                                  className="bg-blue-500 dark:bg-blue-600 h-full rounded-full" 
+                                  style={{ width: `${Math.min(100, ((voteData.totalVotingPower || 0) / (govParams.quorum || 1)) * 100)}%` }}
+                                ></div>
+                              </div>
+                            </div>
+                          )}
+                          <div className="flex flex-wrap gap-4 mt-6">
+                            <button 
+                              className="flex-1 min-w-0 bg-green-500 hover:bg-green-600 dark:bg-green-600 dark:hover:bg-green-700 text-white py-3 px-2 rounded-lg flex items-center justify-center text-sm sm:text-base font-medium"
+                              onClick={() => submitVote(proposal.id, VOTE_TYPES.FOR)}
+                              disabled={voting.processing}
+                            >
+                              <Check className="w-5 h-5 mr-2 flex-shrink-0" />
+                              <span className="truncate">Yes</span>
+                            </button>
+                            <button 
+                              className="flex-1 min-w-0 bg-red-500 hover:bg-red-600 dark:bg-red-600 dark:hover:bg-red-700 text-white py-3 px-2 rounded-lg flex items-center justify-center text-sm sm:text-base font-medium"
+                              onClick={() => submitVote(proposal.id, VOTE_TYPES.AGAINST)}
+                              disabled={voting.processing}
+                            >
+                              <X className="w-5 h-5 mr-2 flex-shrink-0" />
+                              <span className="truncate">No</span>
+                            </button>
+                            <button 
+                              className="flex-1 min-w-0 bg-gray-500 hover:bg-gray-600 dark:bg-gray-600 dark:hover:bg-gray-700 text-white py-3 px-2 rounded-lg flex items-center justify-center text-sm sm:text-base font-medium"
+                              onClick={() => submitVote(proposal.id, VOTE_TYPES.ABSTAIN)}
+                              disabled={voting.processing}
+                            >
+                              <span className="truncate">Abstain</span>
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-center py-6 px-6 text-red-500 dark:text-red-400 bg-red-50 dark:bg-red-900/10 rounded-lg my-3">
+                          You did not have enough voting power at the time of the proposal snapshot
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  <div className="mt-6 text-center">
+                    <button 
+                      className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 text-sm font-medium px-3 py-1.5 border border-indigo-300 dark:border-indigo-600 rounded-md hover:bg-indigo-50 dark:hover:bg-indigo-900/40"
+                      onClick={() => {
+                        setSelectedProposal(proposal);
+                        setShowModal(true);
+                      }}
+                    >
+                      View Full Details
+                    </button>
                   </div>
                 </div>
-                
-                {userVoted ? (
-                  <div className="flex items-center text-base text-gray-700 dark:text-gray-300 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-                    <span className="mr-2">You voted:</span>
-                    <span className="px-3 py-1 rounded-full text-sm bg-blue-100 dark:bg-blue-800 text-blue-800 dark:text-blue-200 font-medium">
-                      {getVoteTypeText(voteType)}
-                    </span>
-                  </div>
-                ) : proposal.state === PROPOSAL_STATES.ACTIVE && (
-                  <div>
-                    {hasVotingPower ? (
-                      <div>
-                        <div className="mb-3 text-base text-gray-700 dark:text-gray-300 p-3 bg-indigo-50 dark:bg-indigo-900/20 rounded-lg">
-                          Your voting power: <span className="font-medium">{formatToFiveDecimals(votingPower)} JST</span>
-                        </div>
-                        
-                        {govParams.quorum > 0 && (
-                          <div className="mt-5 mb-5">
-                            <div className="flex justify-between text-sm text-gray-700 dark:text-gray-300 mb-2">
-                              <span className="font-medium">Quorum Progress</span>
-                              <span>
-                                {formatNumberDisplay(voteData.totalVotingPower || 0)} / {govParams.formattedQuorum} JST
-                                ({Math.min(100, Math.round(((voteData.totalVotingPower || 0) / (govParams.quorum || 1)) * 100))}%)
-                              </span>
-                            </div>
-                            <div className="w-full h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                              <div 
-                                className="bg-blue-500 dark:bg-blue-600 h-full rounded-full" 
-                                style={{ width: `${Math.min(100, ((voteData.totalVotingPower || 0) / (govParams.quorum || 1)) * 100)}%` }}
-                              ></div>
-                            </div>
-                          </div>
-                        )}
-                        <div className="flex flex-wrap gap-4 mt-6">
-                          <button 
-                            className="flex-1 min-w-0 bg-green-500 hover:bg-green-600 dark:bg-green-600 dark:hover:bg-green-700 text-white py-3 px-2 rounded-lg flex items-center justify-center text-sm sm:text-base font-medium"
-                            onClick={() => submitVote(proposal.id, VOTE_TYPES.FOR)}
-                            disabled={voting.processing}
-                          >
-                            <Check className="w-5 h-5 mr-2 flex-shrink-0" />
-                            <span className="truncate">Yes</span>
-                          </button>
-                          <button 
-                            className="flex-1 min-w-0 bg-red-500 hover:bg-red-600 dark:bg-red-600 dark:hover:bg-red-700 text-white py-3 px-2 rounded-lg flex items-center justify-center text-sm sm:text-base font-medium"
-                            onClick={() => submitVote(proposal.id, VOTE_TYPES.AGAINST)}
-                            disabled={voting.processing}
-                          >
-                            <X className="w-5 h-5 mr-2 flex-shrink-0" />
-                            <span className="truncate">No</span>
-                          </button>
-                          <button 
-                            className="flex-1 min-w-0 bg-gray-500 hover:bg-gray-600 dark:bg-gray-600 dark:hover:bg-gray-700 text-white py-3 px-2 rounded-lg flex items-center justify-center text-sm sm:text-base font-medium"
-                            onClick={() => submitVote(proposal.id, VOTE_TYPES.ABSTAIN)}
-                            disabled={voting.processing}
-                          >
-                            <span className="truncate">Abstain</span>
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="text-center py-6 px-6 text-red-500 dark:text-red-400 bg-red-50 dark:bg-red-900/10 rounded-lg my-3">
-                        You did not have enough voting power at the time of the proposal snapshot
-                      </div>
-                    )}
-                  </div>
-                )}
-                
-                <div className="mt-6 text-center">
-                  <button 
-                    className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 text-sm font-medium px-3 py-1.5 border border-indigo-300 dark:border-indigo-600 rounded-md hover:bg-indigo-50 dark:hover:bg-indigo-900/40"
-                    onClick={() => {
-                      setSelectedProposal(proposal);
-                      setShowModal(true);
-                    }}
+              );
+            })}
+            
+            {/* Pagination controls */}
+            {totalPages > 1 && (
+              <div className="flex justify-between items-center mt-6 bg-white dark:bg-gray-800 p-4 rounded-lg shadow dark:shadow-gray-700/20">
+                <div className="text-sm text-gray-500 dark:text-gray-400">
+                  Showing proposals {indexOfFirstItem + 1}-{Math.min(indexOfLastItem, sortedProposals.length)} of {sortedProposals.length}
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={goToPreviousPage}
+                    disabled={currentPage === 1}
+                    className={`flex items-center justify-center p-2 rounded-md ${currentPage === 1 
+                      ? 'text-gray-400 cursor-not-allowed' 
+                      : 'text-indigo-600 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:bg-indigo-900/30'}`}
+                    aria-label="Previous Page"
                   >
-                    View Full Details
+                    <ChevronLeft className="w-5 h-5" />
+                  </button>
+                  {/* Page numbers */}
+                  <div className="flex space-x-1">
+                    {/* Show limited page numbers with ellipsis for better UI */}
+                    {[...Array(totalPages)].map((_, i) => {
+                      // Only show first page, last page, current page, and pages around current
+                      const pageNum = i + 1;
+                      
+                      // Logic to determine which page numbers to show
+                      const shouldShowPage = 
+                        pageNum === 1 || // Always show first page
+                        pageNum === totalPages || // Always show last page
+                        (pageNum >= currentPage - 1 && pageNum <= currentPage + 1); // Show current and surrounding pages
+                      
+                      // Show ellipsis before and after skipped pages
+                      const showPrevEllipsis = i === 1 && currentPage > 3;
+                      const showNextEllipsis = i === totalPages - 2 && currentPage < totalPages - 2;
+                      
+                      if (shouldShowPage) {
+                        return (
+                          <button
+                            key={pageNum}
+                            onClick={() => goToPage(pageNum)}
+                            className={`w-8 h-8 flex items-center justify-center rounded-md ${
+                              currentPage === pageNum
+                                ? 'bg-indigo-600 text-white dark:bg-indigo-700'
+                                : 'text-gray-700 hover:bg-indigo-50 dark:text-gray-300 dark:hover:bg-indigo-900/30'
+                            }`}
+                          >
+                            {pageNum}
+                          </button>
+                        );
+                      } else if (showPrevEllipsis || showNextEllipsis) {
+                        return (
+                          <div key={`ellipsis-${i}`} className="w-8 h-8 flex items-center justify-center">
+                            &hellip;
+                          </div>
+                        );
+                      } else {
+                        return null;
+                      }
+                    })}
+                  </div>
+                  <button
+                    onClick={goToNextPage}
+                    disabled={currentPage === totalPages}
+                    className={`flex items-center justify-center p-2 rounded-md ${currentPage === totalPages 
+                      ? 'text-gray-400 cursor-not-allowed' 
+                      : 'text-indigo-600 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:bg-indigo-900/30'}`}
+                    aria-label="Next Page"
+                  >
+                    <ChevronRight className="w-5 h-5" />
                   </button>
                 </div>
               </div>
-            );
-          })
+            )}
+          </>
         ) : (
           <div className="text-center py-12 text-gray-500 dark:text-gray-400 bg-white dark:bg-gray-800 p-8 rounded-lg shadow-md">
             No proposals found for this filter

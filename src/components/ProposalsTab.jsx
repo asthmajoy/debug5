@@ -4,12 +4,41 @@ import { PROPOSAL_STATES, PROPOSAL_TYPES } from '../utils/constants';
 import { formatRelativeTime, formatBigNumber, formatAddress, formatTime } from '../utils/formatters';
 import { addressesEqual, diagnoseMismatchedAddresses } from '../utils/addressUtils';
 import Loader from './Loader';
-import { ChevronDown, ChevronUp, Copy, Check, AlertTriangle, Clock, Shield } from 'lucide-react';
+import { ChevronDown, ChevronUp, Copy, Check, AlertTriangle, Clock, Shield, ChevronLeft, ChevronRight } from 'lucide-react';
 import TimelockInfoDisplay from './TimelockInfoDisplay';
 import ProposalRichTextEditor from './ProposalRichTextEditor';
+import { useDarkMode } from '../contexts/DarkModeContext';
 
+// Helper function to get human-readable proposal state label
+function getProposalStateLabel(state) {
+  const stateLabels = {
+    [PROPOSAL_STATES.ACTIVE]: "Active",
+    [PROPOSAL_STATES.CANCELED]: "Canceled",
+    [PROPOSAL_STATES.DEFEATED]: "Defeated",
+    [PROPOSAL_STATES.SUCCEEDED]: "Succeeded",
+    [PROPOSAL_STATES.QUEUED]: "Queued",
+    [PROPOSAL_STATES.EXECUTED]: "Executed",
+    [PROPOSAL_STATES.EXPIRED]: "Expired"
+  };
+  
+  return stateLabels[state] || "Unknown";
+}
 
-
+// Helper function to get human-readable proposal type label
+function getProposalTypeLabel(type) {
+  const typeLabels = {
+    [PROPOSAL_TYPES.GENERAL]: "General",
+    [PROPOSAL_TYPES.WITHDRAWAL]: "Withdrawal",
+    [PROPOSAL_TYPES.TOKEN_TRANSFER]: "Token Transfer",
+    [PROPOSAL_TYPES.GOVERNANCE_CHANGE]: "Governance Change",
+    [PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER]: "External ERC20 Transfer",
+    [PROPOSAL_TYPES.TOKEN_MINT]: "Token Mint",
+    [PROPOSAL_TYPES.TOKEN_BURN]: "Token Burn",
+    [PROPOSAL_TYPES.SIGNALING]: "Signaling"
+  };
+  
+  return typeLabels[type] || "Unknown";
+}
 
 // Function to parse proposal descriptions and extract HTML content
 function parseProposalDescription(rawDescription) {
@@ -66,37 +95,6 @@ function truncateHtml(html, maxLength = 200) {
   }
   
   return textContent.substring(0, maxLength) + '...';
-}
-
-// Helper function to get human-readable proposal state label
-function getProposalStateLabel(state) {
-  const stateLabels = {
-    [PROPOSAL_STATES.ACTIVE]: "Active",
-    [PROPOSAL_STATES.CANCELED]: "Canceled",
-    [PROPOSAL_STATES.DEFEATED]: "Defeated",
-    [PROPOSAL_STATES.SUCCEEDED]: "Succeeded",
-    [PROPOSAL_STATES.QUEUED]: "Queued",
-    [PROPOSAL_STATES.EXECUTED]: "Executed",
-    [PROPOSAL_STATES.EXPIRED]: "Expired"
-  };
-  
-  return stateLabels[state] || "Unknown";
-}
-
-// Helper function to get human-readable proposal type label
-function getProposalTypeLabel(type) {
-  const typeLabels = {
-    [PROPOSAL_TYPES.GENERAL]: "General",
-    [PROPOSAL_TYPES.WITHDRAWAL]: "Withdrawal",
-    [PROPOSAL_TYPES.TOKEN_TRANSFER]: "Token Transfer",
-    [PROPOSAL_TYPES.GOVERNANCE_CHANGE]: "Governance Change",
-    [PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER]: "External ERC20 Transfer",
-    [PROPOSAL_TYPES.TOKEN_MINT]: "Token Mint",
-    [PROPOSAL_TYPES.TOKEN_BURN]: "Token Burn",
-    [PROPOSAL_TYPES.SIGNALING]: "Signaling"
-  };
-  
-  return typeLabels[type] || "Unknown";
 }
 
 // Helper function to get human-readable threat level label
@@ -168,12 +166,23 @@ const ProposalsTab = ({
   const [submitting, setSubmitting] = useState(false);
   const [transactionError, setTransactionError] = useState('');
   
+  // Add pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
+  
   // Add state for timelock information
   const [timelockInfo, setTimelockInfo] = useState({});
   
   // Transaction status tracking
   const [pendingTxs, setPendingTxs] = useState({});
   const [loading, setLoading] = useState(globalLoading);
+  const { isDarkMode } = useDarkMode();
+
+  const [creationStatus, setCreationStatus] = useState({
+    status: null, // 'pending', 'success', 'error'
+    message: ''
+  });
+
   
   // Clear errors when component unmounts or dependencies change
   useEffect(() => {
@@ -182,6 +191,15 @@ const ProposalsTab = ({
       setPendingTxs({});
     };
   }, []);
+  
+  // Debug: Add logging to monitor proposals
+  useEffect(() => {
+    console.log('ProposalsTab received proposals:', proposals?.length || 0);
+    if (proposals?.length > 0) {
+      const proposalIds = proposals.map(p => Number(p.id));
+      console.log('Proposal ID range:', Math.min(...proposalIds), 'to', Math.max(...proposalIds));
+    }
+  }, [proposals]);
   
   // Fetch timelock information for queued proposals
   useEffect(() => {
@@ -375,7 +393,7 @@ const ProposalsTab = ({
       }
     };
     
-    const interval = setInterval(checkPendingTxs, 3000);
+    const interval = setInterval(checkPendingTxs, 10000);
     return () => clearInterval(interval);
   }, [pendingTxs]);
 
@@ -469,18 +487,11 @@ const ProposalsTab = ({
       console.error("Error updating stake refund status:", error);
     }
   };
-
-  // Add console logs to debug PROPOSAL_TYPES
-  console.log("PROPOSAL_TYPES from import:", PROPOSAL_TYPES);
-  console.log("SIGNALING type value:", PROPOSAL_TYPES.SIGNALING);
-  
-  // Make a separate, clear constant to use
-  const SIGNALING_TYPE = 7; // If this is the correct value
   
   const validateProposalInputs = (proposal) => {
     // Check for signaling proposals by string or number
     const isSignalingProposal = 
-      proposal.type === 7 || 
+      proposal.type === PROPOSAL_TYPES.SIGNALING || 
       proposal.type === "7" ||
       String(proposal.type).toLowerCase().includes("signaling");
     
@@ -540,33 +551,33 @@ const ProposalsTab = ({
     e.preventDefault();
     setSubmitting(true);
     setTransactionError('');
+    setCreationStatus({ status: 'pending', message: 'Creating proposal...' });
     
     // Check if this is a signaling proposal by string matching
     const isSignalingProposal = 
-      newProposal.type === 7 || 
+      newProposal.type === PROPOSAL_TYPES.SIGNALING || 
       newProposal.type === "7" || 
       String(newProposal.type).toLowerCase().includes("signaling");
     
     console.log("Is signaling by string check:", isSignalingProposal);
     
     try {
+      // Format the description with the HTML content
+      let description;
+      if (newProposal.descriptionHtml) {
+        description = `${newProposal.title}\n\n${newProposal.description}\n\n|||HTML:${newProposal.descriptionHtml}`;
+      } else {
+        description = `${newProposal.title}\n\n${newProposal.description}`;
+      }
+      
       // Handle signaling proposals with string matching
       if (isSignalingProposal) {
         console.log("Handling as signaling proposal");
         
-        // Skip validation entirely for signaling proposals
-        // Format the description with the HTML content
-        let description;
-        if (newProposal.descriptionHtml) {
-          description = `${newProposal.title}\n\n${newProposal.description}\n\n|||HTML:${newProposal.descriptionHtml}`;
-        } else {
-          description = `${newProposal.title}\n\n${newProposal.description}`;
-        }
-        
         console.log('Submitting signaling proposal:', { description });
         
         try {
-          // Check if createSignalingProposal exists, otherwise use createProposal
+          // Check if createSignalingProposal exists, otherwise use createProposal with type 7
           if (typeof createSignalingProposal === 'function') {
             await createSignalingProposal(description);
           } else {
@@ -574,7 +585,7 @@ const ProposalsTab = ({
             console.log("createSignalingProposal not available, using createProposal");
             await createProposal(
               description,
-              7, // SIGNALING type
+              PROPOSAL_TYPES.SIGNALING, // SIGNALING type
               ethers.constants.AddressZero, // target (not used)
               '0x', // callData (not used)
               0, // amount (not used)
@@ -586,27 +597,39 @@ const ProposalsTab = ({
               0  // newTimelockDelay (not used)
             );
           }
-          
-          // Reset form and close modal
-          setShowCreateModal(false);
-          setNewProposal({
-            title: '',
-            description: '',
-            descriptionHtml: '',
-            type: PROPOSAL_TYPES.GENERAL,
-            target: '',
-            callData: '',
-            amount: '',
-            recipient: '',
-            token: '',
-            newThreshold: '',
-            newQuorum: '',
-            newVotingDuration: '',
-            newProposalStake: ''
+          setCreationStatus({ 
+            status: 'success', 
+            message: 'Proposal created successfully!' 
           });
+          
+          // Reset form and close modal after a brief delay
+          setTimeout(() => {
+            setShowCreateModal(false);
+            setNewProposal({
+              title: '',
+              description: '',
+              descriptionHtml: '',
+              type: PROPOSAL_TYPES.GENERAL,
+              target: '',
+              callData: '',
+              amount: '',
+              recipient: '',
+              token: '',
+              newThreshold: '',
+              newQuorum: '',
+              newVotingDuration: '',
+              newProposalStake: ''
+            });
+            setCreationStatus({ status: null, message: '' });
+          }, 2000);
+          
         } catch (error) {
-          console.error("Error in signaling proposal creation:", error);
-          setTransactionError(error.message || "Failed to create signaling proposal");
+          console.error("Error creating proposal:", error);
+          setTransactionError(error.message || 'Error creating proposal. See console for details.');
+          setCreationStatus({ 
+            status: 'error', 
+            message: 'Failed to create proposal' 
+          });
         } finally {
           setSubmitting(false);
         }
@@ -615,22 +638,19 @@ const ProposalsTab = ({
         return;
       }
       
+      // Handle non-signaling proposals
       console.log("Handling as regular proposal");
       
       // Only run validation for non-signaling proposals
       if (!validateProposalInputs(newProposal)) {
         console.log("Validation failed");
         setTransactionError('Please fill in all required fields for this proposal type.');
+        setCreationStatus({ 
+          status: 'error', 
+          message: 'Validation failed' 
+        });
         setSubmitting(false);
         return;
-      }
-      
-      // For other proposal types with HTML content
-      let description;
-      if (newProposal.descriptionHtml) {
-        description = `${newProposal.title}\n\n${newProposal.description}\n\n|||HTML:${newProposal.descriptionHtml}`;
-      } else {
-        description = `${newProposal.title}\n\n${newProposal.description}`;
       }
       
       // Add parameter details to description for governance changes to ensure they can be parsed later
@@ -651,7 +671,7 @@ const ProposalsTab = ({
         }
         
         if (paramDetails.length > 0) {
-          description += "\n\nParameters:\n" + paramDetails.join("\n");
+          description += "\n\nParameters\n" + paramDetails.join("\n");
         }
       }
       
@@ -686,37 +706,49 @@ const ProposalsTab = ({
       await createProposal(
         description,
         parseInt(newProposal.type),
-        newProposal.target,
+        newProposal.target || ethers.constants.AddressZero,
         newProposal.callData || '0x',
         amount,
-        newProposal.recipient,
-        newProposal.token,
+        newProposal.recipient || ethers.constants.AddressZero,
+        newProposal.token || ethers.constants.AddressZero,
         newThreshold,
         newQuorum,
         newVotingDuration,
         finalParamValue
       );
       
-      setShowCreateModal(false);
-      // Reset form
-      setNewProposal({
-        title: '',
-        description: '',
-        descriptionHtml: '',
-        type: PROPOSAL_TYPES.GENERAL,
-        target: '',
-        callData: '',
-        amount: '',
-        recipient: '',
-        token: '',
-        newThreshold: '',
-        newQuorum: '',
-        newVotingDuration: '',
-        newProposalStake: ''
+      setCreationStatus({ 
+        status: 'success', 
+        message: 'Proposal created successfully!' 
       });
+      
+      // Reset form and close modal after a brief delay
+      setTimeout(() => {
+        setShowCreateModal(false);
+        setNewProposal({
+          title: '',
+          description: '',
+          descriptionHtml: '',
+          type: PROPOSAL_TYPES.GENERAL,
+          target: '',
+          callData: '',
+          amount: '',
+          recipient: '',
+          token: '',
+          newThreshold: '',
+          newQuorum: '',
+          newVotingDuration: '',
+          newProposalStake: ''
+        });
+        setCreationStatus({ status: null, message: '' });
+      }, 2000);
     } catch (error) {
       console.error("Error creating proposal:", error);
       setTransactionError(error.message || 'Error creating proposal. See console for details.');
+      setCreationStatus({ 
+        status: 'error', 
+        message: 'Failed to create proposal' 
+      });
     } finally {
       setSubmitting(false);
     }
@@ -1168,23 +1200,6 @@ const ProposalsTab = ({
             // Check proposal state first to validate eligibility
             const state = await governance.getProposalState(proposalId);
             console.log(`Proposal state before claiming refund: ${state} (${getProposalStateLabel(state)})`);
-            
-            // Get proposal flags to check if already refunded
-            // This may fail if your contract doesn't expose this information
-            try {
-              const proposal = await governance.proposals(proposalId);
-              console.log(`Proposal flags: ${proposal.flags}`);
-              
-              // Check if bit 2 (STAKE_REFUNDED_FLAG) is set (0x04 or binary 100)
-              const isRefunded = (proposal.flags & 0x04) !== 0;
-              console.log(`Is stake already refunded according to flags? ${isRefunded}`);
-              
-              if (isRefunded) {
-                throw new Error('Stake has already been refunded for this proposal.');
-              }
-            } catch (flagsError) {
-              console.log('Could not check refund flags:', flagsError);
-            }
           } catch (checkError) {
             console.warn('Pre-checks encountered issues:', checkError);
             // Continue anyway - the contract will validate
@@ -1336,19 +1351,51 @@ const ProposalsTab = ({
   };
 
   // Filter out proposals based on the selected filter type
-  const filteredProposals = proposals.filter(p => {
+  const filteredProposals = proposals?.filter(p => {
+    // Safety check for null/undefined proposal
+    if (!p) return false;
+    
+    // Convert to lowercase safely
+    const stateLabelLower = (p.stateLabel || '').toLowerCase();
+    
     if (proposalType === 'all') {
       return true;
     } else if (proposalType === 'pending') {
-      // Include both 'pending' and 'queued' states in the 'pending' filter
-      return p.stateLabel.toLowerCase() === 'pending' || p.stateLabel.toLowerCase() === 'queued';
+      return stateLabelLower === 'pending' || stateLabelLower === 'queued';
     } else {
-      // For all other filters, use direct match
-      return p.stateLabel.toLowerCase() === proposalType;
+      return stateLabelLower === proposalType;
     }
-  });
+  }) || [];
+  
+  // Sort proposals by ID in descending order (newest first)
+  const sortedProposals = [...filteredProposals].sort((a, b) => Number(b.id) - Number(a.id));
+  
+  // Calculate pagination
+  const indexOfLastItem = currentPage * itemsPerPage;
+  const indexOfFirstItem = indexOfLastItem - itemsPerPage;
+  const currentProposals = sortedProposals.slice(indexOfFirstItem, indexOfLastItem);
+  const totalPages = Math.ceil(sortedProposals.length / itemsPerPage);
+  
+  // Pagination navigation functions
+  const goToPage = (pageNumber) => {
+    if (pageNumber > 0 && pageNumber <= totalPages) {
+      setCurrentPage(pageNumber);
+    }
+  };
+  
+  const goToNextPage = () => {
+    if (currentPage < totalPages) {
+      setCurrentPage(currentPage + 1);
+    }
+  };
+  
+  const goToPreviousPage = () => {
+    if (currentPage > 1) {
+      setCurrentPage(currentPage - 1);
+    }
+  };
 
-  // Enhanced function to check if a user can claim a refund
+  // Check if a user can claim a refund
   const canClaimRefund = (proposal) => {
     // Log that the function is being called
     console.debug(`REFUND CHECK: Started check for proposal #${proposal?.id || 'unknown'}`);
@@ -1438,7 +1485,7 @@ const ProposalsTab = ({
     
     // Final check with all conditions
     const result = isProposer && isRefundable && !proposal.stakeRefunded;
-    console.debug(`REFUND CHECK: Final result (all conditions): ${result} (isProposer && isRefundable && !stakeRefunded)`);
+    console.debug(`REFUND CHECK: Final result(all conditions): ${result} (isProposer && isRefundable && !stakeRefunded)`);
     
     return result;
   };
@@ -1454,28 +1501,32 @@ const ProposalsTab = ({
           <div 
             key={id} 
             className={`rounded-xl shadow-xl p-5 transform transition-all duration-300 ${
-              tx.status === 'pending' ? 'bg-blue-50 border-2 border-blue-300' :
-              tx.status === 'success' ? 'bg-green-50 border-2 border-green-300' :
-              'bg-red-50 border-2 border-red-300'
-            }`}
+              tx.status === 'pending' ? 
+                isDarkMode ? 'bg-blue-900/30 border-2 border-blue-700/70 backdrop-blur-sm' : 'bg-blue-50 border-2 border-blue-300' :
+              tx.status === 'success' ? 
+                isDarkMode ? 'bg-green-900/30 border-2 border-green-700/70 backdrop-blur-sm' : 'bg-green-50 border-2 border-green-300' :
+                isDarkMode ? 'bg-red-900/30 border-2 border-red-700/70 backdrop-blur-sm' : 'bg-red-50 border-2 border-red-300'
+            } ${isDarkMode ? 'text-gray-200' : 'text-gray-800'}`}
           >
             <div className="flex items-start">
               <div className="flex-shrink-0 mt-1">
                 {tx.status === 'pending' ? (
-                  <div className="h-8 w-8 border-3 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                  <div className={`h-8 w-8 border-3 rounded-full animate-spin ${
+                    isDarkMode ? 'border-blue-400 border-t-transparent' : 'border-blue-500 border-t-transparent'
+                  }`}></div>
                 ) : tx.status === 'success' ? (
-                  <Check className="h-8 w-8 text-green-500" />
+                  <Check className={`h-8 w-8 ${isDarkMode ? 'text-green-400' : 'text-green-500'}`} />
                 ) : (
-                  <AlertTriangle className="h-8 w-8 text-red-500" />
+                  <AlertTriangle className={`h-8 w-8 ${isDarkMode ? 'text-red-400' : 'text-red-500'}`} />
                 )}
               </div>
               <div className="ml-4 flex-1 overflow-hidden">
-                <p className="text-lg font-semibold text-gray-900">
+                <p className={`text-lg font-semibold ${isDarkMode ? 'text-gray-100' : 'text-gray-900'}`}>
                   {tx.status === 'pending' ? 'Transaction in Progress' :
                    tx.status === 'success' ? 'Transaction Successful' :
                    'Transaction Failed'}
                 </p>
-                <p className="mt-2 text-base text-gray-600">
+                <p className={`mt-2 text-base ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
                   {tx.status === 'pending' 
                     ? `${tx.action} proposal #${tx.proposalId}...` 
                     : tx.status === 'success'
@@ -1483,22 +1534,33 @@ const ProposalsTab = ({
                     : `Failed ${tx.action} proposal #${tx.proposalId}`
                   }
                 </p>
-                {/* Improved error message display with better wrapping */}
+                
+                {/* Improved error message display with better wrapping and dark mode */}
                 {tx.error && (
-                  <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded-md">
-                    <p className="text-sm text-red-700 break-words">
+                  <div className={`mt-2 p-3 rounded-md border ${
+                    isDarkMode ? 'bg-red-900/40 border-red-700/70 text-red-200' : 'bg-red-50 border-red-200 text-red-700'
+                  }`}>
+                    <p className="text-sm break-words leading-relaxed">
                       {tx.error}
                     </p>
                   </div>
                 )}
+                
                 {tx.warning && (
-                  <p className="mt-2 text-sm text-yellow-600 font-medium break-words">{tx.warning}</p>
+                  <p className={`mt-2 text-sm font-medium break-words ${
+                    isDarkMode ? 'text-yellow-300' : 'text-yellow-600'
+                  }`}>{tx.warning}</p>
                 )}
+                
                 <div className="mt-3 flex flex-wrap gap-2">
                   {tx.hash && (
                     <button 
                       onClick={() => copyToClipboard(tx.hash)}
-                      className="text-sm bg-indigo-50 hover:bg-indigo-100 text-indigo-700 py-2 px-3 rounded-md flex items-center transition-colors"
+                      className={`text-sm py-2 px-3 rounded-md flex items-center transition-colors ${
+                        isDarkMode ? 
+                          'bg-indigo-900/50 hover:bg-indigo-800/70 text-indigo-300' : 
+                          'bg-indigo-50 hover:bg-indigo-100 text-indigo-700'
+                      }`}
                     >
                       {copiedText === tx.hash ? 'Copied!' : 'Copy Transaction Hash'}
                       <Copy className="ml-2 h-4 w-4" />
@@ -1525,7 +1587,11 @@ const ProposalsTab = ({
                           (tx.retryCount || 0) + 1
                         );
                       }}
-                      className="text-sm bg-yellow-50 hover:bg-yellow-100 text-yellow-700 py-2 px-3 rounded-md flex items-center transition-colors"
+                      className={`text-sm py-2 px-3 rounded-md flex items-center transition-colors ${
+                        isDarkMode ? 
+                          'bg-yellow-900/40 hover:bg-yellow-800/60 text-yellow-300' : 
+                          'bg-yellow-50 hover:bg-yellow-100 text-yellow-700'
+                      }`}
                     >
                       Retry with Higher Gas
                     </button>
@@ -1541,7 +1607,11 @@ const ProposalsTab = ({
                       return updated;
                     });
                   }}
-                  className="bg-gray-100 hover:bg-gray-200 transition-colors rounded-full p-1.5 inline-flex text-gray-500 hover:text-gray-700 focus:outline-none"
+                  className={`rounded-full p-1.5 inline-flex focus:outline-none ${
+                    isDarkMode ? 
+                      'bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-gray-100' : 
+                      'bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-700'
+                  }`}
                   aria-label="Close notification"
                 >
                   <svg className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
@@ -1552,6 +1622,55 @@ const ProposalsTab = ({
             </div>
           </div>
         ))}
+      </div>
+    );
+  };
+
+  const renderCreationStatus = () => {
+    if (!creationStatus.status) return null;
+    
+    return (
+      <div className={`mb-4 p-4 rounded-lg border ${
+        creationStatus.status === 'pending' ?
+          (isDarkMode ? 'bg-blue-900/30 border-blue-700 text-blue-200' : 'bg-blue-100 border-blue-300 text-blue-800') :
+        creationStatus.status === 'success' ?
+          (isDarkMode ? 'bg-green-900/30 border-green-700 text-green-200' : 'bg-green-100 border-green-300 text-green-800') :
+          (isDarkMode ? 'bg-red-900/30 border-red-700 text-red-200' : 'bg-red-100 border-red-300 text-red-800')
+      }`}>
+        <div className="flex items-center">
+          {creationStatus.status === 'pending' ? (
+            <div className={`h-5 w-5 border-2 rounded-full animate-spin mr-3 ${
+              isDarkMode ? 'border-blue-400 border-t-transparent' : 'border-blue-500 border-t-transparent'
+            }`}></div>
+          ) : creationStatus.status === 'success' ? (
+            <Check className={`h-5 w-5 mr-3 ${isDarkMode ? 'text-green-400' : 'text-green-500'}`} />
+          ) : (
+            <AlertTriangle className={`h-5 w-5 mr-3 ${isDarkMode ? 'text-red-400' : 'text-red-500'}`} />
+          )}
+          <p>{creationStatus.message}</p>
+        </div>
+      </div>
+    );
+  };
+
+  const renderCreateProposalError = () => {
+    if (!transactionError) return null;
+    
+    return (
+      <div className={`mb-4 p-4 rounded-lg border ${
+        isDarkMode ? 
+          'bg-red-900/30 border-red-700/70 text-red-200' : 
+          'bg-red-100 border-red-400 text-red-700'
+      }`}>
+        <div className="flex items-start">
+          <div className="flex-shrink-0 mt-0.5">
+            <AlertTriangle className={`h-5 w-5 ${isDarkMode ? 'text-red-300' : 'text-red-500'}`} />
+          </div>
+          <div className="ml-3 flex-1">
+            <p className="font-medium">Error</p>
+            <p className="mt-1 text-sm">{transactionError}</p>
+          </div>
+        </div>
       </div>
     );
   };
@@ -1576,12 +1695,15 @@ const ProposalsTab = ({
       
       {/* Filter options */}
       <div className="bg-white p-4 rounded-lg shadow mb-6 dark:bg-gray-800 dark:shadow-gray-700/20">
-
-<div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2">
           {['all', 'active', 'pending', 'succeeded', 'executed', 'defeated', 'canceled', 'expired'].map(type => (
             <button
               key={type}
-              className={`px-3 py-1 rounded-full text-sm ${proposalType === type ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/50 dark:text-indigo-200' : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'}`}              onClick={() => setProposalType(type)}
+              className={`px-3 py-1 rounded-full text-sm ${proposalType === type ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/50 dark:text-indigo-200' : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'}`}              
+              onClick={() => {
+                setProposalType(type);
+                setCurrentPage(1); // Reset to first page on filter change
+              }}
             >
               {type.charAt(0).toUpperCase() + type.slice(1)}
             </button>
@@ -1599,338 +1721,413 @@ const ProposalsTab = ({
             <Loader size="large" text="Loading proposals..." />
           </div>
         ) : filteredProposals.length > 0 ? (
-          filteredProposals.map((proposal, idx) => (
-           <div key={idx} className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow dark:shadow-gray-700/20">
-              <div className="flex justify-between items-start mb-4">
-              <div>
-              <h3 className="text-lg font-medium dark:text-white">{proposal.title}</h3>
-              <p className="font-medium dark:text-white">Proposal #{proposal.id}</p>
-            </div>
-                <div className="flex items-center">
-                  <span className={`text-xs px-2 py-1 rounded-full ${getStatusColor(proposal.stateLabel.toLowerCase())}`}>
-                    {proposal.stateLabel}
-                  </span>
-                </div>
-              </div>
-              
-              <div className="grid grid-cols-3 gap-4 mb-4 text-sm text-gray-500">
-                <div>
-                <p className="font-medium dark:text-white">Type</p>
-                <p className="font-small dark:text-white">{(() => {
-                    // Robust type detection for signaling proposals
-                    if (proposal.typeLabel && proposal.typeLabel !== "Unknown") {
-                      return proposal.typeLabel;
-                    }
-                    
-                    // Try to identify signaling proposals by type
-                    const type = Number(proposal.type);
-                    if (type === 7 || type === PROPOSAL_TYPES.SIGNALING) {
-                      return "Signaling";
-                    }
-                    
-                    // As a fallback, check description for signaling keywords
-                    if (proposal.description && proposal.description.toLowerCase().includes("signaling")) {
-                      return "Signaling";
-                    }
-                    
-                    // Finally, use our helper function
-                    return getProposalTypeLabel(proposal.type);
-                  })()}</p>
-                </div>
-                <div>
-                <p className="font-medium dark:text-white">Created</p>
-                <p className="font-small dark:text-white">{formatRelativeTime(proposal.createdAt)}</p>
-                </div>
-                <div>
-                <p className="font-medium dark:text-white">Proposer</p>
-                <p className="font-small dark:text-white">{formatAddress(proposal.proposer)}</p>
-                </div>
-              </div>
-              
-              <div className="border-t pt-4 mb-4">
-                {expandedProposalId === proposal.id ? (
+          <>
+            {currentProposals.map((proposal, idx) => (
+              <div key={idx} className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow dark:shadow-gray-700/20">
+                <div className="flex justify-between items-start mb-4">
                   <div>
-                    {/* If there's HTML content available, display that, otherwise display plain text */}
-                    {proposal.descriptionHtml ? (
-                     <div 
-                     className="prose dark:prose-invert max-w-none text-sm text-gray-700 dark:text-gray-300 mb-4"
-                     dangerouslySetInnerHTML={{ __html: proposal.descriptionHtml }}
-                   />
-                    ) : (
-                      <p className="text-sm text-gray-700 dark:text-gray-300 mb-4 whitespace-pre-wrap">{proposal.description}</p>
-                    )}
-                    <div className="mt-4 border-t pt-4">
-                    <h2 className="text-xl font-semibold dark:text-white">Proposal Details</h2>
-                    {/* Display proposer address in full with copy button */}
-                      {renderAddress(proposal.proposer, "Proposer")}
-                      
-                      {/* Display proposal-specific details */}
-                      {proposal.type === PROPOSAL_TYPES.GENERAL && (
-                        <div className="mt-2 bg-gray-50 dark:bg-gray-700/50 p-4 rounded">
-                        {renderAddress(proposal.target, "Target")}
-                        <div className="mt-2">
-                          <p className="font-medium mb-1 dark:text-gray-300">Call Data:</p>
-                          <pre className="bg-gray-100 dark:bg-gray-800 p-2 mt-1 rounded overflow-x-auto text-xs dark:text-gray-300">{proposal.callData}</pre>
-                        </div>
-                      </div>
-                      )}
-                      
-                      {(proposal.type === PROPOSAL_TYPES.WITHDRAWAL || 
-                        proposal.type === PROPOSAL_TYPES.TOKEN_TRANSFER || 
-                        proposal.type === PROPOSAL_TYPES.TOKEN_MINT || 
-                        proposal.type === PROPOSAL_TYPES.TOKEN_BURN) && (
-                          <div className="mt-2 bg-gray-50 dark:bg-gray-700/50 p-4 rounded">
-                          {renderAddress(proposal.recipient, "Recipient")}
-                          <p className="mt-2 flex items-center">
-                            <span className="font-medium mr-2 dark:text-gray-300">Amount:</span> 
-                            <span className="dark:text-gray-300">
-                              {typeof proposal.amount === 'string' ? proposal.amount : formatBigNumber(proposal.amount)} 
-                              {proposal.type === PROPOSAL_TYPES.WITHDRAWAL ? ' ETH' : ' JUST'}
-                            </span>
-                          </p>
-                        </div>
-                      )}
-                      
-                      {proposal.type === PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER && (
-                        <div className="mt-2 bg-gray-50 dark:bg-gray-700/50 p-4 rounded">
-                        {renderAddress(proposal.recipient, "Recipient")}
-                        {renderAddress(proposal.token, "Token")}
-                        <p className="mt-2 flex items-center">
-                          <span className="font-medium mr-2 dark:text-gray-300">Amount:</span> 
-                          <span className="dark:text-gray-300">
-                            {typeof proposal.amount === 'string' ? proposal.amount : formatBigNumber(proposal.amount)}
-                          </span>
-                        </p>
-                      </div>
-                      )}
-                      
-                      {proposal.type === PROPOSAL_TYPES.GOVERNANCE_CHANGE && (
-                        <div className="mt-2 bg-gray-50 dark:bg-gray-700/50 p-4 rounded">
-                        {/* Display governance parameters with debug info */}
-                        <div className="dark:text-gray-300">
-                            {/* First try to extract parameters from description if standard fields are missing */}
-                            {proposal.type === PROPOSAL_TYPES.GOVERNANCE_CHANGE && (
-                              <div>
-                                {/* Try to parse parameters from description */}
-                                {(() => {
-                                  // Extract governance parameters from description if they're not in the data
-                                  const hasStandardParams = 
-                                    proposal.newThreshold || 
-                                    proposal.newQuorum || 
-                                    proposal.newVotingDuration || 
-                                    proposal.newProposalStake || 
-                                    proposal.newTimelockDelay;
-                                    
-                                  // If no standard params, check description
-                                  if (!hasStandardParams && proposal.description) {
-                                    // Look for parameter patterns in the description
-                                    const thresholdMatch = proposal.description.match(/threshold[:\s]+([0-9.]+)/i);
-                                    const quorumMatch = proposal.description.match(/quorum[:\s]+([0-9.]+)/i);
-                                    const durationMatch = proposal.description.match(/duration[:\s]+([0-9.]+)/i);
-                                    const stakeMatch = proposal.description.match(/stake[:\s]+([0-9.]+)/i);
-                                    
-                                    // If found any parameters, render them
-                                    if (thresholdMatch || quorumMatch || durationMatch || stakeMatch) {
-                                      return (
-                                        <>
-                  {thresholdMatch && (
-                    <p className="mb-2 flex items-center">
-                      <span className="font-medium mr-2 dark:text-gray-300">New Proposal Threshold:</span> 
-                      {thresholdMatch[1]} JUST
-                    </p>
-                  )}
-                  
-                  {quorumMatch && (
-                    <p className="mb-2 flex items-center">
-                      <span className="font-medium mr-2 dark:text-gray-300">New Quorum:</span> 
-                      {quorumMatch[1]} JUST
-                    </p>
-                  )}
-                  
-                  {durationMatch && (
-                    <p className="mb-2 flex items-center">
-                      <span className="font-medium mr-2 dark:text-gray-300">New Voting Duration:</span> 
-                      {durationMatch[1]} seconds
-                    </p>
-                  )}
-                  
-                  {stakeMatch && (
-                    <p className="mb-2 flex items-center">
-                      <span className="font-medium mr-2 dark:text-gray-300">New Proposal Stake:</span> 
-                      {stakeMatch[1]} JUST
-                    </p>
-                  )}
-                  
-                  {!(thresholdMatch || quorumMatch || durationMatch || stakeMatch) && (
-                    <p className="text-gray-500 dark:text-gray-400 italic">No parameter changes found in description</p>
-                  )}
-                </>
-              );
-            }
-          }
-          
-          // If has standard params or couldn't extract from description
-          return (
-            <>
-              <p className="mb-2 flex items-center">
-                <span className="font-medium mr-2 dark:text-gray-300">New Proposal Threshold:</span> 
-                <span className="dark:text-gray-300">
-                  {proposal.newThreshold && !ethers.BigNumber.from("0").eq(
-                    ethers.BigNumber.from(proposal.newThreshold || "0")
-                  )
-                    ? formatBigNumber(proposal.newThreshold)
-                    : "No Change"}
-                </span>
-              </p>
-              <p className="mb-2 flex items-center">
-                <span className="font-medium mr-2 dark:text-gray-300">New Quorum:</span> 
-                <span className="dark:text-gray-300">
-                  {proposal.newQuorum && !ethers.BigNumber.from("0").eq(
-                    ethers.BigNumber.from(proposal.newQuorum || "0")
-                  )
-                    ? formatBigNumber(proposal.newQuorum)
-                    : "No Change"}
-                </span>
-              </p>
-              <p className="mb-2 flex items-center">
-                <span className="font-medium mr-2 dark:text-gray-300">New Voting Duration:</span> 
-                <span className="dark:text-gray-300">
-                  {proposal.newVotingDuration && parseInt(proposal.newVotingDuration || "0") > 0
-                    ? formatTime(proposal.newVotingDuration)
-                    : "No Change"}
-                </span>
-              </p>
-              <p className="mb-2 flex items-center">
-                <span className="font-medium mr-2 dark:text-gray-300">New Proposal Stake:</span> 
-                <span className="dark:text-gray-300">
-                  {proposal.newProposalStake && !ethers.BigNumber.from("0").eq(
-                    ethers.BigNumber.from(proposal.newProposalStake || "0")
-                  )
-                    ? formatBigNumber(proposal.newProposalStake)
-                    : proposal.newTimelockDelay && !ethers.BigNumber.from("0").eq(
-                        ethers.BigNumber.from(proposal.newTimelockDelay || "0")
-                      )
-                      ? formatBigNumber(proposal.newTimelockDelay) 
-                      : "No Change"}
-                </span>
-              </p>
-            </>
-          );
-        })()}
-      </div>
-    )}
-  </div>
-</div>
-                      )}
-                      
-                      {/* Display Signaling proposal details */}
-                      {proposal.type === PROPOSAL_TYPES.SIGNALING && (
-                        <div className="mt-2 bg-gray-50 dark:bg-gray-700/50 p-4 rounded">
-                        <p className="text-sm text-gray-600 dark:text-gray-400 italic">
-                          This is a signaling proposal. It serves as a community discussion or vote without executing any code.
-                        </p>
-                      </div>
-                      )}
-                      
-                      {/* Add TimelockInfoDisplay component for queued proposals */}
-                      {proposal.stateLabel?.toLowerCase() === 'queued' && (
-                        <TimelockInfoDisplay
-                          proposal={proposal}
-                          contracts={contracts}
-                          timelockInfo={timelockInfo}
-                          setTimelockInfo={setTimelockInfo}
-                          copiedText={copiedText}
-                          setCopiedText={setCopiedText}
-                        />
-                      )}
-                    </div>
+                    <h3 className="text-lg font-medium dark:text-white">{proposal.title}</h3>
+                    <p className="font-medium dark:text-white">Proposal #{proposal.id}</p>
                   </div>
-                ) : (
-                  // For collapsed view, display truncated content - prefer HTML if available
-                  proposal.descriptionHtml ? (
-                    <div 
-  className="text-sm text-gray-700 dark:text-gray-300 mb-2"
-  dangerouslySetInnerHTML={{ __html: truncateHtml(proposal.descriptionHtml, 200) }}
-/>
+                  <div className="flex items-center">
+                    <span className={`text-xs px-2 py-1 rounded-full ${getStatusColor(proposal.stateLabel.toLowerCase())}`}>
+                      {proposal.stateLabel}
+                    </span>
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-3 gap-4 mb-4 text-sm text-gray-500">
+                  <div>
+                    <p className="font-medium dark:text-white">Type</p>
+                    <p className="font-small dark:text-white">{(() => {
+                      // Robust type detection for signaling proposals
+                      if (proposal.typeLabel && proposal.typeLabel !== "Unknown") {
+                        return proposal.typeLabel;
+                      }
+                      
+                      // Try to identify signaling proposals by type
+                      const type = Number(proposal.type);
+                      if (type === PROPOSAL_TYPES.SIGNALING) {
+                        return "Signaling";
+                      }
+                      
+                      // As a fallback, check description for signaling keywords
+                      if (proposal.description && proposal.description.toLowerCase().includes("signaling")) {
+                        return "Signaling";
+                      }
+                      
+                      // Finally, use our helper function
+                      return getProposalTypeLabel(proposal.type);
+                    })()}</p>
+                  </div>
+                  <div>
+                    <p className="font-medium dark:text-white">Created</p>
+                    <p className="font-small dark:text-white">{formatRelativeTime(proposal.createdAt)}</p>
+                  </div>
+                  <div>
+                    <p className="font-medium dark:text-white">Proposer</p>
+                    <p className="font-small dark:text-white">{formatAddress(proposal.proposer)}</p>
+                  </div>
+                </div>
+                
+                <div className="border-t pt-4 mb-4">
+                  {expandedProposalId === proposal.id ? (
+                    <div>
+                      {/* If there's HTML content available, display that, otherwise display plain text */}
+                      {proposal.descriptionHtml ? (
+                        <div 
+                        className="prose max-w-none text-sm text-gray-700 mb-4 dark:prose-invert dark:text-gray-200"
+                        dangerouslySetInnerHTML={{ __html: proposal.descriptionHtml }}
+                      />
+                      ) : (
+                        <p className="text-sm text-gray-700 dark:text-gray-300 mb-4 whitespace-pre-wrap">{proposal.description}</p>
+                      )}
+                      <div className="mt-4 border-t pt-4">
+                        <h2 className="text-xl font-semibold dark:text-white">Proposal Details</h2>
+                        {/* Display proposer address in full with copy button */}
+                        {renderAddress(proposal.proposer, "Proposer")}
+                        
+                        {/* Display proposal-specific details */}
+                        {proposal.type === PROPOSAL_TYPES.GENERAL && (
+                          <div className="mt-2 bg-gray-50 dark:bg-gray-700/50 p-4 rounded">
+                            {renderAddress(proposal.target, "Target")}
+                            <div className="mt-2">
+                              <p className="font-medium mb-1 dark:text-gray-300">Call Data:</p>
+                              <pre className="bg-gray-100 dark:bg-gray-800 p-2 mt-1 rounded overflow-x-auto text-xs dark:text-gray-300">{proposal.callData}</pre>
+                            </div>
+                          </div>
+                        )}
+                        
+                        {(proposal.type === PROPOSAL_TYPES.WITHDRAWAL || 
+                          proposal.type === PROPOSAL_TYPES.TOKEN_TRANSFER || 
+                          proposal.type === PROPOSAL_TYPES.TOKEN_MINT || 
+                          proposal.type === PROPOSAL_TYPES.TOKEN_BURN) && (
+                            <div className="mt-2 bg-gray-50 dark:bg-gray-700/50 p-4 rounded">
+                              {renderAddress(proposal.recipient, "Recipient")}
+                              <p className="mt-2 flex items-center">
+                                <span className="font-medium mr-2 dark:text-gray-300">Amount:</span> 
+                                <span className="dark:text-gray-300">
+                                  {typeof proposal.amount === 'string' ? proposal.amount : formatBigNumber(proposal.amount)} 
+                                  {proposal.type === PROPOSAL_TYPES.WITHDRAWAL ? ' ETH' : ' JUST'}
+                                </span>
+                              </p>
+                            </div>
+                        )}
+                        
+                        {proposal.type === PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER && (
+                          <div className="mt-2 bg-gray-50 dark:bg-gray-700/50 p-4 rounded">
+                            {renderAddress(proposal.recipient, "Recipient")}
+                            {renderAddress(proposal.token, "Token")}
+                            <p className="mt-2 flex items-center">
+                              <span className="font-medium mr-2 dark:text-gray-300">Amount:</span> 
+                              <span className="dark:text-gray-300">
+                                {typeof proposal.amount === 'string' ? proposal.amount : formatBigNumber(proposal.amount)}
+                              </span>
+                            </p>
+                          </div>
+                        )}
+                        
+                        {proposal.type === PROPOSAL_TYPES.GOVERNANCE_CHANGE && (
+                          <div className="mt-2 bg-gray-50 dark:bg-gray-700/50 p-4 rounded">
+                            {/* Display governance parameters with debug info */}
+                            <div className="dark:text-gray-300">
+                              {/* First try to extract parameters from description if standard fields are missing */}
+                              {proposal.type === PROPOSAL_TYPES.GOVERNANCE_CHANGE && (
+                                <div>
+                                  {/* Try to parse parameters from description */}
+                                  {(() => {
+                                    // Extract governance parameters from description if they're not in the data
+                                    const hasStandardParams = 
+                                      proposal.newThreshold || 
+                                      proposal.newQuorum || 
+                                      proposal.newVotingDuration || 
+                                      proposal.newProposalStake || 
+                                      proposal.newTimelockDelay;
+                                      
+                                    // If no standard params, check description
+                                    if (!hasStandardParams && proposal.description) {
+                                      // Look for parameter patterns in the description
+                                      const thresholdMatch = proposal.description.match(/threshold[:\s]+([0-9.]+)/i);
+                                      const quorumMatch = proposal.description.match(/quorum[:\s]+([0-9.]+)/i);
+                                      const durationMatch = proposal.description.match(/duration[:\s]+([0-9.]+)/i);
+                                      const stakeMatch = proposal.description.match(/stake[:\s]+([0-9.]+)/i);
+                                      
+                                      // If found any parameters, render them
+                                      if (thresholdMatch || quorumMatch || durationMatch || stakeMatch) {
+                                        return (
+                                          <>
+                                            {thresholdMatch && (
+                                              <p className="mb-2 flex items-center">
+                                                <span className="font-medium mr-2 dark:text-gray-300">New Proposal Threshold:</span> 
+                                                {thresholdMatch[1]} JUST
+                                              </p>
+                                            )}
+                                            
+                                            {quorumMatch && (
+                                              <p className="mb-2 flex items-center">
+                                                <span className="font-medium mr-2 dark:text-gray-300">New Quorum:</span> 
+                                                {quorumMatch[1]} JUST
+                                              </p>
+                                            )}
+                                            
+                                            {durationMatch && (
+                                              <p className="mb-2 flex items-center">
+                                                <span className="font-medium mr-2 dark:text-gray-300">New Voting Duration:</span> 
+                                                {durationMatch[1]} seconds
+                                              </p>
+                                            )}
+                                            
+                                            {stakeMatch && (
+                                              <p className="mb-2 flex items-center">
+                                                <span className="font-medium mr-2 dark:text-gray-300">New Proposal Stake:</span> 
+                                                {stakeMatch[1]} JUST
+                                              </p>
+                                            )}
+                                            
+                                            {!(thresholdMatch || quorumMatch || durationMatch || stakeMatch) && (
+                                              <p className="text-gray-500 dark:text-gray-400 italic">No parameter changes found in description</p>
+                                            )}
+                                          </>
+                                        );
+                                      }
+                                    }
+                                    
+                                    // If has standard params or couldn't extract from description
+                                    return (
+                                      <>
+                                        <p className="mb-2 flex items-center">
+                                          <span className="font-medium mr-2 dark:text-gray-300">New Proposal Threshold:</span> 
+                                          <span className="dark:text-gray-300">
+                                            {proposal.newThreshold && !ethers.BigNumber.from("0").eq(
+                                              ethers.BigNumber.from(proposal.newThreshold || "0")
+                                            )
+                                              ? formatBigNumber(proposal.newThreshold)
+                                              : "No Change"}
+                                          </span>
+                                        </p>
+                                        <p className="mb-2 flex items-center">
+                                          <span className="font-medium mr-2 dark:text-gray-300">New Quorum:</span> 
+                                          <span className="dark:text-gray-300">
+                                            {proposal.newQuorum && !ethers.BigNumber.from("0").eq(
+                                              ethers.BigNumber.from(proposal.newQuorum || "0")
+                                            )
+                                              ? formatBigNumber(proposal.newQuorum)
+                                              : "No Change"}
+                                          </span>
+                                        </p>
+                                        <p className="mb-2 flex items-center">
+                                          <span className="font-medium mr-2 dark:text-gray-300">New Voting Duration:</span> 
+                                          <span className="dark:text-gray-300">
+                                            {proposal.newVotingDuration && parseInt(proposal.newVotingDuration || "0") > 0
+                                              ? formatTime(proposal.newVotingDuration)
+                                              : "No Change"}
+                                          </span>
+                                        </p>
+                                        <p className="mb-2 flex items-center">
+                                          <span className="font-medium mr-2 dark:text-gray-300">New Proposal Stake:</span> 
+                                          <span className="dark:text-gray-300">
+                                            {proposal.newProposalStake && !ethers.BigNumber.from("0").eq(
+                                              ethers.BigNumber.from(proposal.newProposalStake || "0")
+                                            )
+                                              ? formatBigNumber(proposal.newProposalStake)
+                                              : proposal.newTimelockDelay && !ethers.BigNumber.from("0").eq(
+                                                  ethers.BigNumber.from(proposal.newTimelockDelay || "0")
+                                                )
+                                                ? formatBigNumber(proposal.newTimelockDelay) 
+                                                : "No Change"}
+                                          </span>
+                                        </p>
+                                      </>
+                                    );
+                                  })()}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* Display Signaling proposal details */}
+                        {proposal.type === PROPOSAL_TYPES.SIGNALING && (
+                          <div className="mt-2 bg-gray-50 dark:bg-gray-700/50 p-4 rounded">
+                            <p className="text-sm text-gray-600 dark:text-gray-400 italic">
+                              This is a signaling proposal. It serves as a community discussion or vote without executing any code.
+                            </p>
+                          </div>
+                        )}
+                        
+                        {/* Add TimelockInfoDisplay component for queued proposals */}
+                        {proposal.stateLabel?.toLowerCase() === 'queued' && (
+                          <TimelockInfoDisplay
+                            proposal={proposal}
+                            contracts={contracts}
+                            timelockInfo={timelockInfo}
+                            setTimelockInfo={setTimelockInfo}
+                            copiedText={copiedText}
+                            setCopiedText={setCopiedText}
+                          />
+                        )}
+                      </div>
+                    </div>
                   ) : (
-<p className="text-sm text-gray-700 dark:text-gray-300 mb-2 whitespace-pre-wrap">{proposal.description}</p>
-                  )
-                )}
-              </div>
-              
-              <div className="flex flex-wrap gap-2">
-              <button 
-  className="text-indigo-600 dark:text-indigo-300 border border-indigo-600 dark:border-indigo-300 px-3 py-1 rounded-md text-sm hover:bg-indigo-50 dark:hover:bg-indigo-900/40 flex items-center transition-colors"
-  onClick={() => toggleProposalDetails(proposal.id)}
->
-  {expandedProposalId === proposal.id ? (
-    <>View Less <ChevronUp className="w-4 h-4 ml-1" /></>
-  ) : (
-    <>View Details <ChevronDown className="w-4 h-4 ml-1" /></>
-  )}
-</button>
+                    // For collapsed view, display truncated content - prefer HTML if available
+                    proposal.descriptionHtml ? (
+                      <div 
+                        className="text-sm text-gray-700 dark:text-gray-300 mb-2"
+                        dangerouslySetInnerHTML={{ __html: truncateHtml(proposal.descriptionHtml, 200) }}
+                      />
+                    ) : (
+                      <p className="text-sm text-gray-700 dark:text-gray-300 mb-2 whitespace-pre-wrap">{proposal.description}</p>
+                    )
+                  )}
+                </div>
                 
-                {proposal.state === PROPOSAL_STATES.ACTIVE && 
-                 addressesEqual(account, proposal.proposer) && 
-                 (!proposal.hasVotes) && (
+                <div className="flex flex-wrap gap-2">
                   <button 
-                    className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-md text-sm"
-                    onClick={() => handleProposalAction(cancelProposal, proposal.id, 'cancelling')}
-                    disabled={loading}
+                    className="text-indigo-600 dark:text-indigo-300 border border-indigo-600 dark:border-indigo-300 px-3 py-1 rounded-md text-sm hover:bg-indigo-50 dark:hover:bg-indigo-900/40 flex items-center transition-colors"
+                    onClick={() => toggleProposalDetails(proposal.id)}
                   >
-                    Cancel
+                    {expandedProposalId === proposal.id ? (
+                      <>View Less <ChevronUp className="w-4 h-4 ml-1" /></>
+                    ) : (
+                      <>View Details <ChevronDown className="w-4 h-4 ml-1" /></>
+                    )}
                   </button>
-                )}
-                
-                {/* Show Queue button only for SUCCEEDED proposals that haven't been queued yet */}
-                {proposal.state === PROPOSAL_STATES.SUCCEEDED && !proposal.isQueued && (
-                  <button 
-                    className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded-md text-sm"
-                    onClick={() => handleProposalAction(queueProposal, proposal.id, 'queuing')}
-                    disabled={loading}
-                  >
-                    Queue
-                  </button>
-                )}
-                {/* Show Execute button only for QUEUED proposals that haven't been executed yet */}
-{proposal.state === PROPOSAL_STATES.QUEUED && !proposal.isExecuted && (
-  <button 
-    className="bg-purple-500 dark:bg-purple-600 hover:bg-purple-600 dark:hover:bg-purple-500 text-white px-3 py-1 rounded-md text-sm shadow-sm hover:shadow-md dark:shadow-purple-700/30 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-purple-500 dark:focus:ring-purple-400 focus:ring-opacity-50 disabled:opacity-60 disabled:cursor-not-allowed"
-    onClick={() => handleProposalAction(executeProposal, proposal.id, 'executing')}
-    disabled={loading}
-  >
-    Execute
-  </button>
-)}
-
-{/* Display claim stake button for defeated/canceled/expired proposals */}
-{canClaimRefund(proposal) && (
-  <button 
-    className="bg-green-500 dark:bg-green-600 hover:bg-green-600 dark:hover:bg-green-500 text-white px-3 py-1 rounded-md text-sm shadow-sm hover:shadow-md dark:shadow-green-700/30 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-green-500 dark:focus:ring-green-400 focus:ring-opacity-50 disabled:opacity-60 disabled:cursor-not-allowed flex items-center"
-    onClick={() => handleProposalAction(claimRefund, proposal.id, 'claiming refund for')}
-    disabled={loading}
-  >
-    <svg 
-      xmlns="http://www.w3.org/2000/svg" 
-      className="h-4 w-4 mr-1" 
-      fill="none" 
-      viewBox="0 0 24 24" 
-      stroke="currentColor"
-    >
-      <path 
-        strokeLinecap="round" 
-        strokeLinejoin="round" 
-        strokeWidth={2} 
-        d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" 
-      />
-    </svg>
-    Claim Stake Refund
-  </button>
-
-                )}
+                  
+                  {proposal.state === PROPOSAL_STATES.ACTIVE && 
+                   addressesEqual(account, proposal.proposer) && 
+                   (!proposal.hasVotes) && (
+                    <button 
+                      className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-md text-sm"
+                      onClick={() => handleProposalAction(cancelProposal, proposal.id, 'cancelling')}
+                      disabled={loading}
+                    >
+                      Cancel
+                    </button>
+                  )}
+                  
+                  {/* Show Queue button only for SUCCEEDED proposals that haven't been queued yet */}
+                  {proposal.state === PROPOSAL_STATES.SUCCEEDED && !proposal.isQueued && (
+                    <button 
+                      className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded-md text-sm"
+                      onClick={() => handleProposalAction(queueProposal, proposal.id, 'queuing')}
+                      disabled={loading}
+                    >
+                      Queue
+                    </button>
+                  )}
+                  
+                  {/* Show Execute button only for QUEUED proposals that haven't been executed yet */}
+                  {proposal.state === PROPOSAL_STATES.QUEUED && !proposal.isExecuted && (
+                    <button 
+                      className="bg-purple-500 dark:bg-purple-600 hover:bg-purple-600 dark:hover:bg-purple-500 text-white px-3 py-1 rounded-md text-sm shadow-sm hover:shadow-md dark:shadow-purple-700/30 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-purple-500 dark:focus:ring-purple-400 focus:ring-opacity-50 disabled:opacity-60 disabled:cursor-not-allowed"
+                      onClick={() => handleProposalAction(executeProposal, proposal.id, 'executing')}
+                      disabled={loading}
+                    >
+                      Execute
+                    </button>
+                  )}
+                  
+                  {/* Display claim stake button for defeated/canceled/expired proposals */}
+                  {canClaimRefund(proposal) && (
+                    <button 
+                      className="bg-green-500 dark:bg-green-600 hover:bg-green-600 dark:hover:bg-green-500 text-white px-3 py-1 rounded-md text-sm shadow-sm hover:shadow-md dark:shadow-green-700/30 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-green-500 dark:focus:ring-green-400 focus:ring-opacity-50 disabled:opacity-60 disabled:cursor-not-allowed flex items-center"
+                      onClick={() => handleProposalAction(claimRefund, proposal.id, 'claiming refund for')}
+                      disabled={loading}
+                    >
+                      <svg 
+                        xmlns="http://www.w3.org/2000/svg" 
+                        className="h-4 w-4 mr-1" 
+                        fill="none" 
+                        viewBox="0 0 24 24" 
+                        stroke="currentColor"
+                      >
+                        <path 
+                          strokeLinecap="round" 
+                          strokeLinejoin="round" 
+                          strokeWidth={2} 
+                          d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" 
+                        />
+                      </svg>
+                      Claim Stake Refund
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
-          ))
+            ))}
+            
+            {/* Pagination controls */}
+            {totalPages > 1 && (
+              <div className="flex justify-between items-center mt-6 bg-white dark:bg-gray-800 p-4 rounded-lg shadow dark:shadow-gray-700/20">
+                <div className="text-sm text-gray-500 dark:text-gray-400">
+                  Showing proposals {indexOfFirstItem + 1}-{Math.min(indexOfLastItem, sortedProposals.length)} of {sortedProposals.length}
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={goToPreviousPage}onClick={goToPreviousPage}
+                    disabled={currentPage === 1}
+                    className={`flex items-center justify-center p-2 rounded-md ${currentPage === 1 
+                      ? 'text-gray-400 cursor-not-allowed' 
+                      : 'text-indigo-600 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:bg-indigo-900/30'}`}
+                    aria-label="Previous Page"
+                  >
+                    <ChevronLeft className="w-5 h-5" />
+                  </button>
+                  {/* Page numbers */}
+                  <div className="flex space-x-1">
+                    {/* Show limited page numbers with ellipsis for better UI */}
+                    {[...Array(totalPages)].map((_, i) => {
+                      // Only show first page, last page, current page, and pages around current
+                      const pageNum = i + 1;
+                      
+                      // Logic to determine which page numbers to show
+                      const shouldShowPage = 
+                        pageNum === 1 || // Always show first page
+                        pageNum === totalPages || // Always show last page
+                        (pageNum >= currentPage - 1 && pageNum <= currentPage + 1); // Show current and surrounding pages
+                      
+                      // Show ellipsis before and after skipped pages
+                      const showPrevEllipsis = i === 1 && currentPage > 3;
+                      const showNextEllipsis = i === totalPages - 2 && currentPage < totalPages - 2;
+                      
+                      if (shouldShowPage) {
+                        return (
+                          <button
+                            key={pageNum}
+                            onClick={() => goToPage(pageNum)}
+                            className={`w-8 h-8 flex items-center justify-center rounded-md ${
+                              currentPage === pageNum
+                                ? 'bg-indigo-600 text-white dark:bg-indigo-700'
+                                : 'text-gray-700 hover:bg-indigo-50 dark:text-gray-300 dark:hover:bg-indigo-900/30'
+                            }`}
+                          >
+                            {pageNum}
+                          </button>
+                        );
+                      } else if (showPrevEllipsis || showNextEllipsis) {
+                        return (
+                          <div key={`ellipsis-${i}`} className="w-8 h-8 flex items-center justify-center">
+                            &hellip;
+                          </div>
+                        );
+                      } else {
+                        return null;
+                      }
+                    })}
+                  </div>
+                  <button
+                    onClick={goToNextPage}
+                    disabled={currentPage === totalPages}
+                    className={`flex items-center justify-center p-2 rounded-md ${currentPage === totalPages 
+                      ? 'text-gray-400 cursor-not-allowed' 
+                      : 'text-indigo-600 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:bg-indigo-900/30'}`}
+                    aria-label="Next Page"
+                  >
+                    <ChevronRight className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
         ) : (
           <div className="text-center py-8 text-gray-500">
             No proposals found
@@ -1941,23 +2138,16 @@ const ProposalsTab = ({
       {/* Create Proposal Modal with Rich Text Editor */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-<div className="bg-white rounded-lg max-w-2xl w-full p-6 max-h-screen overflow-y-auto dark:bg-gray-800">
-
-<h2 className="text-xl font-semibold mb-4 dark:text-white">Create New Proposal</h2>            
-            {transactionError && (
-              <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4 dark:bg-red-900/20 dark:border-red-700 dark:text-red-400">
-                <p className="font-bold">Error</p>
-                <p>{transactionError}</p>
-              </div>
-            )}
-            
+          <div className="bg-white rounded-lg max-w-2xl w-full p-6 max-h-screen overflow-y-auto dark:bg-gray-800">
+            <h2 className="text-xl font-semibold mb-4 dark:text-white">Create New Proposal</h2>
+            {renderCreationStatus()}
+            {renderCreateProposalError()}      
             <form onSubmit={handleSubmitProposal} className="space-y-4" noValidate>
               <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Proposal Title</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Proposal Title</label>
                 <input 
                   type="text" 
-className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
-
+                  className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
                   placeholder="Enter proposal title" 
                   value={newProposal.title}
                   onChange={(e) => setNewProposal({...newProposal, title: e.target.value})}
@@ -1965,11 +2155,10 @@ className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:te
               </div>
               
               <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Proposal Type</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Proposal Type</label>
                 <select 
-className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
-
-value={newProposal.type}
+                  className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
+                  value={newProposal.type}
                   onChange={(e) => {
                     console.log("Type changed to:", e.target.value);
                     setNewProposal({...newProposal, type: e.target.value})
@@ -1987,27 +2176,26 @@ value={newProposal.type}
               </div>
               
               <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
                 {/* Replace textarea with the rich text editor component */}
                 <ProposalRichTextEditor
-                initialValue={newProposal.descriptionHtml || ''}
-                onChange={handleDescriptionChange}
-                height="250px"
-                placeholder="Describe your proposal in detail..."
-                isSignalingProposal={isSignalingProposal}
-                darkMode={true} // Add this prop to enable dark mode styling
-              />
+                  initialValue={newProposal.descriptionHtml || ''}
+                  onChange={handleDescriptionChange}
+                  height="250px"
+                  placeholder="Describe your proposal in detail..."
+                  isSignalingProposal={isSignalingProposal}
+                  darkMode={isDarkMode} // Add this prop to enable dark mode styling
+                />
               </div>
               
               {/* Fields for GENERAL proposal type */}
               {parseInt(newProposal.type) === PROPOSAL_TYPES.GENERAL && (
                 <>
                   <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Target Address</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Target Address</label>
                     <input 
                       type="text" 
                       className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
-
                       placeholder="0x..." 
                       value={newProposal.target}
                       onChange={(e) => setNewProposal({...newProposal, target: e.target.value})}
@@ -2016,11 +2204,10 @@ value={newProposal.type}
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The contract address that will be called</p>
                   </div>
                   <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Call Data</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Call Data</label>
                     <input 
                       type="text" 
                       className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
-
                       placeholder="0x..." 
                       value={newProposal.callData}
                       onChange={(e) => setNewProposal({...newProposal, callData: e.target.value})}
@@ -2035,11 +2222,10 @@ value={newProposal.type}
               {parseInt(newProposal.type) === PROPOSAL_TYPES.WITHDRAWAL && (
                 <>
                   <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Recipient Address</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Recipient Address</label>
                     <input 
                       type="text" 
                       className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
-
                       placeholder="0x..." 
                       value={newProposal.recipient}
                       onChange={(e) => setNewProposal({...newProposal, recipient: e.target.value})}
@@ -2048,12 +2234,11 @@ value={newProposal.type}
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The address that will receive the ETH</p>
                   </div>
                   <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Amount (ETH)</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Amount (ETH)</label>
                     <input 
                       type="number" 
                       step="0.000000000000000001"
                       className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
-
                       placeholder="Amount" 
                       value={newProposal.amount}
                       onChange={(e) => setNewProposal({...newProposal, amount: e.target.value})}
@@ -2068,11 +2253,10 @@ value={newProposal.type}
               {parseInt(newProposal.type) === PROPOSAL_TYPES.TOKEN_TRANSFER && (
                 <>
                   <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Recipient Address</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Recipient Address</label>
                     <input 
                       type="text" 
                       className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
-
                       placeholder="0x..." 
                       value={newProposal.recipient}
                       onChange={(e) => setNewProposal({...newProposal, recipient: e.target.value})}
@@ -2081,12 +2265,11 @@ value={newProposal.type}
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The address that will receive the JUST tokens</p>
                   </div>
                   <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Amount (JUST)</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Amount (JUST)</label>
                     <input 
                       type="number"
                       step="0.000000000000000001"
                       className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
-
                       placeholder="Amount" 
                       value={newProposal.amount}
                       onChange={(e) => setNewProposal({...newProposal, amount: e.target.value})}
@@ -2101,11 +2284,10 @@ value={newProposal.type}
               {parseInt(newProposal.type) === PROPOSAL_TYPES.TOKEN_MINT && (
                 <>
                   <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Recipient Address</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Recipient Address</label>
                     <input 
                       type="text" 
                       className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
-
                       placeholder="0x..." 
                       value={newProposal.recipient}
                       onChange={(e) => setNewProposal({...newProposal, recipient: e.target.value})}
@@ -2114,12 +2296,11 @@ value={newProposal.type}
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The address that will receive the minted JUST tokens</p>
                   </div>
                   <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Amount (JUST)</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Amount (JUST)</label>
                     <input 
                       type="number"
                       step="0.000000000000000001"
                       className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
-
                       placeholder="Amount" 
                       value={newProposal.amount}
                       onChange={(e) => setNewProposal({...newProposal, amount: e.target.value})}
@@ -2134,11 +2315,10 @@ value={newProposal.type}
               {parseInt(newProposal.type) === PROPOSAL_TYPES.TOKEN_BURN && (
                 <>
                   <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Address to Burn From</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Address to Burn From</label>
                     <input 
                       type="text" 
                       className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
-
                       placeholder="0x..." 
                       value={newProposal.recipient}
                       onChange={(e) => setNewProposal({...newProposal, recipient: e.target.value})}
@@ -2147,12 +2327,11 @@ value={newProposal.type}
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The address from which JUST tokens will be burned</p>
                   </div>
                   <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Amount (JUST)</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Amount (JUST)</label>
                     <input 
                       type="number"
                       step="0.000000000000000001"
                       className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
-
                       placeholder="Amount" 
                       value={newProposal.amount}
                       onChange={(e) => setNewProposal({...newProposal, amount: e.target.value})}
@@ -2167,11 +2346,10 @@ value={newProposal.type}
               {parseInt(newProposal.type) === PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER && (
                 <>
                   <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Token Address</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Token Address</label>
                     <input 
                       type="text" 
                       className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
-
                       placeholder="0x..." 
                       value={newProposal.token}
                       onChange={(e) => setNewProposal({...newProposal, token: e.target.value})}
@@ -2180,11 +2358,10 @@ value={newProposal.type}
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The address of the ERC20 token to transfer</p>
                   </div>
                   <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Recipient Address</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Recipient Address</label>
                     <input 
                       type="text" 
                       className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
-
                       placeholder="0x..." 
                       value={newProposal.recipient}
                       onChange={(e) => setNewProposal({...newProposal, recipient: e.target.value})}
@@ -2193,12 +2370,11 @@ value={newProposal.type}
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The address that will receive the tokens</p>
                   </div>
                   <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Amount</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Amount</label>
                     <input 
                       type="number"
                       step="0.000000000000000001"
                       className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
-
                       placeholder="Amount" 
                       value={newProposal.amount}
                       onChange={(e) => setNewProposal({...newProposal, amount: e.target.value})}
@@ -2213,12 +2389,11 @@ value={newProposal.type}
               {parseInt(newProposal.type) === PROPOSAL_TYPES.GOVERNANCE_CHANGE && (
                 <>
                   <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">New Proposal Threshold</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">New Proposal Threshold</label>
                     <input 
                       type="number"
                       step="0.000000000000000001"
                       className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
-
                       placeholder="New threshold (in JUST tokens)" 
                       value={newProposal.newThreshold}
                       onChange={(e) => setNewProposal({...newProposal, newThreshold: e.target.value})}
@@ -2226,12 +2401,11 @@ value={newProposal.type}
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The new minimum amount of JUST tokens needed to create proposals</p>
                   </div>
                   <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">New Quorum</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">New Quorum</label>
                     <input 
                       type="number"
                       step="0.000000000000000001"
                       className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
-
                       placeholder="New quorum (in JUST tokens)" 
                       value={newProposal.newQuorum}
                       onChange={(e) => setNewProposal({...newProposal, newQuorum: e.target.value})}
@@ -2239,11 +2413,10 @@ value={newProposal.type}
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The new minimum voting power required for a proposal to pass</p>
                   </div>
                   <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">New Voting Duration</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">New Voting Duration</label>
                     <input 
                       type="number"
                       className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
-
                       placeholder="New voting duration (in seconds)" 
                       value={newProposal.newVotingDuration}
                       onChange={(e) => setNewProposal({...newProposal, newVotingDuration: e.target.value})}
@@ -2251,12 +2424,11 @@ value={newProposal.type}
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The new duration of the voting period in seconds</p>
                   </div>
                   <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">New Proposal Stake</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">New Proposal Stake</label>
                     <input 
                       type="number"
                       step="0.000000000000000001"
                       className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
-
                       placeholder="New proposal stake (in JUST tokens)" 
                       value={newProposal.newProposalStake}
                       onChange={(e) => setNewProposal({...newProposal, newProposalStake: e.target.value})}
@@ -2269,89 +2441,41 @@ value={newProposal.type}
               {/* Fields for SIGNALING proposal type - NEW */}
               {parseInt(newProposal.type) === PROPOSAL_TYPES.SIGNALING && (
                 <div className="bg-indigo-50 border border-indigo-200 p-4 rounded-md dark:bg-indigo-900/20 dark:border-indigo-700">
-
-<p className="text-sm text-indigo-800 mb-2">
+                  <p className="text-sm text-indigo-800 mb-2 dark:text-indigo-200">
                     <strong>Signaling Proposal Information:</strong>
                   </p>
                   <p className="text-sm text-indigo-700 dark:text-indigo-300 mt-2">
-                  A signaling proposal is used for community polls, sentiment gathering, or discussion topics without any on-chain actions.
+                    A signaling proposal is used for community polls, sentiment gathering, or discussion topics without any on-chain actions.
                     Only title and description are required. A proposal deposit will still be required.
                   </p>
                   <p className="text-sm text-indigo-700 dark:text-indigo-300 mt-2">
-
-Use the rich text editor above to format your proposal clearly. You can add headers, bullet points, and formatting to make your signaling proposal more structured and easier to read.
+                    Use the rich text editor above to format your proposal clearly. You can add headers, bullet points, and formatting to make your signaling proposal more structured and easier to read.
                   </p>
                 </div>
               )}
               <div className="flex justify-end space-x-2 pt-4">
-              <button 
-  type="button"
-  className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 dark:text-gray-200"
-  onClick={() => setShowCreateModal(false)}
-  disabled={submitting}
->
-  Cancel
-</button>
-  {parseInt(newProposal.type) === PROPOSAL_TYPES.SIGNALING ? (
-    // Special button for signaling proposals that bypasses form validation
-    <button 
-      type="button"
-      className="px-4 py-2 bg-indigo-600 dark:bg-indigo-500 text-white rounded-md hover:bg-indigo-700 dark:hover:bg-indigo-400 disabled:bg-indigo-400 dark:disabled:bg-indigo-700 disabled:cursor-not-allowed shadow-sm hover:shadow-md dark:shadow-indigo-700/30 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 dark:focus:ring-offset-gray-800"
-      disabled={submitting || !newProposal.title || !newProposal.description}
-      onClick={async () => {
-        try {
-          setSubmitting(true);
-          // Use the content from the rich text editor
-          let description;
-          if (newProposal.descriptionHtml) {
-            description = `${newProposal.title}\n\n${newProposal.description}\n\n|||HTML:${newProposal.descriptionHtml}`;
-          } else {
-            description = `${newProposal.title}\n\n${newProposal.description}`;
-          }
-          await createSignalingProposal(description);
-          setShowCreateModal(false);
-          setNewProposal({
-            title: '',
-            description: '',
-            descriptionHtml: '',
-            type: PROPOSAL_TYPES.GENERAL,
-            target: '',
-            callData: '',
-            amount: '',
-            recipient: '',
-            token: '',
-            newThreshold: '',
-            newQuorum: '',
-            newVotingDuration: '',
-            newProposalStake: ''
-          });
-        } catch (error) {
-          console.error("Error creating signaling proposal:", error);
-          setTransactionError(error.message || 'Error creating signaling proposal');
-        } finally {
-          setSubmitting(false);
-        }
-      }}
-    >
-      {submitting ? 'Creating Signaling Proposal...' : 'Create Signaling Proposal'}
-    </button>
-  ) : (
-    // Regular submit button for other proposal types
-    <button 
-      type="submit"
-      className="px-4 py-2 bg-indigo-600 dark:bg-indigo-500 text-white rounded-md hover:bg-indigo-700 dark:hover:bg-indigo-400 disabled:bg-indigo-400 dark:disabled:bg-indigo-700 disabled:cursor-not-allowed shadow-sm hover:shadow-md dark:shadow-indigo-700/30 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 dark:focus:ring-offset-gray-800"
-      disabled={submitting}
-    >
-      {submitting ? 'Creating Proposal...' : 'Create Proposal'}
-    </button>
-  )}
-</div>
-</form>
-</div>
-</div>
-)}
-</div>
-);
+                <button 
+                  type="button"
+                  className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 dark:text-gray-200"
+                  onClick={() => setShowCreateModal(false)}
+                  disabled={submitting}
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit"
+                  className="px-4 py-2 bg-indigo-600 dark:bg-indigo-500 text-white rounded-md hover:bg-indigo-700 dark:hover:bg-indigo-400 disabled:bg-indigo-400 dark:disabled:bg-indigo-700 disabled:cursor-not-allowed shadow-sm hover:shadow-md dark:shadow-indigo-700/30 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 dark:focus:ring-offset-gray-800"
+                  disabled={submitting}
+                >
+                  {submitting ? 'Creating Proposal...' : 'Create Proposal'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 };
 
 export default ProposalsTab;

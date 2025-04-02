@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { AlertTriangle, Shield, AlertCircle, Lock, X, Check, Wallet, Ban, RefreshCw } from 'lucide-react';
 import Loader from './Loader';
 
-const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
+const EmergencyControlsTab = ({ contracts, account, hasRole, darkMode }) => {
   const [contractStatus, setContractStatus] = useState({
     governance: {
       paused: false,
@@ -479,44 +479,53 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
     return `${address.substring(0, 6)}...${address.substring(address.length - 4)}`;
   };
 
+  // Card component for consistent styling
+  const Card = ({ children, className = "" }) => {
+    return (
+      <div className={`bg-white p-6 rounded-lg shadow mb-6 dark:bg-gray-800 dark:shadow-gray-700 dark:border dark:border-gray-700 ${className}`}>
+        {children}
+      </div>
+    );
+  };
+
   return (
-    <div>
+    <div className="dark:bg-gray-900">
       <div className="mb-6">
-      <h2 className="text-xl font-semibold dark:text-white">Emergency Controls</h2>
-      <p className="text-gray-500">Guardian and emergency management functions</p>
+        <h2 className="text-xl font-semibold dark:text-white">Emergency Controls</h2>
+        <p className="text-gray-500 dark:text-gray-400">Guardian and emergency management functions</p>
       </div>
       
       {errorMessage && (
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4 flex items-start">
+        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4 flex items-start dark:bg-red-900/30 dark:border-red-800 dark:text-red-400">
           <AlertTriangle className="w-5 h-5 mr-2 mt-0.5" />
           <span>{errorMessage}</span>
         </div>
       )}
       
       {successMessage && (
-        <div className="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mb-4">
+        <div className="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mb-4 dark:bg-green-900/30 dark:border-green-800 dark:text-green-400">
           {successMessage}
         </div>
       )}
       
       {!hasRole('admin') && !hasRole('guardian') && (
-        <div className="bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-3 rounded mb-4">
+        <div className="bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-3 rounded mb-4 dark:bg-yellow-900/30 dark:border-yellow-700 dark:text-yellow-400">
           You do not have the required permissions to use emergency controls.
         </div>
       )}
       
       {loading ? (
-        <div className="bg-white p-6 rounded-lg shadow">
+        <Card>
           <Loader size="large" text="Loading emergency status..." />
-        </div>
+        </Card>
       ) : (
-        <>
+        <div className="dark:bg-gray-900">
           {/* Display contract availability information */}
           {(!getContractRefs().governance && !getContractRefs().token && !getContractRefs().timelock) && (
-            <div className="bg-yellow-100 border border-yellow-400 text-yellow-800 px-4 py-3 rounded mb-4">
-              <h3 className="font-bold mb-2">Contract Connection Information</h3>
-              <p>No contracts are currently connected. Contract references received:</p>
-              <pre className="bg-yellow-50 p-2 mt-2 text-xs overflow-auto">
+            <div className="bg-yellow-100 border border-yellow-400 text-yellow-800 px-4 py-3 rounded mb-4 dark:bg-yellow-900/30 dark:border-yellow-700 dark:text-yellow-400">
+              <h3 className="font-bold mb-2 dark:text-yellow-400">Contract Connection Information</h3>
+              <p className="dark:text-gray-300">No contracts are currently connected. Contract references received:</p>
+              <pre className="bg-yellow-50 p-2 mt-2 text-xs overflow-auto dark:bg-gray-800 dark:text-gray-300">
                 {JSON.stringify(contracts, null, 2)}
               </pre>
             </div>
@@ -524,14 +533,14 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
           
           {/* Governance Operations Panel */}
           {getContractRefs().governance && (
-            <div className="bg-white p-6 rounded-lg shadow mb-6">
+            <Card>
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center">
-                  <Shield className="w-5 h-5 text-indigo-500 mr-2" />
-                  <h3 className="text-lg font-medium text-gray-900">Governance Emergency Controls</h3>
+                  <Shield className="w-5 h-5 text-indigo-500 mr-2 dark:text-indigo-400" />
+                  <h3 className="text-lg font-medium text-gray-900 dark:text-white">Governance Emergency Controls</h3>
                 </div>
                 <button 
-                  className="text-gray-500 hover:text-gray-700"
+                  className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300"
                   onClick={() => setGovernanceOperationsExpanded(!governanceOperationsExpanded)}
                 >
                   {governanceOperationsExpanded ? (
@@ -544,9 +553,9 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
 
               {governanceOperationsExpanded && (
                 <>
-                  <div className="text-sm text-gray-600 mb-4">
+                  <div className="text-sm text-gray-600 mb-4 dark:text-gray-300 dark:bg-gray-800 dark:p-3 dark:rounded-md">
                     <p className="mb-2">
-                      <strong>Warning:</strong> Pausing the governance contract will prevent all proposal submissions, voting, and execution.
+                      <strong className="dark:text-red-400">Warning:</strong> Pausing the governance contract will prevent all proposal submissions, voting, and execution.
                       This should only be used in emergency situations such as:
                     </p>
                     <ul className="list-disc pl-5 mb-3">
@@ -558,19 +567,19 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
                     <p>Ongoing votes may be affected and proposal execution will be blocked while governance is paused.</p>
                   </div>
 
-                  <div className="bg-gray-100 p-4 rounded-lg mb-4">
+                  <div className="bg-gray-100 p-4 rounded-lg mb-4 dark:bg-gray-700">
                     <div className="flex items-center mb-2">
-                      <h4 className="font-medium">Current Governance Status:</h4>
-                      <div className={`ml-3 py-1 px-3 inline-block rounded-full text-sm ${contractStatus.governance.paused ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>
+                      <h4 className="font-medium dark:text-white">Current Governance Status:</h4>
+                      <div className={`ml-3 py-1 px-3 inline-block rounded-full text-sm ${contractStatus.governance.paused ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400' : 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'}`}>
                         {contractStatus.governance.paused ? 'PAUSED' : 'ACTIVE'}
                       </div>
                     </div>
                     
                     {contractStatus.governance.paused && contractStatus.governance.lastPausedBy && (
                       <div className="text-sm">
-                        <p className="text-gray-600">Paused By: {formatAddress(contractStatus.governance.lastPausedBy)}</p>
+                        <p className="text-gray-600 dark:text-gray-300">Paused By: {formatAddress(contractStatus.governance.lastPausedBy)}</p>
                         {contractStatus.governance.lastPauseTimestamp && (
-                          <p className="text-gray-600">Paused At: {formatDate(contractStatus.governance.lastPauseTimestamp)}</p>
+                          <p className="text-gray-600 dark:text-gray-300">Paused At: {formatDate(contractStatus.governance.lastPauseTimestamp)}</p>
                         )}
                       </div>
                     )}
@@ -582,7 +591,7 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
                         {contractStatus.governance.paused ? (
                           hasRole('admin') ? (
                             <button
-                              className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-md font-medium disabled:bg-green-300 flex items-center"
+                              className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-md font-medium disabled:bg-green-300 flex items-center dark:bg-green-600 dark:hover:bg-green-700 dark:disabled:bg-green-800/50"
                               onClick={() => unpauseContract('governance')}
                               disabled={transactionLoading}
                             >
@@ -590,14 +599,14 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
                               Unpause Governance
                             </button>
                           ) : (
-                            <div className="text-amber-700 bg-amber-50 px-4 py-2 rounded-md border border-amber-200 flex items-center">
+                            <div className="text-amber-700 bg-amber-50 px-4 py-2 rounded-md border border-amber-200 flex items-center dark:bg-amber-900/30 dark:border-amber-700 dark:text-amber-400">
                               <AlertTriangle className="w-4 h-4 mr-2" />
                               Only Admin can unpause
                             </div>
                           )
                         ) : (
                           <button
-                            className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-md font-medium disabled:bg-red-300 flex items-center"
+                            className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-md font-medium disabled:bg-red-300 flex items-center dark:bg-red-600 dark:hover:bg-red-700 dark:disabled:bg-red-800/50"
                             onClick={() => {
                               setSelectedContract('governance');
                               setPauseReason('');
@@ -611,7 +620,7 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
                       </div>
                       
                       {!contractStatus.governance.paused && (
-                        <div className="text-sm text-gray-500">
+                        <div className="text-sm text-gray-500 dark:text-gray-400">
                           <p>Pausing requires {hasRole('guardian') ? 'Guardian or Admin' : 'Admin'} role</p>
                           <p>Unpausing requires Admin role</p>
                         </div>
@@ -620,19 +629,19 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
                   )}
                 </>
               )}
-            </div>
+            </Card>
           )}
           
           {/* Token Operations Panel */}
           {getContractRefs().token && (
-            <div className="bg-white p-6 rounded-lg shadow mb-6">
+            <Card>
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center">
-                  <Wallet className="w-5 h-5 text-indigo-500 mr-2" />
-                  <h3 className="text-lg font-medium text-gray-900">Token Emergency Controls</h3>
+                  <Wallet className="w-5 h-5 text-indigo-500 mr-2 dark:text-indigo-400" />
+                  <h3 className="text-lg font-medium text-gray-900 dark:text-white">Token Emergency Controls</h3>
                 </div>
                 <button 
-                  className="text-gray-500 hover:text-gray-700"
+                  className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300"
                   onClick={() => setTokenOperationsExpanded(!tokenOperationsExpanded)}
                 >
                   {tokenOperationsExpanded ? (
@@ -645,9 +654,9 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
 
               {tokenOperationsExpanded && (
                 <>
-                  <div className="text-sm text-gray-600 mb-4">
+                  <div className="text-sm text-gray-600 mb-4 dark:text-gray-300 dark:bg-gray-800 dark:p-3 dark:rounded-md">
                     <p className="mb-2">
-                      <strong>Warning:</strong> Pausing the token contract will prevent all token transfers, minting, and burning operations.
+                      <strong className="dark:text-red-400">Warning:</strong> Pausing the token contract will prevent all token transfers, minting, and burning operations.
                       This should only be used in emergency situations such as:
                     </p>
                     <ul className="list-disc pl-5 mb-3">
@@ -659,19 +668,19 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
                     <p>Token holders will be unable to transfer their tokens while the contract is paused.</p>
                   </div>
 
-                  <div className="bg-gray-100 p-4 rounded-lg mb-4">
+                  <div className="bg-gray-100 p-4 rounded-lg mb-4 dark:bg-gray-700">
                     <div className="flex items-center mb-2">
-                      <h4 className="font-medium">Current Token Status:</h4>
-                      <div className={`ml-3 py-1 px-3 inline-block rounded-full text-sm ${contractStatus.token.paused ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>
+                      <h4 className="font-medium dark:text-white">Current Token Status:</h4>
+                      <div className={`ml-3 py-1 px-3 inline-block rounded-full text-sm ${contractStatus.token.paused ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400' : 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'}`}>
                         {contractStatus.token.paused ? 'PAUSED' : 'ACTIVE'}
                       </div>
                     </div>
                     
                     {contractStatus.token.paused && contractStatus.token.lastPausedBy && (
                       <div className="text-sm">
-                        <p className="text-gray-600">Paused By: {formatAddress(contractStatus.token.lastPausedBy)}</p>
+                        <p className="text-gray-600 dark:text-gray-300">Paused By: {formatAddress(contractStatus.token.lastPausedBy)}</p>
                         {contractStatus.token.lastPauseTimestamp && (
-                          <p className="text-gray-600">Paused At: {formatDate(contractStatus.token.lastPauseTimestamp)}</p>
+                          <p className="text-gray-600 dark:text-gray-300">Paused At: {formatDate(contractStatus.token.lastPauseTimestamp)}</p>
                         )}
                       </div>
                     )}
@@ -683,7 +692,7 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
                         {contractStatus.token.paused ? (
                           hasRole('admin') ? (
                             <button
-                              className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-md font-medium disabled:bg-green-300 flex items-center"
+                              className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-md font-medium disabled:bg-green-300 flex items-center dark:bg-green-600 dark:hover:bg-green-700 dark:disabled:bg-green-800/50"
                               onClick={() => unpauseContract('token')}
                               disabled={transactionLoading}
                             >
@@ -691,14 +700,14 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
                               Unpause Token Operations
                             </button>
                           ) : (
-                            <div className="text-amber-700 bg-amber-50 px-4 py-2 rounded-md border border-amber-200 flex items-center">
+                            <div className="text-amber-700 bg-amber-50 px-4 py-2 rounded-md border border-amber-200 flex items-center dark:bg-amber-900/30 dark:border-amber-700 dark:text-amber-400">
                               <AlertTriangle className="w-4 h-4 mr-2" />
                               Only Admin can unpause
                             </div>
                           )
                         ) : (
                           <button
-                            className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-md font-medium disabled:bg-red-300 flex items-center"
+                            className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-md font-medium disabled:bg-red-300 flex items-center dark:bg-red-600 dark:hover:bg-red-700 dark:disabled:bg-red-800/50"
                             onClick={() => {
                               setSelectedContract('token');
                               setPauseReason('');
@@ -712,7 +721,7 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
                       </div>
                       
                       {!contractStatus.token.paused && (
-                        <div className="text-sm text-gray-500">
+                        <div className="text-sm text-gray-500 dark:text-gray-400">
                           <p>Pausing requires {hasRole('guardian') ? 'Guardian or Admin' : 'Admin'} role</p>
                           <p>Unpausing requires Admin role</p>
                         </div>
@@ -721,19 +730,19 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
                   )}
                 </>
               )}
-            </div>
+            </Card>
           )}
           
           {/* Timelock Operations Panel */}
           {getContractRefs().timelock && (
-            <div className="bg-white p-6 rounded-lg shadow mb-6">
+            <Card>
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center">
-                  <Lock className="w-5 h-5 text-indigo-500 mr-2" />
-                  <h3 className="text-lg font-medium text-gray-900">Timelock Emergency Controls</h3>
+                  <Lock className="w-5 h-5 text-indigo-500 mr-2 dark:text-indigo-400" />
+                  <h3 className="text-lg font-medium text-gray-900 dark:text-white">Timelock Emergency Controls</h3>
                 </div>
                 <button 
-                  className="text-gray-500 hover:text-gray-700"
+                  className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300"
                   onClick={() => setTimelockOperationsExpanded(!timelockOperationsExpanded)}
                 >
                   {timelockOperationsExpanded ? (
@@ -746,9 +755,9 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
 
               {timelockOperationsExpanded && (
                 <>
-                  <div className="text-sm text-gray-600 mb-4">
+                  <div className="text-sm text-gray-600 mb-4 dark:text-gray-300 dark:bg-gray-800 dark:p-3 dark:rounded-md">
                     <p className="mb-2">
-                      <strong>Warning:</strong> Pausing the timelock contract will prevent the execution of any queued transactions.
+                      <strong className="dark:text-red-400">Warning:</strong> Pausing the timelock contract will prevent the execution of any queued transactions.
                       This should only be used in emergency situations such as:
                     </p>
                     <ul className="list-disc pl-5 mb-3">
@@ -760,19 +769,19 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
                     <p>Transactions in the timelock queue will be unable to be executed until the timelock is unpaused.</p>
                   </div>
 
-                  <div className="bg-gray-100 p-4 rounded-lg mb-4">
+                  <div className="bg-gray-100 p-4 rounded-lg mb-4 dark:bg-gray-700">
                     <div className="flex items-center mb-2">
-                      <h4 className="font-medium">Current Timelock Status:</h4>
-                      <div className={`ml-3 py-1 px-3 inline-block rounded-full text-sm ${contractStatus.timelock.paused ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>
+                      <h4 className="font-medium dark:text-white">Current Timelock Status:</h4>
+                      <div className={`ml-3 py-1 px-3 inline-block rounded-full text-sm ${contractStatus.timelock.paused ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400' : 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'}`}>
                         {contractStatus.timelock.paused ? 'PAUSED' : 'ACTIVE'}
                       </div>
                     </div>
                     
                     {contractStatus.timelock.paused && contractStatus.timelock.lastPausedBy && (
                       <div className="text-sm">
-                        <p className="text-gray-600">Paused By: {formatAddress(contractStatus.timelock.lastPausedBy)}</p>
+                        <p className="text-gray-600 dark:text-gray-300">Paused By: {formatAddress(contractStatus.timelock.lastPausedBy)}</p>
                         {contractStatus.timelock.lastPauseTimestamp && (
-                          <p className="text-gray-600">Paused At: {formatDate(contractStatus.timelock.lastPauseTimestamp)}</p>
+                          <p className="text-gray-600 dark:text-gray-300">Paused At: {formatDate(contractStatus.timelock.lastPauseTimestamp)}</p>
                         )}
                       </div>
                     )}
@@ -784,7 +793,7 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
                         {contractStatus.timelock.paused ? (
                           hasRole('admin') ? (
                             <button
-                              className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-md font-medium disabled:bg-green-300 flex items-center"
+                              className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-md font-medium disabled:bg-green-300 flex items-center dark:bg-green-600 dark:hover:bg-green-700 dark:disabled:bg-green-800/50"
                               onClick={() => unpauseContract('timelock')}
                               disabled={transactionLoading}
                             >
@@ -792,14 +801,14 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
                               Unpause Timelock
                             </button>
                           ) : (
-                            <div className="text-amber-700 bg-amber-50 px-4 py-2 rounded-md border border-amber-200 flex items-center">
+                            <div className="text-amber-700 bg-amber-50 px-4 py-2 rounded-md border border-amber-200 flex items-center dark:bg-amber-900/30 dark:border-amber-700 dark:text-amber-400">
                               <AlertTriangle className="w-4 h-4 mr-2" />
                               Only Admin can unpause
                             </div>
                           )
                         ) : (
                           <button
-                            className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-md font-medium disabled:bg-red-300 flex items-center"
+                            className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-md font-medium disabled:bg-red-300 flex items-center dark:bg-red-600 dark:hover:bg-red-700 dark:disabled:bg-red-800/50"
                             onClick={() => {
                               setSelectedContract('timelock');
                               setPauseReason('');
@@ -813,7 +822,7 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
                       </div>
                       
                       {!contractStatus.timelock.paused && (
-                        <div className="text-sm text-gray-500">
+                        <div className="text-sm text-gray-500 dark:text-gray-400">
                           <p>Pausing requires {hasRole('guardian') ? 'Guardian or Admin' : 'Admin'} role</p>
                           <p>Unpausing requires Admin role</p>
                         </div>
@@ -822,24 +831,24 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
                   )}
                 </>
               )}
-            </div>
+            </Card>
           )}
           
           {/* Pause Control Panel */}
           {selectedContract && !contractStatus[selectedContract].paused && (hasRole('admin') || hasRole('guardian')) && (
-            <div className="bg-white p-6 rounded-lg shadow mb-6">
+            <Card>
               <div className="flex items-center mb-4">
-                <AlertCircle className="w-5 h-5 text-indigo-500 mr-2" />
-                <h3 className="text-lg font-medium text-gray-900">
+                <AlertCircle className="w-5 h-5 text-indigo-500 mr-2 dark:text-indigo-400" />
+                <h3 className="text-lg font-medium text-gray-900 dark:text-white">
                   Pause {selectedContract.charAt(0).toUpperCase() + selectedContract.slice(1)}
                 </h3>
               </div>
               
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Reason for Pause</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 dark:text-gray-300">Reason for Pause</label>
                   <textarea
-                    className="w-full rounded-md border border-gray-300 p-2"
+                    className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-800 dark:border-gray-700 dark:text-white"
                     rows="2"
                     value={pauseReason}
                     onChange={(e) => setPauseReason(e.target.value)}
@@ -849,7 +858,7 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
                 
                 <div className="flex items-center space-x-2">
                   <button
-                    className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-md disabled:bg-red-300"
+                    className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-md disabled:bg-red-300 dark:bg-red-600 dark:hover:bg-red-700 dark:disabled:bg-red-800/50"
                     onClick={() => pauseContract(selectedContract)}
                     disabled={transactionLoading}
                   >
@@ -857,7 +866,7 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
                   </button>
                   
                   <button
-                    className="border border-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-50"
+                    className="border border-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
                     onClick={() => setSelectedContract('')}
                     disabled={transactionLoading}
                   >
@@ -865,43 +874,43 @@ const EmergencyControlsTab = ({ contracts, account, hasRole }) => {
                   </button>
                 </div>
               </div>
-            </div>
+            </Card>
           )}
           
           {/* Emergency Actions Log */}
-          <div className="bg-white p-6 rounded-lg shadow">
+          <Card>
             <div className="flex items-center mb-4">
-              <Lock className="w-5 h-5 text-indigo-500 mr-2" />
-              <h3 className="text-lg font-medium text-gray-900">Emergency Actions Log</h3>
+              <Lock className="w-5 h-5 text-indigo-500 mr-2 dark:text-indigo-400" />
+              <h3 className="text-lg font-medium text-gray-900 dark:text-white">Emergency Actions Log</h3>
             </div>
             
             {emergencyLog.length === 0 ? (
-              <p className="text-center py-4 text-gray-500">No emergency actions recorded</p>
+              <p className="text-center py-4 text-gray-500 dark:text-gray-300">No emergency actions recorded</p>
             ) : (
               <div className="space-y-4">
                 {emergencyLog.map((log, idx) => (
-                  <div key={idx} className={`p-4 rounded-lg border ${log.type === 'pause' ? 'border-red-200 bg-red-50' : 'border-green-200 bg-green-50'}`}>
+                  <div key={idx} className={`p-4 rounded-lg border ${log.type === 'pause' ? 'border-red-200 bg-red-50 dark:border-red-800 dark:bg-gray-700 dark:text-gray-200' : 'border-green-200 bg-green-50 dark:border-green-800 dark:bg-gray-700 dark:text-gray-200'}`}>
                     <div className="flex items-center mb-2">
                       {log.type === 'pause' ? (
-                        <X className="w-5 h-5 text-red-500 mr-2" />
+                        <X className={`w-5 h-5 mr-2 ${log.type === 'pause' ? 'text-red-500 dark:text-red-400' : 'text-green-500 dark:text-green-400'}`} />
                       ) : (
-                        <Check className="w-5 h-5 text-green-500 mr-2" />
+                        <Check className={`w-5 h-5 mr-2 ${log.type === 'pause' ? 'text-red-500 dark:text-red-400' : 'text-green-500 dark:text-green-400'}`} />
                       )}
-                      <span className="font-medium">{log.contract.charAt(0).toUpperCase() + log.contract.slice(1)} {log.type === 'pause' ? 'Paused' : 'Unpaused'}</span>
-                      <span className="text-sm text-gray-500 ml-auto">{formatDate(log.timestamp)}</span>
+                      <span className="font-medium dark:text-white">{log.contract.charAt(0).toUpperCase() + log.contract.slice(1)} {log.type === 'pause' ? 'Paused' : 'Unpaused'}</span>
+                      <span className="text-sm text-gray-500 ml-auto dark:text-gray-400">{formatDate(log.timestamp)}</span>
                     </div>
                     <div className="text-sm">
-                      <p><span className="text-gray-500">By:</span> {formatAddress(log.by)}</p>
+                      <p><span className="text-gray-500 dark:text-gray-400">By:</span> <span className="dark:text-gray-300">{formatAddress(log.by)}</span></p>
                       {log.type === 'pause' && log.reason && (
-                        <p className="mt-1"><span className="text-gray-500">Reason:</span> {log.reason}</p>
+                        <p className="mt-1"><span className="text-gray-500 dark:text-gray-400">Reason:</span> <span className="dark:text-gray-300">{log.reason}</span></p>
                       )}
                     </div>
                   </div>
                 ))}
               </div>
             )}
-          </div>
-        </>
+          </Card>
+        </div>
       )}
     </div>
   );

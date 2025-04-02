@@ -385,9 +385,14 @@ const EnhancedRoleManagementTab = ({ contracts, account }) => {
     
     setTransactionLoading(true);
     try {
-      // Check which function to call (grantContractRole or grantRole)
+      // Try new unified manageContractRole function first (from updated governance contract)
       let tx;
-      if (typeof contract.grantContractRole === 'function') {
+      if (typeof contract.manageContractRole === 'function') {
+        console.log(`Using manageContractRole(${roleHash}, ${newRoleData.address}, true)`);
+        tx = await contract.manageContractRole(roleHash, newRoleData.address, true);
+      } 
+      // Fallback to older methods for backward compatibility
+      else if (typeof contract.grantContractRole === 'function') {
         console.log(`Using grantContractRole(${roleHash}, ${newRoleData.address})`);
         tx = await contract.grantContractRole(roleHash, newRoleData.address);
       } else if (typeof contract.grantRole === 'function') {
@@ -438,9 +443,13 @@ const EnhancedRoleManagementTab = ({ contracts, account }) => {
     }
     
     try {
-      // Check which function to call (revokeContractRole or revokeRole)
+      // Try new unified manageContractRole function first (from updated governance contract)
       let tx;
-      if (typeof contract.revokeContractRole === 'function') {
+      if (typeof contract.manageContractRole === 'function') {
+        tx = await contract.manageContractRole(roleHash, address, false);
+      }
+      // Fallback to older methods for backward compatibility
+      else if (typeof contract.revokeContractRole === 'function') {
         tx = await contract.revokeContractRole(roleHash, address);
       } else if (typeof contract.revokeRole === 'function') {
         tx = await contract.revokeRole(roleHash, address);
@@ -461,30 +470,33 @@ const EnhancedRoleManagementTab = ({ contracts, account }) => {
     }
   };
 
-  // Handle manual refresh
-  const handleRefresh = () => {
-    setRefreshTrigger(prev => prev + 1);
-  };
+    // Handle manual refresh
+    const handleRefresh = () => {
+      setRefreshTrigger(prev => prev + 1);
+    };
 
-  return (
+    return (
     <div>
       <div className="flex justify-between items-center mb-6">
         <div>
-        <h2 className="text-xl font-semibold dark:text-white">Role Management</h2>
-
-         
-          <p className="text-gray-500">Assign and manage roles across DAO contracts</p>
+          <h2 className="text-xl font-semibold dark:text-white">
+            Role Management
+          </h2>
+          <p className="text-gray-500">
+            Assign and manage roles across DAO contracts
+          </p>
         </div>
         <div className="flex gap-2">
           <button 
-            className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-2 rounded-md flex items-center"
+            className="bg-gray-200 hover:bg-gray-300 text-gray-700 dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-gray-200 
+              px-3 py-2 rounded-md flex items-center transition-colors"
             onClick={handleRefresh}
           >
             <RefreshCw className="w-4 h-4 mr-1" />
             Refresh
           </button>
           <button 
-            className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md flex items-center"
+            className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md flex items-center transition-colors"
             onClick={() => setShowAddRoleModal(true)}
             disabled={!selectedContract}
           >
@@ -496,13 +508,13 @@ const EnhancedRoleManagementTab = ({ contracts, account }) => {
       
       {/* Success/Error Messages */}
       {successMessage && (
-        <div className="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mb-4">
+        <div className="bg-green-100 border-green-400 text-green-700 dark:bg-green-900 dark:border-green-700 dark:text-green-200 border px-4 py-3 rounded mb-4">
           <p>{successMessage}</p>
         </div>
       )}
       
       {errorMessage && (
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4 flex items-start">
+        <div className="bg-red-100 border-red-400 text-red-700 dark:bg-red-900 dark:border-red-700 dark:text-red-200 border px-4 py-3 rounded mb-4 flex items-start">
           <AlertTriangle className="w-5 h-5 mr-2 mt-0.5 flex-shrink-0" />
           <p>{errorMessage}</p>
         </div>
@@ -510,15 +522,17 @@ const EnhancedRoleManagementTab = ({ contracts, account }) => {
       
       {/* Contract Selection */}
       <div className="mb-6">
-        <label className="block text-sm font-medium text-gray-700 mb-2">Select Contract</label>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+          Select Contract
+        </label>
         <div className="flex flex-wrap gap-2">
           {availableContracts.map(contract => (
             <button 
               key={contract.id}
-              className={`px-4 py-2 rounded-md ${
+              className={`px-4 py-2 rounded-md transition-colors ${
                 selectedContract === contract.id 
                   ? 'bg-indigo-600 text-white' 
-                  : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                  : 'bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600'
               }`}
               onClick={() => handleContractChange(contract.id)}
             >
@@ -530,14 +544,14 @@ const EnhancedRoleManagementTab = ({ contracts, account }) => {
       
       {/* Debug Info */}
       {loadingDetails && (
-        <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-2 rounded mb-4 text-sm">
+        <div className="bg-blue-50 border-blue-200 text-blue-700 dark:bg-blue-900 dark:border-blue-700 dark:text-blue-200 border px-4 py-2 rounded mb-4 text-sm">
           <p><strong>Status:</strong> {loadingDetails}</p>
         </div>
       )}
       
       {/* Roles List */}
-      <div className="bg-white p-6 rounded-lg shadow">
-        <h3 className="text-lg font-medium text-gray-900 mb-4">
+      <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
+        <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">
           Current Role Assignments for {availableContracts.find(c => c.id === selectedContract)?.name || 'Selected Contract'}
         </h3>
         
@@ -546,34 +560,36 @@ const EnhancedRoleManagementTab = ({ contracts, account }) => {
             <Loader size="large" text="Loading roles..." />
           </div>
         ) : roles.length === 0 ? (
-          <div className="text-center py-4 text-gray-500">
+          <div className="text-center py-4 text-gray-500 dark:text-gray-400">
             No roles have been assigned for this contract or they could not be detected.
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
+            <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
               <thead>
                 <tr>
-                  <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
-                  <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Address</th>
-                  <th className="px-6 py-3 bg-gray-50 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                  <th className="px-6 py-3 bg-gray-50 dark:bg-gray-700 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Role</th>
+                  <th className="px-6 py-3 bg-gray-50 dark:bg-gray-700 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Address</th>
+                  <th className="px-6 py-3 bg-gray-50 dark:bg-gray-700 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Actions</th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
+              <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                 {roles.map((role, idx) => (
-                  <tr key={`${role.address}-${role.roleId}-${idx}`} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                  <tr key={`${role.address}-${role.roleId}-${idx}`} className={idx % 2 === 0 
+                    ? "bg-white dark:bg-gray-800" 
+                    : "bg-gray-50 dark:bg-gray-700"}>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center">
                         <Shield className="w-5 h-5 text-indigo-500 mr-2" />
-                        <span className="text-sm font-medium">{role.roleName}</span>
+                        <span className="text-sm font-medium dark:text-gray-200">{role.roleName}</span>
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                       {role.address}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                       <button 
-                        className="text-red-600 hover:text-red-900 flex items-center ml-auto"
+                        className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 flex items-center ml-auto"
                         onClick={() => handleRevokeRole(role.roleHash, role.address)}
                       >
                         <Trash2 className="w-4 h-4 mr-1" />
@@ -591,20 +607,20 @@ const EnhancedRoleManagementTab = ({ contracts, account }) => {
       {/* Add Role Modal */}
       {showAddRoleModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg max-w-md w-full p-6">
-            <h2 className="text-xl font-semibold mb-4">Assign New Role</h2>
+          <div className="bg-white dark:bg-gray-800 dark:text-gray-200 rounded-lg max-w-md w-full p-6">
+            <h2 className="text-xl font-semibold mb-4 dark:text-white">Assign New Role</h2>
             
             {errorMessage && (
-              <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+              <div className="bg-red-100 border-red-400 text-red-700 dark:bg-red-900 dark:border-red-700 dark:text-red-200 border px-4 py-3 rounded mb-4">
                 <p>{errorMessage}</p>
               </div>
             )}
             
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Contract</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Contract</label>
                 <select 
-                  className="w-full rounded-md border border-gray-300 p-2"
+                  className="w-full rounded-md border bg-white border-gray-300 dark:bg-gray-700 dark:border-gray-600 dark:text-white p-2"
                   value={selectedContract || ''}
                   onChange={(e) => handleContractChange(e.target.value)}
                 >
@@ -616,10 +632,10 @@ const EnhancedRoleManagementTab = ({ contracts, account }) => {
               </div>
               
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Address</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Address</label>
                 <input 
                   type="text" 
-                  className="w-full rounded-md border border-gray-300 p-2" 
+                  className="w-full rounded-md border bg-white border-gray-300 dark:bg-gray-700 dark:border-gray-600 dark:text-white p-2" 
                   placeholder="0x..."
                   value={newRoleData.address}
                   onChange={(e) => setNewRoleData({...newRoleData, address: e.target.value})}
@@ -627,9 +643,9 @@ const EnhancedRoleManagementTab = ({ contracts, account }) => {
               </div>
               
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Role</label>
                 <select 
-                  className="w-full rounded-md border border-gray-300 p-2"
+                  className="w-full rounded-md border bg-white border-gray-300 dark:bg-gray-700 dark:border-gray-600 dark:text-white p-2"
                   value={newRoleData.role}
                   onChange={(e) => setNewRoleData({...newRoleData, role: e.target.value})}
                 >
@@ -639,7 +655,7 @@ const EnhancedRoleManagementTab = ({ contracts, account }) => {
                   ))}
                 </select>
                 {newRoleData.role && (
-                  <p className="text-xs text-gray-500 mt-1">
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                     {getAvailableRolesForContract(selectedContract)
                       .find(r => r.id === newRoleData.role)?.description || ''}
                   </p>
@@ -649,7 +665,7 @@ const EnhancedRoleManagementTab = ({ contracts, account }) => {
               <div className="flex justify-end space-x-2 pt-4">
                 <button 
                   type="button"
-                  className="px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50"
+                  className="px-4 py-2 border border-gray-300 text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700 rounded-md transition-colors"
                   onClick={() => setShowAddRoleModal(false)}
                   disabled={transactionLoading}
                 >
@@ -657,7 +673,7 @@ const EnhancedRoleManagementTab = ({ contracts, account }) => {
                 </button>
                 <button 
                   type="button"
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:bg-indigo-400"
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:bg-indigo-400 transition-colors"
                   onClick={handleGrantRole}
                   disabled={transactionLoading || !newRoleData.role || !newRoleData.address}
                 >
