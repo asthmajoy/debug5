@@ -94,7 +94,6 @@ contract JustGovernanceUpgradeable is
     error InsufficientBalance(uint256 available, uint256 required);
     error InvalidPercentage();
     error NoValidChange();
-    error InvalidLockIndex();
     error TransferFailed();
     error CallFailed();
     error NotSucceeded();
@@ -282,10 +281,6 @@ contract JustGovernanceUpgradeable is
     event ContractPaused(address indexed pauser);
     event ContractUnpaused(address indexed unpauser);
     event ContractInitialized(address indexed token, address indexed timelock, address indexed admin);
-    event VoteCast(uint256 indexed proposalId, address indexed voter, uint8 support, uint256 votingPower);
-    event TimelockTransactionSubmitted(uint256 indexed proposalId, bytes32 indexed txHash);
-    event Debug(string message, bytes data);
-    event ExecutionDetails(bytes32 txHash, bool success, bytes returnData);
     
     // ==================== MODIFIERS ====================
     /**
@@ -499,25 +494,36 @@ contract JustGovernanceUpgradeable is
      */
     function getProposalState(uint256 proposalId) public view returns (ProposalState) {
         if (proposalId >= _proposals.length) revert GovernanceError();
-        ProposalData storage proposal = _proposals[proposalId];
+        
+        // Cache all proposal data in memory to reduce SLOADs
+        ProposalData storage proposalStorage = _proposals[proposalId];
+        uint8 flags = proposalStorage.flags;
+        uint48 deadline = proposalStorage.deadline;
+        uint128 yesVotes = proposalStorage.yesVotes;
+        uint128 noVotes = proposalStorage.noVotes;
+        uint128 abstainVotes = proposalStorage.abstainVotes;
+        bytes32 timelockTxHash = proposalStorage.timelockTxHash;
+        
+        // Cache governance parameter to avoid SLOAD in calculation
+        uint256 quorumRequirement = govParams.quorum;
 
-        if (proposal.flags.isCanceled()) {
+        if (ProposalLib.isCanceled(flags)) {
             return ProposalState.Canceled;
-        } else if (proposal.flags.isExecuted()) {
+        } else if (ProposalLib.isExecuted(flags)) {
             return ProposalState.Executed;
-        } else if (block.timestamp < proposal.deadline) { 
+        } else if (block.timestamp < deadline) { 
             return ProposalState.Active;
         } else if (
-            proposal.yesVotes <= proposal.noVotes ||
-            proposal.yesVotes + proposal.noVotes + proposal.abstainVotes < govParams.quorum
+            yesVotes <= noVotes ||
+            yesVotes + noVotes + abstainVotes < quorumRequirement
         ) {
             return ProposalState.Defeated;
-        } else if (!proposal.flags.isQueued()) {
+        } else if (!ProposalLib.isQueued(flags)) {
             return ProposalState.Succeeded;
         } else {
             // Check if it's expired in the timelock
-            if (proposal.timelockTxHash != bytes32(0)) {
-                (,, , uint256 eta, uint8 state) = timelock.getTransaction(proposal.timelockTxHash);
+            if (timelockTxHash != bytes32(0)) {
+                (,, , uint256 eta, uint8 state) = timelock.getTransaction(timelockTxHash);
                 if (state != 2 && block.timestamp > eta + timelock.gracePeriod()) {
                     return ProposalState.Expired;
                 }
@@ -674,26 +680,33 @@ contract JustGovernanceUpgradeable is
         ProposalData storage proposal = _proposals[proposalId];
         if (uint48(block.timestamp) > proposal.deadline) revert VotingEnded();
         
+        // Cache snapshot ID in memory to avoid multiple SLOADs
+        uint256 snapshotId = proposal.snapshotId;
+        
         // Get voting power from snapshot
-        uint256 votingPower = justToken.getEffectiveVotingPower(msg.sender, proposal.snapshotId);
+        uint256 votingPower = justToken.getEffectiveVotingPower(msg.sender, snapshotId);
         if (votingPower == 0) revert NoVotingPower();
         
-        // Record the vote
+        // Record the vote - combine storage operations
         proposalVoterInfo[proposalId][msg.sender] = votingPower;
         _hasVoted[proposalId][msg.sender] = true;
         _proposalVoters[proposalId].push(msg.sender);
         
-        // Update vote counts (only one storage write)
+        // Cache current vote counts to reduce SLOADs
+        uint128 yesVotes = proposal.yesVotes;
+        uint128 noVotes = proposal.noVotes;
+        uint128 abstainVotes = proposal.abstainVotes;
+        
+        // Update vote counts with a single SSTORE
         if (support == 0) {
-            proposal.noVotes += uint128(votingPower);
+            proposal.noVotes = noVotes + uint128(votingPower);
         } else if (support == 1) {
-            proposal.yesVotes += uint128(votingPower);
+            proposal.yesVotes = yesVotes + uint128(votingPower);
         } else {
-            proposal.abstainVotes += uint128(votingPower);
+            proposal.abstainVotes = abstainVotes + uint128(votingPower);
         }
         
-        // Emit events
-        emit VoteCast(proposalId, msg.sender, support, votingPower);
+        // Emit event
         emit ProposalEvent(proposalId, 6, msg.sender, abi.encode(support, votingPower));
         
         return votingPower;
@@ -731,8 +744,7 @@ contract JustGovernanceUpgradeable is
         // Store transaction hash
         proposal.timelockTxHash = txHash;
         
-        // Emit events
-        emit TimelockTransactionSubmitted(proposalId, txHash);
+        // Emit event
         emit ProposalEvent(proposalId, STATUS_QUEUED, msg.sender, abi.encode(txHash));
     }
 
@@ -746,8 +758,13 @@ contract JustGovernanceUpgradeable is
         if (proposalId >= _proposals.length) revert GovernanceError();
         if (address(timelock) == address(0)) revert TimelockNotConfigured();
         
+        // Cache all proposal data in memory to reduce SLOADs
         ProposalData storage proposal = _proposals[proposalId];
         uint8 flags = proposal.flags;
+        uint8 pType = proposal.pType;
+        bytes32 txHash = proposal.timelockTxHash;
+        address proposer = proposal.proposer;
+        uint256 stakedAmount = proposal.stakedAmount;
         
         // Early return if already executed (idempotent)
         if (ProposalLib.isExecuted(flags)) {
@@ -758,26 +775,24 @@ contract JustGovernanceUpgradeable is
         if (ProposalLib.isCanceled(flags)) revert GovernanceError();
         if (getProposalState(proposalId) != ProposalState.Queued) revert TimelockError();
         
-        bytes32 txHash = proposal.timelockTxHash;
         if (txHash == bytes32(0)) revert TimelockError();
-        
-        address proposer = proposal.proposer;
-        uint256 stakedAmount = proposal.stakedAmount;
         
         // Check if already executed in timelock
         (,,,, uint8 txState) = timelock.getTransaction(txHash);
         bool alreadyExecuted = txState == 2;
         
         if (alreadyExecuted) {
-            // Mark as executed
-            proposal.flags = ProposalLib.setExecuted(flags);
+            // Combine multiple flag updates to reduce SSTOREs
+            uint8 newFlags = flags;
+            newFlags = ProposalLib.setExecuted(newFlags);
             
-            // Handle refund if not already done
+            // Handle refund in a single storage update if possible
             if (!ProposalLib.isStakeRefunded(flags)) {
                 uint256 balance = justToken.balanceOf(address(this));
                 if (balance >= stakedAmount) {
                     try justToken.governanceTransfer(address(this), proposer, stakedAmount) {
-                        proposal.flags = ProposalLib.setStakeRefunded(proposal.flags);
+                        newFlags = ProposalLib.setStakeRefunded(newFlags);
+                        proposal.flags = newFlags; // Single SSTORE operation
                         emit ProposalEvent(
                             proposalId, 
                             5, 
@@ -785,6 +800,7 @@ contract JustGovernanceUpgradeable is
                             abi.encode(0, stakedAmount)
                         );
                     } catch (bytes memory reason) {
+                        proposal.flags = newFlags; // Still update the executed flag
                         emit ProposalEvent(
                             proposalId, 
                             5, 
@@ -792,14 +808,18 @@ contract JustGovernanceUpgradeable is
                             abi.encode("REFUND_FAILED", reason)
                         );
                     }
+                } else {
+                    proposal.flags = newFlags; // Update just the executed flag
                 }
+            } else {
+                proposal.flags = newFlags; // Update just the executed flag
             }
             
             emit ProposalEvent(
                 proposalId, 
                 STATUS_EXECUTED, 
                 msg.sender, 
-                abi.encode(proposal.pType)
+                abi.encode(pType)
             );
             
             return;
@@ -808,14 +828,10 @@ contract JustGovernanceUpgradeable is
         // Execute from timelock
         if (!timelock.queuedTransactions(txHash)) revert TimelockError();
         
-        // Try to execute the transaction and handle potential failures
-        try timelock.executeTransaction(txHash) returns (bytes memory returnData) {
+        // Try to execute the transaction
+        try timelock.executeTransaction(txHash) returns (bytes memory) {
             // Execution succeeded - event is emitted in executeProposalLogic
-            emit ExecutionDetails(txHash, true, returnData);
         } catch (bytes memory reason) {
-            // Log execution failure
-            emit ExecutionDetails(txHash, false, reason);
-            
             // Revert with detailed information
             revert ExecutionFailed(reason);
         }
@@ -829,33 +845,45 @@ contract JustGovernanceUpgradeable is
         if (msg.sender != address(timelock)) revert NotAuthorized();
         if (proposalId >= _proposals.length) revert GovernanceError();
         
+        // Cache all proposal data in memory
         ProposalData storage proposal = _proposals[proposalId];
-        if (proposal.flags.isExecuted()) revert GovernanceError();
-        if (!proposal.flags.isQueued()) revert TimelockError();
+        uint8 flags = proposal.flags;
+        uint8 pType = proposal.pType;
+        address proposer = proposal.proposer;
+        uint256 stakedAmount = proposal.stakedAmount;
+        
+        if (ProposalLib.isExecuted(flags)) revert GovernanceError();
+        if (!ProposalLib.isQueued(flags)) revert TimelockError();
+        
+        // Prepare flag updates but apply them once to save gas
+        uint8 newFlags = ProposalLib.setExecuted(flags);
         
         // Mark as executed before interactions
-        proposal.flags = proposal.flags.setExecuted();
+        proposal.flags = newFlags;
         
         // Execute the proposal based on type
         _executeProposal(proposalId);
         
-        // Handle stake refund
-        if (!proposal.flags.isStakeRefunded()) {
+        // Handle stake refund - doing this with a minimal number of storage operations
+        if (!ProposalLib.isStakeRefunded(newFlags)) {
             uint256 balance = justToken.balanceOf(address(this));
-            if (balance >= proposal.stakedAmount) {
-                try justToken.governanceTransfer(address(this), proposal.proposer, proposal.stakedAmount) {
-                    proposal.flags = proposal.flags.setStakeRefunded();
+            if (balance >= stakedAmount) {
+                try justToken.governanceTransfer(address(this), proposer, stakedAmount) {
+                    // Update flags in one operation instead of separate reads/writes
+                    newFlags = ProposalLib.setStakeRefunded(newFlags);
+                    proposal.flags = newFlags;
+                    
                     emit ProposalEvent(
                         proposalId, 
                         5, 
-                        proposal.proposer, 
-                        abi.encode(REFUND_FULL, proposal.stakedAmount)
+                        proposer, 
+                        abi.encode(REFUND_FULL, stakedAmount)
                     );
                 } catch (bytes memory reason) {
                     emit ProposalEvent(
                         proposalId, 
                         5, 
-                        proposal.proposer, 
+                        proposer, 
                         abi.encode("REFUND_FAILED", reason)
                     );
                 }
@@ -866,7 +894,7 @@ contract JustGovernanceUpgradeable is
             proposalId, 
             STATUS_EXECUTED, 
             msg.sender, 
-            abi.encode(proposal.pType)
+            abi.encode(pType)
         );
     }
 
