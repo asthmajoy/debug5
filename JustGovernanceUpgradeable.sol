@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+// JustGovernanceUpgradeable.sol - Optimized for proxy compatibility and reduced bytecode size
+
 pragma solidity 0.8.20;
 
 import "@openzeppelin/contracts-upgradeable/access/AccessControlEnumerableUpgradeable.sol";
@@ -10,6 +12,10 @@ import "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
+/**
+ * @title JustTokenUpgradeable
+ * @notice Interface for the JustToken contract
+ */
 interface JustTokenUpgradeable {
     function getEffectiveVotingPower(address voter, uint256 snapshotId) external view returns (uint256);
     function balanceOf(address account) external view returns (uint256);
@@ -20,6 +26,10 @@ interface JustTokenUpgradeable {
     function emergency(bool isPause, address tokenAddress) external;
 }
 
+/**
+ * @title JustTimelockUpgradeable
+ * @notice Interface for the JustTimelock contract
+ */
 interface JustTimelockUpgradeable {
     enum ThreatLevel { LOW, MEDIUM, HIGH, CRITICAL }
     
@@ -29,18 +39,22 @@ interface JustTimelockUpgradeable {
     function executeExpiredTransaction(bytes32 txHash) external returns (bytes memory);
     function cancelTransaction(bytes32 txHash) external;
     function queuedTransactions(bytes32 txHash) external view returns (bool);
-    function getTransaction(bytes32 txHash) external view returns (address target, uint256 value, bytes memory data, uint256 eta, bool executed);
+    function getTransaction(bytes32 txHash) external view returns (address target, uint256 value, bytes memory data, uint256 eta, uint8 state);
     function gracePeriod() external view returns (uint256);
     function minDelay() external view returns (uint256);
     function getThreatLevel(address target, bytes memory data) external view returns (ThreatLevel);
     function getDelayForThreatLevel(ThreatLevel level) external view returns (uint256);
 }
 
+/**
+ * @title ProposalLib
+ * @notice Library for proposal flags to efficiently track proposal states
+ */
 library ProposalLib {
-    uint8 constant EXECUTED_FLAG = 1;
-    uint8 constant CANCELED_FLAG = 2;
-    uint8 constant STAKE_REFUNDED_FLAG = 4;
-    uint8 constant QUEUED_FLAG = 8;
+    uint8 constant EXECUTED_FLAG = 1;      // 00000001
+    uint8 constant CANCELED_FLAG = 2;      // 00000010
+    uint8 constant STAKE_REFUNDED_FLAG = 4; // 00000100
+    uint8 constant QUEUED_FLAG = 8;        // 00001000
     
     function isExecuted(uint8 flags) internal pure returns (bool) { return (flags & EXECUTED_FLAG) != 0; }
     function isCanceled(uint8 flags) internal pure returns (bool) { return (flags & CANCELED_FLAG) != 0; }
@@ -53,6 +67,11 @@ library ProposalLib {
     function setQueued(uint8 flags) internal pure returns (uint8) { return flags | QUEUED_FLAG; }
 }
 
+/**
+ * @title JustGovernanceUpgradeable
+ * @notice Optimized governance contract for Indiana Legal Aid DAO with external timelock
+ * @dev Modified for proxy compatibility with initializer pattern
+ */
 contract JustGovernanceUpgradeable is 
     Initializable,
     AccessControlEnumerableUpgradeable, 
@@ -65,41 +84,33 @@ contract JustGovernanceUpgradeable is
     using AddressUpgradeable for address payable;
     using ProposalLib for uint8;
 
-    // Custom errors (abbreviated)
-    error ZA(); // Zero Address
-    error IA(); // InvalidAmount
-    error InvPId(); // InvalidProposalId
-    error PropCncl(); // ProposalCanceled
-    error PropExec(); // ProposalExecuted
-    error InvCD(); // InvalidCalldata
-    error InvSel(); // InvalidSelector
-    error NotAuth(); // NotAuthorized
-    error AlrdyVt(); // AlreadyVoted
-    error VtEnd(); // VotingEnded
-    error InvVtTyp(); // InvalidVoteType
-    error InvDur(uint256 p, uint256 mn, uint256 mx); // InvalidDuration
-    error InsBal(uint256 a, uint256 r); // InsufficientBalance
-    error InvPct(); // InvalidPercentage
-    error NoVldChg(); // NoValidChange
-    error InvLkIdx(); // InvalidLockIndex
-    error TxFail(); // TransferFailed
-    error CallFail(); // CallFailed
-    error NotSucc(); // NotSucceeded
-    error NotQ(); // NotQueued
-    error NoTxH(); // NoTxHash
-    error NotInTL(); // NotInTimelock
-    error AlrdyRef(); // AlreadyRefunded
-    error NotProp(); // NotProposer
-    error NotDef(); // NotDefeated
-    error NoVtPwr(); // NoVotingPower
-    error LastAdm(); // LastAdminRole
-    error TLExecFail(); // TimelockExecutionFailed
-    error PropNotExp(); // ProposalNotExpired
+    // ==================== CUSTOM ERRORS ====================
+    error GovernanceError();
+    error NotAuthorized();
+    error AlreadyVoted();
+    error VotingEnded();
+    error InvalidVoteType();
+    error InvalidDuration(uint256 provided, uint256 min, uint256 max);
+    error InsufficientBalance(uint256 available, uint256 required);
+    error InvalidPercentage();
+    error NoValidChange();
+    error InvalidLockIndex();
+    error TransferFailed();
+    error CallFailed();
+    error NotSucceeded();
+    error AlreadyRefunded();
+    error NotProposer();
+    error NotDefeated();
+    error NoVotingPower();
+    error LastAdminRole(); 
+    error TimelockError();
 
-    // Constants
+    // ==================== CONSTANTS ====================
+    // Role-based access control
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant GUARDIAN_ROLE = keccak256("GUARDIAN_ROLE");
     
+    // Event constants
     uint8 constant STATUS_CREATED = 0;
     uint8 constant STATUS_CANCELED = 1;
     uint8 constant STATUS_QUEUED = 2;
@@ -118,52 +129,120 @@ contract JustGovernanceUpgradeable is
     uint8 constant PARAM_CANCELED_REFUND_PERCENTAGE = 6;
     uint8 constant PARAM_EXPIRED_REFUND_PERCENTAGE = 7;
     
-    // Storage
+    // ==================== STORAGE VARIABLES ====================
+    // Reference to the JustToken contract
     JustTokenUpgradeable public justToken;
+    
+    // Reference to the JustTimelock contract
     JustTimelockUpgradeable public timelock;
 
+    // Proposal types - enhanced with new types
     enum ProposalType { 
-        General,
-        Withdrawal,
-        TokenTransfer,
-        GovernanceChange,
-        ExternalERC20Transfer,
-        TokenMint,
-        TokenBurn,
-        Signaling
+        General,              // 0
+        Withdrawal,           // 1
+        TokenTransfer,        // 2
+        GovernanceChange,     // 3
+        ExternalERC20Transfer,// 4
+        TokenMint,            // 5
+        TokenBurn,            // 6
+        Signaling             // 7
     }
     
     enum ProposalState { Active, Canceled, Defeated, Succeeded, Queued, Executed, Expired }
 
+    // Optimized ProposalData struct with tight packing
     struct ProposalData {
-        uint8 flags;
-        ProposalType pType;
-        uint48 deadline;
-        uint48 createdAt;
-        uint256 yesVotes;
-        uint256 noVotes;
-        uint256 abstainVotes;
-        address proposer;
-        uint256 snapshotId;
-        uint256 stakedAmount;
-        bytes32 timelockTxHash;
-        string description;
-        address target;
-        bytes callData;
-        address recipient;
-        uint256 amount;
-        address token;
-        uint256 newThreshold;
-        uint256 newQuorum;
-        uint256 newVotingDuration;
-        uint256 newTimelockDelay;
+        // Slot 1: Pack small values together (160 bits total)
+        uint8 flags;          // 8 bits
+        uint8 pType;          // 8 bits (ProposalType enum as uint8)
+        uint48 createdAt;     // 48 bits
+        uint48 deadline;      // 48 bits
+        address proposer;     // 160 bits
+
+        // Slot 2: Vote counts (256 bits total)
+        uint128 yesVotes;     // 128 bits
+        uint128 noVotes;      // 128 bits
+        
+        // Slot 3: More vote data (256 bits total)
+        uint128 abstainVotes; // 128 bits
+        uint128 stakedAmount; // 128 bits
+        
+        // Slot 4: Transaction data
+        uint256 snapshotId;   // 256 bits
+        
+        // Slot 5: Transaction hash
+        bytes32 timelockTxHash; // 256 bits
+        
+        // Dynamic data - each takes multiple slots
+        string description;   // Variable length
+        bytes typeSpecificData; // Variable length for type-specific data
     }
     
+    // Helper functions for packing/unpacking proposal type-specific data
+    function packProposalData(
+        ProposalType pType,
+        address target,
+        bytes memory callData,
+        uint256 amount,
+        address payable recipient,
+        address token,
+        uint256 newThreshold,
+        uint256 newQuorum,
+        uint256 newVotingDuration,
+        uint256 newTimelockDelay
+    ) internal pure returns (bytes memory) {
+        if (pType == ProposalType.General) {
+            return abi.encode(target, callData);
+        } else if (pType == ProposalType.GovernanceChange) {
+            return abi.encode(newThreshold, newQuorum, newVotingDuration, newTimelockDelay);
+        } else if (pType == ProposalType.ExternalERC20Transfer) {
+            return abi.encode(recipient, amount, token);
+        } else if (pType == ProposalType.Signaling) {
+            return new bytes(0); // No data needed for signaling
+        } else {
+            // Withdrawal, TokenTransfer, TokenMint, TokenBurn
+            return abi.encode(recipient, amount);
+        }
+    }
+    
+    // Unpacking functions for each proposal type
+    function unpackGeneralData(bytes memory data) internal pure returns (address target, bytes memory callData) {
+        return abi.decode(data, (address, bytes));
+    }
+    
+    function unpackGovernanceChangeData(bytes memory data) internal pure returns (
+        uint256 newThreshold,
+        uint256 newQuorum,
+        uint256 newVotingDuration,
+        uint256 newTimelockDelay
+    ) {
+        return abi.decode(data, (uint256, uint256, uint256, uint256));
+    }
+    
+    function unpackTransferData(bytes memory data) internal pure returns (address payable recipient, uint256 amount) {
+        return abi.decode(data, (address, uint256));
+    }
+    
+    function unpackERC20TransferData(bytes memory data) internal pure returns (
+        address payable recipient, 
+        uint256 amount,
+        address token
+    ) {
+        return abi.decode(data, (address, uint256, address));
+    }
+    
+    // Array to maintain proposal data
     ProposalData[] private _proposals;
+    
+    // Mapping to track proposal voting
     mapping(uint256 => mapping(address => uint256)) public proposalVoterInfo;
+
+    // This tracks all voters for each proposal
     mapping(uint256 => address[]) private _proposalVoters;
+    // This tracks whether an address has voted on a specific proposal
     mapping(uint256 => mapping(address => bool)) private _hasVoted;
     
+    // Governance parameters - packed into one struct to save gas
     struct GovParams {
         uint256 votingDuration;
         uint256 quorum;
@@ -176,12 +255,17 @@ contract JustGovernanceUpgradeable is
     }
     
     GovParams public govParams;
+    
+    // Governance constraints
     uint256 public minVotingDuration;
     uint256 public maxVotingDuration;
+    
+    // Security mappings
     mapping(bytes4 => bool) public allowedFunctionSelectors;
     mapping(address => bool) public allowedTargets;
     
-    // Events
+    // ==================== EVENTS ====================
+    // Super-consolidated event - handles all proposal-related events
     event ProposalEvent(
         uint256 indexed proposalId, 
         uint8 indexed eventType,
@@ -189,6 +273,7 @@ contract JustGovernanceUpgradeable is
         bytes data
     );
     
+    // Parameter change event
     event GovParamChange(uint8 pType, uint256 oldVal, uint256 newVal);
     event SecuritySettingUpdated(bytes4 selector, bool selectorAllowed, address target, bool targetAllowed);
     event RoleChange(bytes32 indexed role, address indexed account, bool isGranted);
@@ -198,18 +283,29 @@ contract JustGovernanceUpgradeable is
     event VoteCast(uint256 indexed proposalId, address indexed voter, uint8 support, uint256 votingPower);
     event TimelockTransactionSubmitted(uint256 indexed proposalId, bytes32 indexed txHash);
     
+    // ==================== MODIFIERS ====================
+    /**
+     * @dev Only allows admin or timelock to call function
+     */
     modifier onlyAdminOrTimelock() {
-        if (!hasRole(ADMIN_ROLE, msg.sender) && msg.sender != address(timelock)) revert NotAuth();
+        if (!hasRole(ADMIN_ROLE, msg.sender) && msg.sender != address(timelock)) revert NotAuthorized();
         _;
     }
     
+    /**
+     * @dev Checks if proposal ID is valid and proposal is active
+     */
     modifier validActiveProposal(uint256 proposalId) {
-        if (proposalId >= _proposals.length) revert InvPId();
-        if (_proposals[proposalId].flags.isCanceled()) revert PropCncl();
-        if (_proposals[proposalId].flags.isExecuted()) revert PropExec();
+        if (proposalId >= _proposals.length) revert GovernanceError();
+        if (_proposals[proposalId].flags.isCanceled()) revert GovernanceError();
+        if (_proposals[proposalId].flags.isExecuted()) revert GovernanceError();
         _;
     }
     
+    // ==================== INITIALIZATION ====================
+    /**
+     * @notice Initializer function that replaces constructor for proxy pattern
+     */
     function initialize(
         string memory name,
         address tokenAddress,
@@ -225,8 +321,9 @@ contract JustGovernanceUpgradeable is
         uint256 expiredRefund
     ) public initializer {
         if (admin == address(0) || tokenAddress == address(0) || timelockAddress == address(0)) 
-            revert ZA();
+            revert GovernanceError();
         
+        // Initialize inherited contracts
         __AccessControlEnumerable_init();
         __ReentrancyGuard_init();
         __Pausable_init();
@@ -239,80 +336,97 @@ contract JustGovernanceUpgradeable is
         justToken = JustTokenUpgradeable(tokenAddress);
         timelock = JustTimelockUpgradeable(timelockAddress);
         
+        // Set governance constraints
         minVotingDuration = 600;
         maxVotingDuration = 365 days;
         
+        // Initialize governance parameters
         govParams.votingDuration = votingPeriod;
         govParams.quorum = proposalThreshold;
         govParams.timelockDelay = votingDelay;
         govParams.proposalCreationThreshold = proposalThreshold;
-        govParams.proposalStake = proposalThreshold / 100;
+        govParams.proposalStake = proposalThreshold / 100; // 1% of threshold as stake
         
+        // Set the separate refund percentages
         govParams.defeatedRefundPercentage = defeatedRefund;
         govParams.canceledRefundPercentage = cancelledRefund;
         govParams.expiredRefundPercentage = expiredRefund;
         
+        // Add basic allowed function selectors
         allowedFunctionSelectors[bytes4(keccak256("transfer(address,uint256)"))] = true;
         allowedFunctionSelectors[bytes4(keccak256("approve(address,uint256)"))] = true;
         
         emit ContractInitialized(tokenAddress, timelockAddress, admin);
     }
-
-    function _authorizeUpgrade(address newImplementation) internal override onlyRole(ADMIN_ROLE) {}
     
+    /**
+     * @notice Function that authorizes an upgrade to a new implementation
+     */
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(ADMIN_ROLE) {
+        // Authorization is handled by the onlyRole modifier
+    }
+    
+    // ==================== ADMIN FUNCTIONS ====================
+    /**
+     * @notice Pause the contract
+     */
     function pause() external {
         if (!hasRole(GUARDIAN_ROLE, msg.sender) && 
             !hasRole(ADMIN_ROLE, msg.sender) && 
             msg.sender != address(timelock))
-            revert NotAuth();
+            revert NotAuthorized();
         _pause();
         emit ContractPaused(msg.sender);
     }
 
+    /**
+     * @notice Unpause the contract
+     */
     function unpause() external {
         if (!hasRole(ADMIN_ROLE, msg.sender) && msg.sender != address(timelock))
-            revert NotAuth();
+            revert NotAuthorized();
         _unpause();
         emit ContractUnpaused(msg.sender);
     }
 
-    function revokeContractRole(bytes32 role, address account) external onlyAdminOrTimelock {
-        if (account == address(0)) revert ZA();
+    /**
+     * @notice Manages contract roles (revoke/grant)
+     * @param role The role to manage
+     * @param account The account to manage role for
+     * @param isGranting True to grant, false to revoke
+     */
+    function manageContractRole(bytes32 role, address account, bool isGranting) 
+        external 
+        onlyAdminOrTimelock 
+        nonReentrant 
+    {
+        if (account == address(0)) revert GovernanceError();
         
-        if (role == ADMIN_ROLE) {
+        // Handle ADMIN_ROLE revocation safely
+        if (!isGranting && role == ADMIN_ROLE) {
             if (!(getRoleMemberCount(ADMIN_ROLE) > 1 || account != msg.sender)) 
-                revert LastAdm();
+                revert LastAdminRole();
         }
         
-        revokeRole(role, account);
-        emit RoleChange(role, account, false);
-    }
-    
-    function grantContractRole(bytes32 role, address account) external onlyAdminOrTimelock {
-        if (account == address(0)) revert ZA();
-        
-        grantRole(role, account);
-        emit RoleChange(role, account, true);
-    }
-    
-    function updateGuardian(address guardian, bool isAdding) external onlyAdminOrTimelock {
-        if (guardian == address(0)) revert ZA();
-        
-        if (isAdding) {
-            grantRole(GUARDIAN_ROLE, guardian);
+        // Perform the role change
+        if (isGranting) {
+            grantRole(role, account);
         } else {
-            revokeRole(GUARDIAN_ROLE, guardian);
+            revokeRole(role, account);
         }
         
-        emit RoleChange(GUARDIAN_ROLE, guardian, isAdding);
+        emit RoleChange(role, account, isGranting);
     }
-
+    
+    /**
+     * @notice Update security settings for allowed function selectors and targets
+     */
     function updateSecurity(
         bytes4 selector, 
         bool selectorAllowed, 
         address target, 
         bool targetAllowed
-    ) external onlyRole(ADMIN_ROLE) {
+    ) external onlyRole(ADMIN_ROLE) nonReentrant {
         if (selector != bytes4(0)) {
             allowedFunctionSelectors[selector] = selectorAllowed;
         }
@@ -324,26 +438,28 @@ contract JustGovernanceUpgradeable is
         emit SecuritySettingUpdated(selector, selectorAllowed, target, targetAllowed);
     }
     
-    function updateGovParam(uint8 paramType, uint256 newValue) external onlyAdminOrTimelock {
+    // ==================== GOVERNANCE PARAMETERS MANAGEMENT ====================
+    /**
+     * @notice Consolidated parameter update function
+     */
+    function updateGovParam(uint8 paramType, uint256 newValue) external onlyAdminOrTimelock nonReentrant {
+        // Combined validation logic
         if (paramType == PARAM_VOTING_DURATION) {
             if (newValue < minVotingDuration || newValue > maxVotingDuration)
-                revert InvDur(newValue, minVotingDuration, maxVotingDuration);
+                revert InvalidDuration(newValue, minVotingDuration, maxVotingDuration);
         } 
-        else if (paramType == PARAM_DEFEATED_REFUND_PERCENTAGE || 
-                paramType == PARAM_CANCELED_REFUND_PERCENTAGE || 
-                paramType == PARAM_EXPIRED_REFUND_PERCENTAGE) {
-            if (newValue > 100) revert InvPct();
+        else if (paramType >= PARAM_DEFEATED_REFUND_PERCENTAGE && 
+                paramType <= PARAM_EXPIRED_REFUND_PERCENTAGE) {
+            if (newValue > 100) revert InvalidPercentage();
         }
         else {
-            if (newValue == 0) revert IA();
+            // All other parameters must be positive
+            if (newValue == 0) revert GovernanceError();
         }
         
-        _updateGovParam(paramType, newValue);
-    }
-    
-    function _updateGovParam(uint8 paramType, uint256 newValue) internal {
         uint256 oldValue;
         
+        // Update parameter based on type - using if/else to save gas over a switch statement
         if (paramType == PARAM_VOTING_DURATION) {
             oldValue = govParams.votingDuration;
             govParams.votingDuration = newValue;
@@ -373,8 +489,12 @@ contract JustGovernanceUpgradeable is
         emit GovParamChange(paramType, oldValue, newValue);
     }
     
+    // ==================== PROPOSAL MANAGEMENT ====================
+    /**
+     * @notice Get the current state of a proposal
+     */
     function getProposalState(uint256 proposalId) public view returns (ProposalState) {
-        if (proposalId >= _proposals.length) revert InvPId();
+        if (proposalId >= _proposals.length) revert GovernanceError();
         ProposalData storage proposal = _proposals[proposalId];
 
         if (proposal.flags.isCanceled()) {
@@ -391,9 +511,10 @@ contract JustGovernanceUpgradeable is
         } else if (!proposal.flags.isQueued()) {
             return ProposalState.Succeeded;
         } else {
+            // Check if it's expired in the timelock
             if (proposal.timelockTxHash != bytes32(0)) {
-                (,, , uint256 eta, bool executed) = timelock.getTransaction(proposal.timelockTxHash);
-                if (!executed && block.timestamp > eta + timelock.gracePeriod()) {
+                (,, , uint256 eta, uint8 executed) = timelock.getTransaction(proposal.timelockTxHash);
+                if (executed != 2 && block.timestamp > eta + timelock.gracePeriod()) {
                     return ProposalState.Expired;
                 }
             }
@@ -401,7 +522,10 @@ contract JustGovernanceUpgradeable is
         }
     }
 
- function createProposal(
+    /**
+     * @notice Create a proposal (unified function for all proposal types)
+     */
+    function createProposal(
         string calldata description,
         ProposalType proposalType,
         address target,
@@ -414,58 +538,73 @@ contract JustGovernanceUpgradeable is
         uint256 newVotingDuration,
         uint256 newTimelockDelay
     ) external whenNotPaused nonReentrant returns (uint256) {
-        // CHECKS
+        // Type-specific validation
         if (proposalType == ProposalType.General) {
-            // Various validation checks
-            if (target == address(0)) revert ZA();
-            if (callData.length < 4) revert InvCD();
-            
-            bytes4 selector = bytes4(callData[:4]);
-            if (!allowedFunctionSelectors[selector]) revert InvSel();
+            if (target == address(0) || callData.length < 4) revert GovernanceError();
+            if (!allowedFunctionSelectors[bytes4(callData[:4])]) revert GovernanceError();
         } 
-        // Other validation checks for different proposal types...
-        
-        if (justToken.balanceOf(msg.sender) < govParams.proposalCreationThreshold)
-            revert InsBal(justToken.balanceOf(msg.sender), govParams.proposalCreationThreshold);
-        
-        // EFFECTS - Create proposal in memory but don't commit to storage yet
-        uint256 proposalId = _proposals.length;
-        ProposalData memory newProposal;
-        newProposal.proposer = msg.sender;
-        newProposal.pType = proposalType;
-        newProposal.deadline = uint48(block.timestamp + govParams.votingDuration);
-        newProposal.createdAt = uint48(block.timestamp);
-        newProposal.stakedAmount = govParams.proposalStake;
-        newProposal.description = description;
-        
-        // Set proposal type-specific fields
-        if (proposalType == ProposalType.General) {
-            newProposal.target = target;
-            newProposal.callData = callData;
-        } else if (proposalType == ProposalType.GovernanceChange) {
-            // Set governance change parameters
-            newProposal.newThreshold = newThreshold;
-            newProposal.newQuorum = newQuorum;
-            newProposal.newVotingDuration = newVotingDuration;
-            newProposal.newTimelockDelay = newTimelockDelay;
-        } else {
-            // Set recipient and amount for other proposal types
-            newProposal.recipient = recipient;
-            newProposal.amount = amount;
-            
-            if (proposalType == ProposalType.ExternalERC20Transfer) {
-                newProposal.token = externalToken;
-            }
+        else if (proposalType == ProposalType.Withdrawal || 
+                 proposalType == ProposalType.TokenTransfer || 
+                 proposalType == ProposalType.TokenMint || 
+                 proposalType == ProposalType.TokenBurn) {
+            if (recipient == address(0) || amount == 0) revert GovernanceError();
+        } 
+        else if (proposalType == ProposalType.ExternalERC20Transfer) {
+            if (recipient == address(0) || amount == 0 || externalToken == address(0)) revert GovernanceError();
+        } 
+        else if (proposalType == ProposalType.GovernanceChange) {
+            // Check if at least one parameter is changing
+            bool hasValidChange = newThreshold > 0 || newQuorum > 0 || 
+                                 (newVotingDuration >= minVotingDuration && newVotingDuration <= maxVotingDuration) || 
+                                 newTimelockDelay > 0;
+            if (!hasValidChange) revert NoValidChange();
+        }
+        else if (proposalType != ProposalType.Signaling) {
+            revert GovernanceError(); // Invalid proposal type
         }
 
-        // INTERACTIONS - Perform the token transfer
-        if (!justToken.governanceTransfer(msg.sender, address(this), govParams.proposalStake))
-            revert TxFail();
+        // Check proposer's token balance
+        if (justToken.balanceOf(msg.sender) < govParams.proposalCreationThreshold)
+            revert InsufficientBalance(justToken.balanceOf(msg.sender), govParams.proposalCreationThreshold);
         
-        // Create snapshot and store final state after successful interaction
+        // Create new proposal
+        uint256 proposalId = _proposals.length;
+        
+        // Pack type-specific data
+        bytes memory typeData = packProposalData(
+            proposalType,
+            target,
+            callData,
+            amount,
+            recipient,
+            externalToken,
+            newThreshold,
+            newQuorum,
+            newVotingDuration,
+            newTimelockDelay
+        );
+        
+        // Initialize proposal with core fields
+        ProposalData memory newProposal;
+        newProposal.proposer = msg.sender;
+        newProposal.pType = uint8(proposalType);
+        newProposal.deadline = uint48(block.timestamp + govParams.votingDuration);
+        newProposal.createdAt = uint48(block.timestamp);
+        newProposal.stakedAmount = uint128(govParams.proposalStake);
+        newProposal.description = description;
+        newProposal.typeSpecificData = typeData;
+        
+        // Take stake from the proposer
+        if (!justToken.governanceTransfer(msg.sender, address(this), govParams.proposalStake))
+            revert TransferFailed();
+
+        // Create snapshot and store
         newProposal.snapshotId = justToken.createSnapshot();
+        
+        // Store the proposal
         _proposals.push(newProposal);
 
+        // Emit event
         emit ProposalEvent(
             proposalId, 
             STATUS_CREATED, 
@@ -476,221 +615,168 @@ contract JustGovernanceUpgradeable is
         return proposalId;
     }
 
-    function createSignalingProposal(string calldata description) 
-        external 
-        whenNotPaused 
-        nonReentrant 
-        returns (uint256) 
-    {
-        if (bytes(description).length == 0) revert InvCD();
-        
-        if (justToken.balanceOf(msg.sender) < govParams.proposalCreationThreshold)
-            revert InsBal(justToken.balanceOf(msg.sender), govParams.proposalCreationThreshold);
-        
-        if (!justToken.governanceTransfer(msg.sender, address(this), govParams.proposalStake))
-            revert TxFail();
-
-        uint256 proposalId = _proposals.length;
-        
-        ProposalData storage newProposal = _proposals.push();
-        newProposal.proposer = msg.sender;
-        newProposal.pType = ProposalType.Signaling;
-        newProposal.deadline = uint48(block.timestamp + govParams.votingDuration);
-        newProposal.createdAt = uint48(block.timestamp);
-        newProposal.stakedAmount = govParams.proposalStake;
-        newProposal.description = description;
-        newProposal.snapshotId = justToken.createSnapshot();
-        
-        emit ProposalEvent(
-            proposalId, 
-            STATUS_CREATED, 
-            msg.sender, 
-            abi.encode(ProposalType.Signaling, newProposal.snapshotId)
-        );
-        
-        return proposalId;
-    }
-
+    /**
+     * @notice Cancel an active proposal
+     */
     function cancelProposal(uint256 proposalId) external
         validActiveProposal(proposalId)
         nonReentrant
     {
         ProposalData storage proposal = _proposals[proposalId];
 
+        // Check authorization to cancel
         if (msg.sender == proposal.proposer) {
+            // Proposer can only cancel before any votes cast and before deadline
             if (proposal.yesVotes != 0 || proposal.noVotes != 0 || proposal.abstainVotes != 0)
-                revert AlrdyVt();
-            if (block.timestamp >= proposal.deadline) revert VtEnd();
+                revert AlreadyVoted();
+            if (block.timestamp >= proposal.deadline) revert VotingEnded();
         } else {
-            if (!hasRole(GUARDIAN_ROLE, msg.sender)) revert NotAuth();
+            if (!hasRole(GUARDIAN_ROLE, msg.sender)) revert NotAuthorized();
         }
 
+        // Mark as canceled
+        proposal.flags = proposal.flags.setCanceled();
+
+        // Emit event
+        emit ProposalEvent(proposalId, STATUS_CANCELED, msg.sender, "");
+
+        // Cancel in timelock if queued
         if (proposal.flags.isQueued() && proposal.timelockTxHash != bytes32(0)) {
             timelock.cancelTransaction(proposal.timelockTxHash);
         }
-
-        proposal.flags = proposal.flags.setCanceled();
-
-        emit ProposalEvent(proposalId, STATUS_CANCELED, msg.sender, "");
     }
 
+    /**
+     * @notice Cast a vote on a proposal
+     */
     function castVote(uint256 proposalId, uint8 support) external
         whenNotPaused
         validActiveProposal(proposalId)
+        nonReentrant
         returns (uint256)
     {
-        if (support > 2) revert InvVtTyp();
-        if (_hasVoted[proposalId][msg.sender]) revert AlrdyVt();
+        if (support > 2) revert InvalidVoteType();
+        if (_hasVoted[proposalId][msg.sender]) revert AlreadyVoted();
         
         ProposalData storage proposal = _proposals[proposalId];
-        if (uint48(block.timestamp) > proposal.deadline) revert VtEnd();
+        if (uint48(block.timestamp) > proposal.deadline) revert VotingEnded();
         
+        // Get voting power from snapshot
         uint256 votingPower = justToken.getEffectiveVotingPower(msg.sender, proposal.snapshotId);
-        if (votingPower == 0) revert NoVtPwr();
+        if (votingPower == 0) revert NoVotingPower();
         
+        // Record the vote
         proposalVoterInfo[proposalId][msg.sender] = votingPower;
+        _hasVoted[proposalId][msg.sender] = true;
+        _proposalVoters[proposalId].push(msg.sender);
         
-        if (!_hasVoted[proposalId][msg.sender]) {
-            _hasVoted[proposalId][msg.sender] = true;
-            _proposalVoters[proposalId].push(msg.sender);
-        }
-        
+        // Update vote counts (only one storage write)
         if (support == 0) {
-            proposal.noVotes += votingPower;
+            proposal.noVotes += uint128(votingPower);
         } else if (support == 1) {
-            proposal.yesVotes += votingPower;
+            proposal.yesVotes += uint128(votingPower);
         } else {
-            proposal.abstainVotes += votingPower;
+            proposal.abstainVotes += uint128(votingPower);
         }
         
+        // Emit events
         emit VoteCast(proposalId, msg.sender, support, votingPower);
-        
-        emit ProposalEvent(
-            proposalId, 
-            6, // Vote event 
-            msg.sender, 
-            abi.encode(support, votingPower)
-        );
+        emit ProposalEvent(proposalId, 6, msg.sender, abi.encode(support, votingPower));
         
         return votingPower;
     }
 
-    function getProposalVotes(uint256 proposalId) external view returns (
-        uint256 yesVotes,
-        uint256 noVotes, 
-        uint256 abstainVotes,
-        uint256 totalVotingPower,
-        uint256 totalVoters
-    ) {
-        if (proposalId >= _proposals.length) revert InvPId();
-        ProposalData storage proposal = _proposals[proposalId];
-        
-        yesVotes = proposal.yesVotes;
-        noVotes = proposal.noVotes;
-        abstainVotes = proposal.abstainVotes;
-        
-        totalVotingPower = yesVotes + noVotes + abstainVotes;
-        
-        totalVoters = _proposalVoters[proposalId].length;
-        
-        return (yesVotes, noVotes, abstainVotes, totalVotingPower, totalVoters);
-    }
-    
-   function queueProposal(uint256 proposalId) external
-    whenNotPaused
-    validActiveProposal(proposalId)
-    nonReentrant
-{
-    if (getProposalState(proposalId) != ProposalState.Succeeded) revert NotSucc();
-    
-    ProposalData storage proposal = _proposals[proposalId];
-    
-    // Pass the proposal ID, type, and target for more precise threat level detection
-    bytes memory data = abi.encodeWithSelector(
-        this.executeProposalLogic.selector,
-        proposalId,
-        proposal.pType,
-        proposal.target
-    );
-    
-    // Let the timelock determine the appropriate threat level
-    bytes32 txHash = timelock.queueTransactionWithThreatLevel(
-        address(this),
-        0,
-        data
-    );
-    
-    proposal.timelockTxHash = txHash;
-    proposal.flags = proposal.flags.setQueued();
-    
-    emit TimelockTransactionSubmitted(proposalId, txHash);
-    emit ProposalEvent(proposalId, STATUS_QUEUED, msg.sender, abi.encode(txHash));
-}
-    function executeProposal(uint256 proposalId) external
+    /**
+     * @notice Queue a successful proposal for execution
+     */
+    function queueProposal(uint256 proposalId) external
         whenNotPaused
         validActiveProposal(proposalId)
         nonReentrant
     {
+        if (getProposalState(proposalId) != ProposalState.Succeeded) revert NotSucceeded();
+        
         ProposalData storage proposal = _proposals[proposalId];
         
-        if (getProposalState(proposalId) != ProposalState.Queued) revert NotQ();
-        if (proposal.timelockTxHash == bytes32(0)) revert NoTxH();
+        // Encode execution call
+        bytes memory data = abi.encodeWithSelector(
+            this.executeProposalLogic.selector,
+            proposalId
+        );
         
-        if (!timelock.queuedTransactions(proposal.timelockTxHash)) revert NotInTL();
+        // Mark as queued
+        proposal.flags = proposal.flags.setQueued();
         
-        timelock.executeTransaction(proposal.timelockTxHash);
+        // Queue in timelock
+        bytes32 txHash = timelock.queueTransactionWithThreatLevel(
+            address(this),
+            0,
+            data
+        );
+        
+        // Store transaction hash
+        proposal.timelockTxHash = txHash;
+        
+        // Emit events
+        emit TimelockTransactionSubmitted(proposalId, txHash);
+        emit ProposalEvent(proposalId, STATUS_QUEUED, msg.sender, abi.encode(txHash));
     }
-        function executeProposalLogic(
-            uint256 proposalId,
-            ProposalType proposalType,
-            address proposalTarget
-        ) external nonReentrant {
-            // CHECKS
-            if (msg.sender != address(timelock)) revert NotAuth();
-            if (proposalId >= _proposals.length) revert InvPId();
+
+    /**
+     * @notice Execute a queued proposal
+     */
+    function executeProposal(uint256 proposalId) external
+        whenNotPaused
+        nonReentrant
+    {
+        if (proposalId >= _proposals.length) revert GovernanceError();
+        
+        ProposalData storage proposal = _proposals[proposalId];
+        uint8 flags = proposal.flags;
+        
+        // Early return if already executed (idempotent)
+        if (ProposalLib.isExecuted(flags)) {
+            return;
+        }
+        
+        // Validate proposal state
+        if (ProposalLib.isCanceled(flags)) revert GovernanceError();
+        if (getProposalState(proposalId) != ProposalState.Queued) revert TimelockError();
+        
+        bytes32 txHash = proposal.timelockTxHash;
+        if (txHash == bytes32(0)) revert TimelockError();
+        
+        address proposer = proposal.proposer;
+        uint256 stakedAmount = proposal.stakedAmount;
+        
+        // Check if already executed in timelock
+        (,,,, uint8 txState) = timelock.getTransaction(txHash);
+        bool alreadyExecuted = txState == 2;
+        
+        if (alreadyExecuted) {
+            // Mark as executed
+            proposal.flags = ProposalLib.setExecuted(flags);
             
-            ProposalData storage proposal = _proposals[proposalId];
-            if (proposal.flags.isExecuted()) revert PropExec();
-            if (!proposal.flags.isQueued()) revert NotQ();
-            
-            // EFFECTS - Update state BEFORE external interactions
-            proposal.flags = proposal.flags.setExecuted();
-            
-            // INTERACTIONS - External calls after state changes
-            _executeProposal(proposalId);
-            
-            // Handle stake refund (still part of interactions)
-            if (!proposal.flags.isStakeRefunded()) {
+            // Handle refund if not already done
+            if (!ProposalLib.isStakeRefunded(flags)) {
                 uint256 balance = justToken.balanceOf(address(this));
-                if (balance < proposal.stakedAmount) {
-                    emit ProposalEvent(
-                        proposalId, 
-                        5,
-                        proposal.proposer, 
-                        abi.encode("INSUFFICIENT_BALANCE", balance, proposal.stakedAmount)
-                    );
-                    return;
-                }
-                
-                try justToken.governanceTransfer(address(this), proposal.proposer, proposal.stakedAmount) {
-                    // Effect after interaction, but this is safe because:
-                    // 1. It's just marking a refund as complete
-                    // 2. It's in a try/catch block
-                    proposal.flags = proposal.flags.setStakeRefunded();
-                    
-                    emit ProposalEvent(
-                        proposalId, 
-                        5,
-                        proposal.proposer, 
-                        abi.encode(REFUND_FULL, proposal.stakedAmount)
-                    );
-                } catch (bytes memory reason) {
-                    emit ProposalEvent(
-                        proposalId, 
-                        5,
-                        proposal.proposer, 
-                        abi.encode("REFUND_FAILED", reason)
-                    );
+                if (balance >= stakedAmount) {
+                    try justToken.governanceTransfer(address(this), proposer, stakedAmount) {
+                        proposal.flags = ProposalLib.setStakeRefunded(proposal.flags);
+                        emit ProposalEvent(
+                            proposalId, 
+                            5, 
+                            proposer, 
+                            abi.encode(0, stakedAmount)
+                        );
+                    } catch (bytes memory reason) {
+                        emit ProposalEvent(
+                            proposalId, 
+                            5, 
+                            proposer, 
+                            abi.encode("REFUND_FAILED", reason)
+                        );
+                    }
                 }
             }
             
@@ -700,111 +786,208 @@ contract JustGovernanceUpgradeable is
                 msg.sender, 
                 abi.encode(proposal.pType)
             );
+            
+            return;
         }
+        
+        // Execute from timelock
+        if (!timelock.queuedTransactions(txHash)) revert TimelockError();
+        timelock.executeTransaction(txHash);
+    }
+    
+    /**
+     * @notice Internal execution function called by timelock
+     */
+    function executeProposalLogic(uint256 proposalId) external nonReentrant {
+        // Security check
+        if (msg.sender != address(timelock)) revert NotAuthorized();
+        if (proposalId >= _proposals.length) revert GovernanceError();
+        
+        ProposalData storage proposal = _proposals[proposalId];
+        if (proposal.flags.isExecuted()) revert GovernanceError();
+        if (!proposal.flags.isQueued()) revert TimelockError();
+        
+        // Mark as executed before interactions
+        proposal.flags = proposal.flags.setExecuted();
+        
+        // Execute the proposal based on type
+        _executeProposal(proposalId);
+        
+        // Handle stake refund
+        if (!proposal.flags.isStakeRefunded()) {
+            uint256 balance = justToken.balanceOf(address(this));
+            if (balance >= proposal.stakedAmount) {
+                try justToken.governanceTransfer(address(this), proposal.proposer, proposal.stakedAmount) {
+                    proposal.flags = proposal.flags.setStakeRefunded();
+                    emit ProposalEvent(
+                        proposalId, 
+                        5, 
+                        proposal.proposer, 
+                        abi.encode(REFUND_FULL, proposal.stakedAmount)
+                    );
+                } catch (bytes memory reason) {
+                    emit ProposalEvent(
+                        proposalId, 
+                        5, 
+                        proposal.proposer, 
+                        abi.encode("REFUND_FAILED", reason)
+                    );
+                }
+            }
+        }
+        
+        emit ProposalEvent(
+            proposalId, 
+            STATUS_EXECUTED, 
+            msg.sender, 
+            abi.encode(proposal.pType)
+        );
+    }
 
+    /**
+     * @notice Core execution logic for all proposal types
+     */
     function _executeProposal(uint256 proposalId) internal {
         ProposalData storage proposal = _proposals[proposalId];
-        ProposalType pType = proposal.pType;
+        ProposalType pType = ProposalType(proposal.pType);
         
-        // Common checks for multiple proposal types
-        if (pType != ProposalType.General && pType != ProposalType.GovernanceChange && pType != ProposalType.Signaling) {
-            address recipient = proposal.recipient;
-            uint256 amount = proposal.amount;
-            if (recipient == address(0)) revert ZA();
-            if (amount == 0) revert IA();
-            
-            if (pType == ProposalType.Withdrawal) {
-                if (address(this).balance < amount) revert InsBal(address(this).balance, amount);
-                (bool success,) = recipient.call{value: amount}("");
-                if (!success) revert TxFail();
-                return;
-            } 
-            
-            if (pType == ProposalType.TokenTransfer) {
-                if (!justToken.governanceTransfer(address(this), recipient, amount)) revert TxFail();
-                return;
-            } 
-            
-            if (pType == ProposalType.ExternalERC20Transfer) {
-                if (proposal.token == address(0)) revert ZA();
-                IERC20Upgradeable(proposal.token).safeTransfer(recipient, amount);
-                return;
-            }
-            
-            if (pType == ProposalType.TokenMint) {
-                if (!justToken.governanceMint(recipient, amount)) revert TxFail();
-                return;
-            } 
-            
-            if (pType == ProposalType.TokenBurn) {
-                if (!justToken.governanceBurn(recipient, amount)) revert TxFail();
-                return;
-            }
+        // Skip execution for signaling proposals
+        if (pType == ProposalType.Signaling) {
+            return;
         }
         
-        // Handle remaining proposal types
-        if (pType == ProposalType.General) {
-            if (proposal.target == address(0)) revert ZA();
-            (bool success, bytes memory result) = proposal.target.call(proposal.callData);
+        // Execute based on proposal type
+        if (pType == ProposalType.Withdrawal) {
+            (address payable recipient, uint256 amount) = unpackTransferData(proposal.typeSpecificData);
+            if (recipient == address(0) || amount == 0) revert GovernanceError();
+            if (address(this).balance < amount) revert InsufficientBalance(address(this).balance, amount);
+            
+            (bool success, ) = recipient.call{value: amount}("");
+            if (!success) revert TransferFailed();
+        } 
+        else if (pType == ProposalType.TokenTransfer) {
+            (address payable recipient, uint256 amount) = unpackTransferData(proposal.typeSpecificData);
+            if (recipient == address(0) || amount == 0) revert GovernanceError();
+            if (!justToken.governanceTransfer(address(this), recipient, amount))
+                revert TransferFailed();
+        } 
+        else if (pType == ProposalType.ExternalERC20Transfer) {
+            (address payable recipient, uint256 amount, address token) = unpackERC20TransferData(proposal.typeSpecificData);
+            if (recipient == address(0) || amount == 0 || token == address(0)) revert GovernanceError();
+            
+            IERC20Upgradeable(token).safeTransfer(recipient, amount);
+        } 
+        else if (pType == ProposalType.General) {
+            (address target, bytes memory callData) = unpackGeneralData(proposal.typeSpecificData);
+            if (target == address(0)) revert GovernanceError();
+            
+            (bool success, bytes memory result) = target.call(callData);
             if (!success) {
-                emit ProposalEvent(proposalId, STATUS_EXECUTED, address(0), abi.encodePacked("Failed: ", result));
-                revert CallFail();
+                emit ProposalEvent(
+                    proposalId,
+                    STATUS_EXECUTED,
+                    address(0),
+                    abi.encodePacked("Failed: ", result)
+                );
+                revert CallFailed();
             }
         }
         else if (pType == ProposalType.GovernanceChange) {
-            uint256 nq = proposal.newQuorum;
-            uint256 nvd = proposal.newVotingDuration;
-            uint256 ntd = proposal.newTimelockDelay;
-            uint256 nt = proposal.newThreshold;
+            (uint256 newThreshold, uint256 newQuorum, uint256 newVotingDuration, uint256 newTimelockDelay) = 
+                unpackGovernanceChangeData(proposal.typeSpecificData);
             
-            if (nq > 0) _updateGovParam(PARAM_QUORUM, nq);
-            if (nvd >= minVotingDuration && nvd <= maxVotingDuration) _updateGovParam(PARAM_VOTING_DURATION, nvd);
-            if (ntd > 0) _updateGovParam(PARAM_TIMELOCK_DELAY, ntd);
-            if (nt > 0) _updateGovParam(PARAM_PROPOSAL_THRESHOLD, nt);
+            if (newQuorum > 0) {
+                uint256 oldValue = govParams.quorum;
+                govParams.quorum = newQuorum;
+                emit GovParamChange(PARAM_QUORUM, oldValue, newQuorum);
+            }
+            
+            if (newVotingDuration >= minVotingDuration && newVotingDuration <= maxVotingDuration) {
+                uint256 oldValue = govParams.votingDuration;
+                govParams.votingDuration = newVotingDuration;
+                emit GovParamChange(PARAM_VOTING_DURATION, oldValue, newVotingDuration);
+            }
+            
+            if (newTimelockDelay > 0) {
+                uint256 oldValue = govParams.timelockDelay;
+                govParams.timelockDelay = newTimelockDelay;
+                emit GovParamChange(PARAM_TIMELOCK_DELAY, oldValue, newTimelockDelay);
+            }
+            
+            if (newThreshold > 0) {
+                uint256 oldValue = govParams.proposalCreationThreshold;
+                govParams.proposalCreationThreshold = newThreshold;
+                emit GovParamChange(PARAM_PROPOSAL_THRESHOLD, oldValue, newThreshold);
+            }
+        } 
+        else if (pType == ProposalType.TokenMint) {
+            (address payable recipient, uint256 amount) = unpackTransferData(proposal.typeSpecificData);
+            if (recipient == address(0) || amount == 0) revert GovernanceError();
+            if (!justToken.governanceMint(recipient, amount)) revert TransferFailed();
+        } 
+        else if (pType == ProposalType.TokenBurn) {
+            (address payable recipient, uint256 amount) = unpackTransferData(proposal.typeSpecificData);
+            if (recipient == address(0) || amount == 0) revert GovernanceError();
+            if (!justToken.governanceBurn(recipient, amount)) revert TransferFailed();
         }
     }
     
+    /**
+     * @notice Claim stake refund for defeated, canceled, or expired proposals
+     */
     function claimPartialStakeRefund(uint256 proposalId) external nonReentrant {
-        if (proposalId >= _proposals.length) revert InvPId();
+        if (proposalId >= _proposals.length) revert GovernanceError();
+        
         ProposalData storage proposal = _proposals[proposalId];
         
-        if (msg.sender != proposal.proposer) revert NotProp();
+        address proposer = proposal.proposer;
+        uint8 flags = proposal.flags;
+        uint256 stakedAmount = proposal.stakedAmount;
         
-        if (proposal.flags.isStakeRefunded()) revert AlrdyRef();
+        if (msg.sender != proposer) revert NotProposer();
+        if (ProposalLib.isStakeRefunded(flags)) revert AlreadyRefunded();
         
         ProposalState state = getProposalState(proposalId);
         
         uint256 refundAmount;
         uint8 refundType;
         
+        // Determine refund amount based on state
         if (state == ProposalState.Defeated) {
-            refundAmount = (proposal.stakedAmount * govParams.defeatedRefundPercentage) / 100;
+            refundAmount = (stakedAmount * govParams.defeatedRefundPercentage) / 100;
             refundType = REFUND_PARTIAL;
         } 
         else if (state == ProposalState.Canceled) {
-            refundAmount = (proposal.stakedAmount * govParams.canceledRefundPercentage) / 100;
+            refundAmount = (stakedAmount * govParams.canceledRefundPercentage) / 100;
             refundType = REFUND_PARTIAL;
         }
         else if (state == ProposalState.Expired) {
-            refundAmount = (proposal.stakedAmount * govParams.expiredRefundPercentage) / 100;
+            refundAmount = (stakedAmount * govParams.expiredRefundPercentage) / 100;
             refundType = REFUND_PARTIAL;
         }
         else {
-            revert NotDef();
+            revert NotDefeated();
         }
         
-        proposal.flags = proposal.flags.setStakeRefunded();
-        if (!justToken.governanceTransfer(address(this), proposal.proposer, refundAmount))
-            revert TxFail();
+        // Mark as refunded
+        proposal.flags = ProposalLib.setStakeRefunded(flags);
         
+        // Transfer tokens
+        if (!justToken.governanceTransfer(address(this), proposer, refundAmount))
+            revert TransferFailed();
+        
+        // Emit event
         emit ProposalEvent(
             proposalId, 
-            5,
-            proposal.proposer, 
+            5, 
+            proposer, 
             abi.encode(refundType, refundAmount)
         );
     }
     
+    /**
+     * @notice Get the vote totals for a proposal
+     */
     function getProposalVoteTotals(uint256 proposalId) public view returns (
         uint256 forVotes,
         uint256 againstVotes, 
@@ -812,7 +995,7 @@ contract JustGovernanceUpgradeable is
         uint256 totalVotingPower,
         uint256 voterCount
     ) {
-        if (proposalId >= _proposals.length) revert InvPId();
+        if (proposalId >= _proposals.length) revert GovernanceError();
         ProposalData storage proposal = _proposals[proposalId];
         
         forVotes = proposal.yesVotes;
@@ -820,15 +1003,16 @@ contract JustGovernanceUpgradeable is
         abstainVotes = proposal.abstainVotes;
         
         totalVotingPower = forVotes + againstVotes + abstainVotes;
-        
         voterCount = _proposalVoters[proposalId].length;
         
         return (forVotes, againstVotes, abstainVotes, totalVotingPower, voterCount);
     }
 
-  receive() external payable whenNotPaused {
-    // Optional: Add any logic you need when receiving ETH
-}
+    // Support receiving ETH
+    receive() external payable {}
 
+    /**
+     * @dev Reserved storage space for future upgrades
+     */
     uint256[50] private __gap;
 }
