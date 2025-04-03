@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { useWeb3 } from '../contexts/Web3Context';
 import { useAuth } from '../contexts/AuthContext';
@@ -11,6 +10,7 @@ import { DarkModeProvider, useDarkMode } from '../contexts/DarkModeContext';
 import DarkModeToggle from './DarkModeToggle';
 
 // Import components
+import HomePage from './HomePage';
 import SecuritySettingsTab from './SecuritySettingsTab';
 import RoleManagementTab from './RoleManagementTab';
 import TimelockSettingsTab from './TimelockSettingsTab';
@@ -48,8 +48,8 @@ const safeStringToNumber = (value) => {
 const JustDAOContent = () => {
   const { isDarkMode } = useDarkMode();
   
-  // State for active tab
-  const [activeTab, setActiveTab] = useState('dashboard');
+  // State for active tab - set 'home' as the default
+  const [activeTab, setActiveTab] = useState('home');
   
   // State for active security subtab
   const [securitySubtab, setSecuritySubtab] = useState('emergency');
@@ -73,6 +73,11 @@ const JustDAOContent = () => {
   
   // Auth context for user roles
   const { hasRole } = useAuth();
+  
+  // Function to navigate between tabs (for the homepage component)
+  const navigateToTab = (tabName) => {
+    setActiveTab(tabName);
+  };
   
   // Listen for window resize events
   useEffect(() => {
@@ -364,83 +369,92 @@ const JustDAOContent = () => {
   return (
     <div className={`flex flex-col min-h-screen ${isDarkMode ? 'dark bg-gray-900' : 'bg-gray-50'}`}>
       {/* Header */}
-<header className="bg-white dark:bg-gray-800 shadow dark:shadow-gray-700">
-  <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
-    <div className="flex items-center">
-      <h1 className="text-3xl font-bold text-indigo-600 dark:text-indigo-400">JustDAO</h1>
-    </div>
-    <div className="flex items-center gap-4">
-      {isConnected ? (
-        <div className="text-sm text-gray-700 dark:text-gray-300">
-          <div className="flex items-center justify-between mb-1">
-            <span className="font-medium">{formatAddress(account)}</span>
-            {/* Dark mode toggle moved here and made smaller */}
-            <div className="ml-2 transform scale-90 mt-1">
-              <DarkModeToggle />
-            </div>
+      <header className="bg-white dark:bg-gray-800 shadow dark:shadow-gray-700">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+          <div className="flex items-center">
+            <h1 className="text-3xl font-bold text-indigo-600 dark:text-indigo-400">JustDAO</h1>
           </div>
-          <div className="flex gap-2">
-            <span className="font-semibold text-indigo-600 dark:text-indigo-400">{formatTokenBasedOnWidth(userData.balance)} JST</span>
-            <span>|</span>
-            <span className="font-semibold text-indigo-600 dark:text-indigo-400">{formatTokenBasedOnWidth(getCorrectVotingPower())} {getVotingPowerLabel()}</span>
+          <div className="flex items-center gap-4">
+            {isConnected ? (
+              <div className="text-sm text-gray-700 dark:text-gray-300">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-medium">{formatAddress(account)}</span>
+                  {/* Dark mode toggle moved here and made smaller */}
+                  <div className="ml-2 transform scale-90 mt-1">
+                    <DarkModeToggle />
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <span className="font-semibold text-indigo-600 dark:text-indigo-400">{formatTokenBasedOnWidth(userData.balance)} JST</span>
+                  <span>|</span>
+                  <span className="font-semibold text-indigo-600 dark:text-indigo-400">{formatTokenBasedOnWidth(getCorrectVotingPower())} {getVotingPowerLabel()}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                <span>Not connected</span>
+                {/* Dark mode toggle for when not connected */}
+                <div className="transform scale-90">
+                  <DarkModeToggle />
+                </div>
+              </div>
+            )}
+            
+            {isConnected ? (
+              <div className="flex gap-2">
+                <button 
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md flex items-center dark:bg-indigo-700 dark:hover:bg-indigo-600"
+                  onClick={handleFullRefresh}
+                  disabled={isRefreshing}
+                >
+                  <svg 
+                    className={`w-4 h-4 mr-1 ${isRefreshing ? 'animate-spin' : ''}`} 
+                    fill="none" 
+                    stroke="currentColor" 
+                    viewBox="0 0 24 24" 
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path 
+                      strokeLinecap="round" 
+                      strokeLinejoin="round" 
+                      strokeWidth="2" 
+                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                    />
+                  </svg>
+                  Refresh
+                </button>
+                <button 
+                  className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md dark:bg-red-700 dark:hover:bg-red-600"
+                  onClick={disconnectWallet}
+                >
+                  Disconnect
+                </button>
+              </div>
+            ) : (
+              <button 
+                className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md dark:bg-indigo-700 dark:hover:bg-indigo-600"
+                onClick={connectWallet}
+              >
+                Connect Wallet
+              </button>
+            )}
           </div>
         </div>
-      ) : (
-        <div className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-          <span>Not connected</span>
-          {/* Dark mode toggle for when not connected */}
-          <div className="transform scale-90">
-            <DarkModeToggle />
-          </div>
-        </div>
-      )}
-      
-      {isConnected ? (
-        <div className="flex gap-2">
-          <button 
-            className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md flex items-center dark:bg-indigo-700 dark:hover:bg-indigo-600"
-            onClick={handleFullRefresh}
-            disabled={isRefreshing}
-          >
-            <svg 
-              className={`w-4 h-4 mr-1 ${isRefreshing ? 'animate-spin' : ''}`} 
-              fill="none" 
-              stroke="currentColor" 
-              viewBox="0 0 24 24" 
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path 
-                strokeLinecap="round" 
-                strokeLinejoin="round" 
-                strokeWidth="2" 
-                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-              />
-            </svg>
-            Refresh
-          </button>
-          <button 
-            className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md dark:bg-red-700 dark:hover:bg-red-600"
-            onClick={disconnectWallet}
-          >
-            Disconnect
-          </button>
-        </div>
-      ) : (
-        <button 
-          className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md dark:bg-indigo-700 dark:hover:bg-indigo-600"
-          onClick={connectWallet}
-        >
-          Connect Wallet
-        </button>
-      )}
-    </div>
-  </div>
-</header>
+      </header>
 
-      {/* Navigation Tabs */}
+      {/* Navigation Tabs - Add Home tab as first item */}
       <div className="bg-white dark:bg-gray-800 shadow-sm mb-6 dark:shadow-gray-700">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <nav className="flex overflow-x-auto">
+            {/* Home tab - always visible to everyone */}
+            <div 
+              className={`py-4 px-6 cursor-pointer border-b-2 ${activeTab === 'home' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent hover:text-gray-700 hover:border-gray-300 dark:text-gray-300 dark:hover:text-gray-100 dark:hover:border-gray-600'}`}
+              onClick={() => setActiveTab('home')}
+              data-tab="home"
+            >
+              Home
+            </div>
+            
             <div 
               className={`py-4 px-6 cursor-pointer border-b-2 ${activeTab === 'dashboard' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent hover:text-gray-700 hover:border-gray-300 dark:text-gray-300 dark:hover:text-gray-100 dark:hover:border-gray-600'}`}
               onClick={() => setActiveTab('dashboard')}
@@ -483,56 +497,56 @@ const JustDAOContent = () => {
             
             {/* Analytics tab - FIXED: only visible to users with analytics role */}
             {(() => {
-  // Comprehensive analytics role check function
-  const hasAnalyticsRole = () => {
-    // Check through multiple methods
-    // 1. Direct contract checks via userRoles state
-    if (userRoles.isAnalytics) return true;
-    
-    // 2. Context-based role checks
-    if (hasRole(ROLES.ANALYTICS_ROLE) || hasRole('analytics')) return true;
-    
-    // 3. Check via DAO Helper contract if available
-    if (contracts.daoHelper) {
-      try {
-        // Call immediately and cache for future checks
-        contracts.daoHelper.hasRole(ROLES.ANALYTICS_ROLE, account)
-          .then(hasRole => {
-            if (hasRole) {
-              console.log("User has ANALYTICS_ROLE via daoHelper contract");
-              // Update role state for future checks
-              setUserRoles(prev => ({...prev, isAnalytics: true}));
-            }
-          })
-          .catch(error => console.warn("Error checking analytics role via daoHelper:", error));
-      } catch (err) {
-        console.warn("Could not check analytics role via helper contract", err);
-      }
-    }
-    
-    // REMOVED FALLBACK FOR ADMIN/GUARDIAN ROLES
-    // Only return true if explicitly has analytics role
-    return false;
-  };
-  
-  // Log all role check methods for debugging
-  console.log("Analytics Role Status:", {
-    "hasRole(ANALYTICS_ROLE)": hasRole(ROLES.ANALYTICS_ROLE),
-    "hasRole('analytics')": hasRole('analytics'),
-    "userRoles.isAnalytics": userRoles.isAnalytics,
-    "hasHelperContract": !!contracts.daoHelper
-  });
-  
-  return hasAnalyticsRole() && (
-    <div 
-      className={`py-4 px-6 cursor-pointer border-b-2 ${activeTab === 'analytics' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent hover:text-gray-700 hover:border-gray-300 dark:text-gray-300 dark:hover:text-gray-100 dark:hover:border-gray-600'}`}
-      onClick={() => setActiveTab('analytics')}
-      data-tab="analytics"
-    >
-      Analytics
-    </div>
-  );
-})()}
+              // Comprehensive analytics role check function
+              const hasAnalyticsRole = () => {
+                // Check through multiple methods
+                // 1. Direct contract checks via userRoles state
+                if (userRoles.isAnalytics) return true;
+                
+                // 2. Context-based role checks
+                if (hasRole(ROLES.ANALYTICS_ROLE) || hasRole('analytics')) return true;
+                
+                // 3. Check via DAO Helper contract if available
+                if (contracts.daoHelper) {
+                  try {
+                    // Call immediately and cache for future checks
+                    contracts.daoHelper.hasRole(ROLES.ANALYTICS_ROLE, account)
+                      .then(hasRole => {
+                        if (hasRole) {
+                          console.log("User has ANALYTICS_ROLE via daoHelper contract");
+                          // Update role state for future checks
+                          setUserRoles(prev => ({...prev, isAnalytics: true}));
+                        }
+                      })
+                      .catch(error => console.warn("Error checking analytics role via daoHelper:", error));
+                  } catch (err) {
+                    console.warn("Could not check analytics role via helper contract", err);
+                  }
+                }
+                
+                // REMOVED FALLBACK FOR ADMIN/GUARDIAN ROLES
+                // Only return true if explicitly has analytics role
+                return false;
+              };
+              
+              // Log all role check methods for debugging
+              console.log("Analytics Role Status:", {
+                "hasRole(ANALYTICS_ROLE)": hasRole(ROLES.ANALYTICS_ROLE),
+                "hasRole('analytics')": hasRole('analytics'),
+                "userRoles.isAnalytics": userRoles.isAnalytics,
+                "hasHelperContract": !!contracts.daoHelper
+              });
+              
+              return hasAnalyticsRole() && (
+                <div 
+                  className={`py-4 px-6 cursor-pointer border-b-2 ${activeTab === 'analytics' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent hover:text-gray-700 hover:border-gray-300 dark:text-gray-300 dark:hover:text-gray-100 dark:hover:border-gray-600'}`}
+                  onClick={() => setActiveTab('analytics')}
+                  data-tab="analytics"
+                >
+                  Analytics
+                </div>
+              );
+            })()}
             
             {/* Security tab - only visible to admin or guardian roles */}
             {(userRoles.isAdmin || userRoles.isGuardian || hasRole(ROLES.ADMIN_ROLE) || hasRole(ROLES.GUARDIAN_ROLE) || hasRole('admin') || hasRole('guardian')) && (
@@ -553,6 +567,11 @@ const JustDAOContent = () => {
 
       {/* Main Content */}
       <main className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-8">
+        {/* Home tab - new addition */}
+        {activeTab === 'home' && (
+          <HomePage navigateToTab={navigateToTab} />
+        )}
+        
         {activeTab === 'dashboard' && (
           <DashboardTab 
             user={{

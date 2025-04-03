@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
 import useGovernanceParams from '../hooks/useGovernanceParams';
+import { PROPOSAL_TYPES } from '../utils/constants';
 import { Clock, Check, X, X as XIcon, Calendar, Users, BarChart2, Settings, ChevronLeft, ChevronRight } from 'lucide-react';
 import { PROPOSAL_STATES, VOTE_TYPES, THREAT_LEVELS } from '../utils/constants';
 import { formatCountdown } from '../utils/formatters';
@@ -8,7 +9,6 @@ import Loader from './Loader';
 import blockchainDataCache from '../utils/blockchainDataCache';
 import { useWeb3 } from '../contexts/Web3Context';
 import { useBlockchainData } from '../contexts/BlockchainDataContext';
-import { normalizeVoteData, formatVoteTotal } from '../utils/voteUtils';
 
 // Function to parse proposal descriptions and extract HTML content
 function parseProposalDescription(rawDescription) {
@@ -217,7 +217,7 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
     
     const interval = setInterval(() => {
       cycleThreatLevel('next');
-    }, 10000); // Change every 3 seconds
+    }, 10000); // Change every 10 seconds
     
     return () => clearInterval(interval); // Clean up on unmount
   }, [autoScroll]);
@@ -1036,9 +1036,9 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
         // Full prose styling for expanded view with dark mode support
         return (
           <div 
-  className="prose prose-sm max-w-none mb-4 dark:prose-invert dark:text-gray-200"
-  dangerouslySetInnerHTML={{ __html: htmlContent }}
-/>
+            className="prose prose-sm max-w-none mb-4 dark:prose-invert dark:text-gray-200"
+            dangerouslySetInnerHTML={{ __html: htmlContent }}
+          />
         );
       }
     } else {
@@ -1104,28 +1104,46 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
     return '';
   };
   
-  // Helper to get proposal type label
+  // Updated helper to get proposal type label with improved names
   const getProposalTypeLabel = (proposal) => {
     // Check if proposal has a typeLabel property
     if (proposal.typeLabel) {
       return proposal.typeLabel;
     }
+
+
+    // Helper function to get human-readable proposal type label
+    function getProposalTypeLabel(type) {
+      const typeLabels = {
+        [PROPOSAL_TYPES.GENERAL]: "Contract Interaction",
+        [PROPOSAL_TYPES.WITHDRAWAL]: "ETH Withdrawal",
+        [PROPOSAL_TYPES.TOKEN_TRANSFER]: "Treasury Transfer",
+        [PROPOSAL_TYPES.GOVERNANCE_CHANGE]: "Governance Parameter Update",
+        [PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER]: "External Token Transfer",
+        [PROPOSAL_TYPES.TOKEN_MINT]: "Token Issuance",
+        [PROPOSAL_TYPES.TOKEN_BURN]: "Token Consolidation",
+        [PROPOSAL_TYPES.SIGNALING]: "Binding Community Vote"
+      };
+      
+      return typeLabels[type] || "Unknown";
+    }
     
-    // Fallback to numeric type if available
+    
+    // Fallback to numeric type if available - with updated display names
     if (proposal.type !== undefined) {
       switch (parseInt(proposal.type)) {
-        case 0: return "General";
-        case 1: return "Withdrawal";
-        case 2: return "Token Transfer";
-        case 3: return "Governance Change";
-        case 4: return "External ERC20 Transfer";
-        case 5: return "Token Mint";
-        case 6: return "Token Burn";
-        default: return "General Proposal";
+        case 0: return "Community Vote";
+        case 1: return "ETH Withdrawal";
+        case 2: return "Treasury Transfer";
+        case 3: return "Governance Parameter Update";
+        case 4: return "External Token Transfer";
+        case 5: return "Token Issuance";
+        case 6: return "Token Consolidation";
+        default: return "Community Vote";
       }
     }
     
-    return "General Proposal";
+    return "Community Vote";
   };
   
   // Helper to get proposal state label and color
@@ -1197,23 +1215,23 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
     }
   };
 
-  // Render vote percentage bar
+  // Render vote percentage bar - UPDATED: reduced thickness from h-3 to h-2
   const renderVoteBar = useCallback((proposal) => {
     const voteData = getVoteData(proposal);
     const totalVotingPower = voteData.totalVotingPower || 0;
     
     if (totalVotingPower <= 0) {
-      // Default empty bar if no votes
+      // Default empty bar if no votes - reduced thickness
       return (
-        <div className="w-full h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+        <div className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
           <div className="h-full w-full bg-gray-300 dark:bg-gray-600"></div>
         </div>
       );
     }
     
-    // Show vote percentages with color coding
+    // Show vote percentages with color coding - reduced thickness
     return (
-      <div className="w-full h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+      <div className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
         <div className="flex h-full">
           <div 
             className="bg-green-500 h-full" 
@@ -1391,7 +1409,7 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
                       <div className="text-gray-600 dark:text-gray-400 font-medium text-right">Abstain: {voteData.abstainPercentage.toFixed(1)}%</div>
                     </div>
                     
-                    {/* Vote bar - colors remain the same for clarity */}
+                    {/* Vote bar - UPDATED: reduced thickness in renderVoteBar function */}
                     {renderVoteBar(proposal)}
                     
                     {/* Vote counts */}
@@ -1441,7 +1459,8 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
                                   ({Math.min(100, Math.round(((voteData.totalVotingPower || 0) / (govParams.quorum || 1)) * 100))}%)
                                 </span>
                               </div>
-                              <div className="w-full h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                              {/* UPDATED: reduced thickness from h-3 to h-2 */}
+                              <div className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
                                 <div 
                                   className="bg-blue-500 dark:bg-blue-600 h-full rounded-full" 
                                   style={{ width: `${Math.min(100, ((voteData.totalVotingPower || 0) / (govParams.quorum || 1)) * 100)}%` }}
@@ -1449,31 +1468,32 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
                               </div>
                             </div>
                           )}
+                          {/* UPDATED: Vote buttons with more muted colors, reduced size */}
                           <div className="flex flex-wrap gap-4 mt-6">
-                            <button 
-                              className="flex-1 min-w-0 bg-green-500 hover:bg-green-600 dark:bg-green-600 dark:hover:bg-green-700 text-white py-3 px-2 rounded-lg flex items-center justify-center text-sm sm:text-base font-medium"
-                              onClick={() => submitVote(proposal.id, VOTE_TYPES.FOR)}
-                              disabled={voting.processing}
-                            >
-                              <Check className="w-5 h-5 mr-2 flex-shrink-0" />
-                              <span className="truncate">Yes</span>
-                            </button>
-                            <button 
-                              className="flex-1 min-w-0 bg-red-500 hover:bg-red-600 dark:bg-red-600 dark:hover:bg-red-700 text-white py-3 px-2 rounded-lg flex items-center justify-center text-sm sm:text-base font-medium"
-                              onClick={() => submitVote(proposal.id, VOTE_TYPES.AGAINST)}
-                              disabled={voting.processing}
-                            >
-                              <X className="w-5 h-5 mr-2 flex-shrink-0" />
-                              <span className="truncate">No</span>
-                            </button>
-                            <button 
-                              className="flex-1 min-w-0 bg-gray-500 hover:bg-gray-600 dark:bg-gray-600 dark:hover:bg-gray-700 text-white py-3 px-2 rounded-lg flex items-center justify-center text-sm sm:text-base font-medium"
-                              onClick={() => submitVote(proposal.id, VOTE_TYPES.ABSTAIN)}
-                              disabled={voting.processing}
-                            >
-                              <span className="truncate">Abstain</span>
-                            </button>
-                          </div>
+                          <button 
+                            className="flex-1 min-w-0 bg-emerald-500 hover:bg-emerald-800 dark:bg-emerald-600 dark:hover:bg-emerald-700 text-white dark:text-white py-2 px-2 rounded-lg flex items-center justify-center text-sm font-medium transition-colors shadow-sm hover:shadow"
+                            onClick={() => submitVote(proposal.id, VOTE_TYPES.FOR)}
+                            disabled={voting.processing}
+                          >
+                            <Check className="w-4 h-4 mr-2 flex-shrink-0" />
+                            <span className="truncate">Yes</span>
+                          </button>
+                          <button 
+                            className="flex-1 min-w-0 bg-rose-500 hover:bg-rose-700 dark:bg-rose-500 dark:hover:bg-rose-700 text-white dark:text-white py-2 px-2 rounded-lg flex items-center justify-center text-sm font-medium transition-colors shadow-sm hover:shadow"
+                            onClick={() => submitVote(proposal.id, VOTE_TYPES.AGAINST)}
+                            disabled={voting.processing}
+                          >
+                            <X className="w-4 h-4 mr-2 flex-shrink-0" />
+                            <span className="truncate">No</span>
+                          </button>
+                          <button 
+                            className="flex-1 min-w-0 bg-slate-500 hover:bg-slate-700 dark:bg-slate-600 dark:hover:bg-slate-500 text-white dark:text-white py-2 px-2 rounded-lg flex items-center justify-center text-sm font-medium transition-colors shadow-sm hover:shadow"
+                            onClick={() => submitVote(proposal.id, VOTE_TYPES.ABSTAIN)}
+                            disabled={voting.processing}
+                          >
+                            <span className="truncate">Abstain</span>
+                          </button>
+                        </div>
                         </div>
                       ) : (
                         <div className="text-center py-6 px-6 text-red-500 dark:text-red-400 bg-red-50 dark:bg-red-900/10 rounded-lg my-3">
@@ -1683,8 +1703,8 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
                           <div>Abstain: {voteData.abstainPercentage.toFixed(1)}%</div>
                         </div>
                         
-                        {/* Vote bar */}
-                        <div className="w-full h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                        {/* Vote bar - UPDATED: reduced thickness */}
+                        <div className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
                           <div className="flex h-full">
                             <div 
                               className="bg-green-500 h-full" 
@@ -1706,7 +1726,7 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
                           Total voters: {voteData.totalVoters || 0}
                         </div>
                         
-                        {/* Quorum progress */}
+                        {/* Quorum progress - UPDATED: reduced thickness */}
                         {govParams.quorum > 0 && (
                           <div className="mt-4 mb-5">
                             <h5 className="text-sm font-medium mb-2 dark:text-gray-300">Quorum Progress</h5>
@@ -1718,7 +1738,7 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
                                 {formatNumberDisplay(voteData.totalVotingPower || 0)} / {govParams.formattedQuorum} JST
                               </span>
                             </div>
-                            <div className="w-full h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                            <div className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
                               <div 
                                 className="bg-blue-500 dark:bg-blue-600 h-full rounded-full" 
                                 style={{ width: `${Math.min(100, ((voteData.totalVotingPower || 0) / (govParams.quorum || 1)) * 100)}%` }}
@@ -1726,7 +1746,6 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
                             </div>
                             {selectedProposal.snapshotId && (
                               <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                Snapshot #{selectedProposal.snapshotId}
                               </div>
                             )}
                           </div>
@@ -1775,7 +1794,7 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
                     </div>
                   )}
                 </div>
-              </div>
+                </div>
               
               {/* Additional proposal details */}
               {selectedProposal.actions && selectedProposal.actions.length > 0 && (

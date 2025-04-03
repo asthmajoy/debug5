@@ -92,13 +92,13 @@ export function useProposals() {
   // Helper function to get human-readable proposal type label
   const getProposalTypeLabel = useCallback((type) => {
     const typeLabels = {
-      [PROPOSAL_TYPES.GENERAL]: "General",
-      [PROPOSAL_TYPES.WITHDRAWAL]: "Withdrawal",
-      [PROPOSAL_TYPES.TOKEN_TRANSFER]: "Token Transfer",
-      [PROPOSAL_TYPES.GOVERNANCE_CHANGE]: "Governance Change",
-      [PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER]: "External ERC20 Transfer",
-      [PROPOSAL_TYPES.TOKEN_MINT]: "Token Mint",
-      [PROPOSAL_TYPES.TOKEN_BURN]: "Token Burn"
+      [PROPOSAL_TYPES.GENERAL]: "Contract Interaction",
+      [PROPOSAL_TYPES.WITHDRAWAL]: "ETH Withdrawal",
+      [PROPOSAL_TYPES.TOKEN_TRANSFER]: "Treasury Transfer",
+      [PROPOSAL_TYPES.GOVERNANCE_CHANGE]: "Governance Parameter Update",
+      [PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER]: "External Token Transfer",
+      [PROPOSAL_TYPES.TOKEN_MINT]: "Token Issuance",
+      [PROPOSAL_TYPES.TOKEN_BURN]: "Token Consolidation"
     };
     
     return typeLabels[type] || "Unknown";

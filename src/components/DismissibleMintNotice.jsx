@@ -62,7 +62,7 @@ const DismissibleMintNotice = () => {
           <p className="text-indigo-700 dark:text-indigo-400 text-xs mb-1">Donate ETH at:</p>
           <div className="inline-block bg-white dark:bg-gray-800 px-2 py-1 rounded-lg border border-indigo-200 dark:border-indigo-700">
             <span className="font-mono text-indigo-800 dark:text-indigo-300 text-xs">
-            0xE4237735e7fCA96a01BF4a81D438D42b1D96E751
+            0x051B5e728BD7d77707DE7e7Eb41D32fCd7Eb3df1
             </span>
           </div>
           <div className="flex items-center justify-center mt-2 space-x-2">

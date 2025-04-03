@@ -276,8 +276,8 @@ const PendingTransactionsTab = ({ contracts, account }) => {
                   const typeNum = decoded[1].toNumber();
                   // Map type number to a readable string
                   const typeNames = [
-                    "General", "Withdrawal", "TokenTransfer", "GovernanceChange",
-                    "ExternalERC20Transfer", "TokenMint", "TokenBurn", "Signaling"
+                    "Contract Interaction", "ETH Withdrawal", "Treasury Transfer", "Governance Parameter Update",
+                    "External Token Transfer", "Token Issuance", "Token Consolidation", "Community Vote"
                   ];
                   proposalType = typeNames[typeNum] || "";
                 }

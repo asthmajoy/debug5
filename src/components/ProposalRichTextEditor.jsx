@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import ReactQuill from 'react-quill';
 import 'react-quill/dist/quill.snow.css';
 import { Eye, Edit, Copy, Check } from 'lucide-react';
+import hljs from 'highlight.js';
+
 
 const ProposalQuillEditor = ({ 
   initialValue = '', 
@@ -57,16 +59,18 @@ const ProposalQuillEditor = ({
     ? "Describe your signaling proposal in detail. Include:\n• The specific question or topic for community consideration\n• Background information and context\n• Options or perspectives to consider\n• Expected outcome of this signaling proposal"
     : placeholder;
 
+    const isSyntaxAvailable = typeof window !== 'undefined' && window.hljs;
+
   // Quill editor modules configuration
   const modules = {
-    toolbar: [
-      [{ 'header': [1, 2, 3, false] }],
-      ['bold', 'italic', 'underline'],
-      [{'list': 'ordered'}, {'list': 'bullet'}],
-      ['link'],
-      ['clean']
-    ]
-  };
+  toolbar: [
+    [{ 'header': [1, 2, 3, false] }],
+    ['bold', 'italic', 'underline'],
+    [{'list': 'ordered'}, {'list': 'bullet'}],
+    ['link'],
+    ['clean']
+  ]
+};
 
   // Quill editor formats configuration
   const formats = [

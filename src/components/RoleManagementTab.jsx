@@ -385,14 +385,9 @@ const EnhancedRoleManagementTab = ({ contracts, account }) => {
     
     setTransactionLoading(true);
     try {
-      // Try new unified manageContractRole function first (from updated governance contract)
+      // Check which function to call (grantContractRole or grantRole)
       let tx;
-      if (typeof contract.manageContractRole === 'function') {
-        console.log(`Using manageContractRole(${roleHash}, ${newRoleData.address}, true)`);
-        tx = await contract.manageContractRole(roleHash, newRoleData.address, true);
-      } 
-      // Fallback to older methods for backward compatibility
-      else if (typeof contract.grantContractRole === 'function') {
+      if (typeof contract.grantContractRole === 'function') {
         console.log(`Using grantContractRole(${roleHash}, ${newRoleData.address})`);
         tx = await contract.grantContractRole(roleHash, newRoleData.address);
       } else if (typeof contract.grantRole === 'function') {
@@ -443,13 +438,9 @@ const EnhancedRoleManagementTab = ({ contracts, account }) => {
     }
     
     try {
-      // Try new unified manageContractRole function first (from updated governance contract)
+      // Check which function to call (revokeContractRole or revokeRole)
       let tx;
-      if (typeof contract.manageContractRole === 'function') {
-        tx = await contract.manageContractRole(roleHash, address, false);
-      }
-      // Fallback to older methods for backward compatibility
-      else if (typeof contract.revokeContractRole === 'function') {
+      if (typeof contract.revokeContractRole === 'function') {
         tx = await contract.revokeContractRole(roleHash, address);
       } else if (typeof contract.revokeRole === 'function') {
         tx = await contract.revokeRole(roleHash, address);
@@ -470,12 +461,12 @@ const EnhancedRoleManagementTab = ({ contracts, account }) => {
     }
   };
 
-    // Handle manual refresh
-    const handleRefresh = () => {
-      setRefreshTrigger(prev => prev + 1);
-    };
+  // Handle manual refresh
+  const handleRefresh = () => {
+    setRefreshTrigger(prev => prev + 1);
+  };
 
-    return (
+  return (
     <div>
       <div className="flex justify-between items-center mb-6">
         <div>

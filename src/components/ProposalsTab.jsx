@@ -9,8 +9,9 @@ import TimelockInfoDisplay from './TimelockInfoDisplay';
 import ProposalRichTextEditor from './ProposalRichTextEditor';
 import { useDarkMode } from '../contexts/DarkModeContext';
 
+
 // Helper function to get human-readable proposal state label
-function getProposalStateLabel(state) {
+function getProposalsStateLabel(state) {
   const stateLabels = {
     [PROPOSAL_STATES.ACTIVE]: "Active",
     [PROPOSAL_STATES.CANCELED]: "Canceled",
@@ -22,19 +23,20 @@ function getProposalStateLabel(state) {
   };
   
   return stateLabels[state] || "Unknown";
+  
 }
 
 // Helper function to get human-readable proposal type label
-function getProposalTypeLabel(type) {
+function getProposalsTypeLabel(type) {
   const typeLabels = {
-    [PROPOSAL_TYPES.GENERAL]: "General",
-    [PROPOSAL_TYPES.WITHDRAWAL]: "Withdrawal",
-    [PROPOSAL_TYPES.TOKEN_TRANSFER]: "Token Transfer",
-    [PROPOSAL_TYPES.GOVERNANCE_CHANGE]: "Governance Change",
-    [PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER]: "External ERC20 Transfer",
-    [PROPOSAL_TYPES.TOKEN_MINT]: "Token Mint",
-    [PROPOSAL_TYPES.TOKEN_BURN]: "Token Burn",
-    [PROPOSAL_TYPES.SIGNALING]: "Signaling"
+    [PROPOSAL_TYPES.GENERAL]: "Contract Interaction",
+    [PROPOSAL_TYPES.WITHDRAWAL]: "ETH Withdrawal",
+    [PROPOSAL_TYPES.TOKEN_TRANSFER]: "Treasury Transfer",
+    [PROPOSAL_TYPES.GOVERNANCE_CHANGE]: "Governance Parameter Update",
+    [PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER]: "External Token Transfer",
+    [PROPOSAL_TYPES.TOKEN_MINT]: "Token Issuance",
+    [PROPOSAL_TYPES.TOKEN_BURN]: "Token Consolidation",
+    [PROPOSAL_TYPES.SIGNALING]: "Binding Community Vote"
   };
   
   return typeLabels[type] || "Unknown";
@@ -89,12 +91,44 @@ function truncateHtml(html, maxLength = 200) {
   // Get the text content
   const textContent = tempDiv.textContent || tempDiv.innerText || '';
   
+  
   // If the text is already short enough, return the original HTML
   if (textContent.length <= maxLength) {
     return html;
   }
   
   return textContent.substring(0, maxLength) + '...';
+}
+
+// Helper function to get human-readable proposal state label
+function getProposalStateLabel(state) {
+  const stateLabels = {
+    [PROPOSAL_STATES.ACTIVE]: "Active",
+    [PROPOSAL_STATES.CANCELED]: "Canceled",
+    [PROPOSAL_STATES.DEFEATED]: "Defeated",
+    [PROPOSAL_STATES.SUCCEEDED]: "Succeeded",
+    [PROPOSAL_STATES.QUEUED]: "Queued",
+    [PROPOSAL_STATES.EXECUTED]: "Executed",
+    [PROPOSAL_STATES.EXPIRED]: "Expired"
+  };
+  
+  return stateLabels[state] || "Unknown";
+}
+
+// Helper function to get human-readable proposal type label
+function getProposalTypeLabel(type) {
+  const typeLabels = {
+    [PROPOSAL_TYPES.GENERAL]: "Contract Interaction",
+    [PROPOSAL_TYPES.WITHDRAWAL]: "ETH Withdrawal",
+    [PROPOSAL_TYPES.TOKEN_TRANSFER]: "Treasury Transfer",
+    [PROPOSAL_TYPES.GOVERNANCE_CHANGE]: "Governance Parameter Update",
+    [PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER]: "External Token Transfer",
+    [PROPOSAL_TYPES.TOKEN_MINT]: "Token Issuance",
+    [PROPOSAL_TYPES.TOKEN_BURN]: "Token Consolidation",
+    [PROPOSAL_TYPES.SIGNALING]: "Binding Community Vote"
+  };
+  
+  return typeLabels[type] || "Unknown";
 }
 
 // Helper function to get human-readable threat level label
@@ -118,7 +152,10 @@ function getStatusColor(status) {
       return 'bg-green-100 text-green-800';
     case 'pending':
     case 'queued':
+    case 'in timelock':
       return 'bg-blue-100 text-blue-800';
+    case 'ready for execution':
+      return 'bg-purple-100 text-purple-800';
     case 'executed':
       return 'bg-indigo-100 text-indigo-800';
     case 'defeated':
@@ -183,6 +220,202 @@ const ProposalsTab = ({
     message: ''
   });
 
+  // New function to check timelock status for a proposal
+  const checkTimelockStatus = async (proposalId) => {
+    if (!contracts?.timelock) return null;
+    
+    try {
+      const provider = new ethers.providers.Web3Provider(window.ethereum);
+      const timelockContract = contracts.timelock.connect(provider);
+      
+      // Get the current proposal from our local data
+      const existingProposal = proposals.find(p => Number(p.id) === Number(proposalId));
+      if (!existingProposal) {
+        console.log(`Proposal #${proposalId} not found in local data`);
+        return null;
+      }
+      
+      console.log(`Checking timelock status for proposal #${proposalId}`, existingProposal);
+      
+      // Step 1: Try to find the timelock transaction hash
+      let timelockTxHash = null;
+      
+      // First check if the proposal already has a timelockTxHash
+      if (existingProposal.timelockTxHash) {
+        timelockTxHash = existingProposal.timelockTxHash;
+        console.log(`Using existing timelockTxHash: ${timelockTxHash}`);
+      }
+      
+      // If no hash found and we have a target address, search timelock events
+      if (!timelockTxHash && existingProposal.target) {
+        try {
+          const currentBlock = await provider.getBlockNumber();
+          const startBlock = Math.max(0, currentBlock - 50000); // Look back ~1 week
+          
+          // Try to find matching queued transactions in the timelock
+          const timelockEvents = await timelockContract.queryFilter(
+            timelockContract.filters.TransactionQueued(), 
+            startBlock
+          );
+          
+          console.log(`Searching ${timelockEvents.length} timelock events for proposal #${proposalId}`);
+          
+          // Match based on target address
+          const proposalTarget = existingProposal.target.toLowerCase();
+          
+          for (const event of timelockEvents) {
+            try {
+              if (event.args && event.args.target) {
+                const eventTarget = event.args.target.toLowerCase();
+                
+                if (eventTarget === proposalTarget) {
+                  timelockTxHash = event.args.txHash;
+                  console.log(`Found matching timelock event by target: ${timelockTxHash}`);
+                  break;
+                }
+              }
+            } catch (innerErr) {
+              console.warn("Error processing timelock event:", innerErr);
+            }
+          }
+        } catch (err) {
+          console.warn(`Error searching timelock events: ${err.message}`);
+        }
+      }
+      
+      // Step 2: If we have a hash, try to get transaction details
+      if (!timelockTxHash) {
+        console.log(`No timelock transaction found for proposal #${proposalId}`);
+        return null;
+      }
+      
+      // Get transaction details from timelock
+      let txDetails;
+      try {
+        txDetails = await timelockContract.getTransaction(timelockTxHash);
+      } catch (err) {
+        console.warn(`Error getting transaction details: ${err.message}`);
+        return null;
+      }
+      
+      if (!txDetails || !txDetails.eta) {
+        console.log(`No valid timelock data found for hash ${timelockTxHash}`);
+        return null;
+      }
+      
+      // Step 3: Determine actual timelock status
+      const currentTimestamp = Math.floor(Date.now() / 1000);
+      const etaTimestamp = Number(txDetails.eta);
+      const isExecuted = txDetails.executed || false;
+      const isCanceled = txDetails.canceled || false;
+      
+      // Calculate actual status
+      let timelockStatus;
+      if (isExecuted) {
+        timelockStatus = 'executed';
+      } else if (isCanceled) {
+        timelockStatus = 'canceled';
+      } else if (currentTimestamp < etaTimestamp) {
+        timelockStatus = 'pending';
+        const remainingTime = etaTimestamp - currentTimestamp;
+        console.log(`Proposal #${proposalId} is in timelock. ${remainingTime} seconds remaining.`);
+      } else {
+        timelockStatus = 'ready';
+      }
+      
+      return {
+        status: timelockStatus,
+        txHash: timelockTxHash,
+        eta: etaTimestamp,
+        executed: isExecuted,
+        canceled: isCanceled,
+        remainingTime: Math.max(0, etaTimestamp - currentTimestamp),
+        isInTimelock: !isExecuted && !isCanceled,
+        readyForExecution: !isExecuted && !isCanceled && currentTimestamp >= etaTimestamp
+      };
+    } catch (error) {
+      console.error(`Error checking timelock status for proposal #${proposalId}:`, error);
+      return null;
+    }
+  };
+
+  // Monitor and verify transaction function to check actual states after transaction confirmations
+  const monitorAndVerifyTransaction = async (tx, proposalId, actionType) => {
+    console.log(`Monitoring ${actionType} transaction: ${tx.hash}`);
+    
+    try {
+      // Wait for transaction confirmation
+      const receipt = await tx.wait(1);
+      
+      if (receipt.status) {
+        console.log(`${actionType} transaction confirmed successfully:`, receipt);
+        
+        // Important: Wait a brief moment for blockchain state to update
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // Explicitly verify proposal state after transaction
+        if (contracts?.governance) {
+          const provider = new ethers.providers.Web3Provider(window.ethereum);
+          const governance = contracts.governance.connect(provider);
+          
+          // Get ACTUAL proposal state from chain
+          try {
+            const newState = await governance.getProposalState(proposalId);
+            console.log(`Verified proposal #${proposalId} state after ${actionType}: ${newState} (${getProposalStateLabel(newState)})`);
+            
+            // For queued proposals, check timelock status
+            if (actionType === 'queueing' && newState === PROPOSAL_STATES.QUEUED) {
+              const timelockStatus = await checkTimelockStatus(proposalId);
+              console.log(`Timelock status for proposal #${proposalId}:`, timelockStatus);
+              
+              // Update UI state with the verified information
+              if (timelockStatus) {
+                // Find the proposal in the list and update it
+                const proposalIndex = proposals.findIndex(p => Number(p.id) === Number(proposalId));
+                
+                if (proposalIndex !== -1) {
+                  // Update the proposal with timelock information
+                  const updatedProposal = {
+                    ...proposals[proposalIndex],
+                    state: newState,
+                    stateLabel: getProposalStateLabel(newState),
+                    displayStateLabel: timelockStatus.status === 'pending' ? 'In Timelock' : 
+                                      timelockStatus.status === 'ready' ? 'Ready For Execution' : 
+                                      getProposalStateLabel(newState),
+                    timelockStatus: timelockStatus.status,
+                    timelockEta: timelockStatus.eta,
+                    isInTimelock: timelockStatus.isInTimelock,
+                    timelockRemaining: timelockStatus.remainingTime,
+                    timelockTxHash: timelockStatus.txHash,
+                    readyForExecution: timelockStatus.readyForExecution
+                  };
+                  
+                  // Update the proposal in our array
+                  proposals[proposalIndex] = updatedProposal;
+                }
+              }
+            }
+          } catch (stateError) {
+            console.warn(`Error checking proposal state after ${actionType}:`, stateError);
+          }
+        }
+        
+        // Force a full refresh of proposals to ensure accuracy
+        if (typeof fetchProposals === 'function') {
+          console.log(`Triggering full proposal refresh after ${actionType}`);
+          await fetchProposals();
+        }
+        
+        return true;
+      } else {
+        console.error(`${actionType} transaction reverted:`, receipt);
+        return false;
+      }
+    } catch (error) {
+      console.error(`Error monitoring ${actionType} transaction:`, error);
+      return false;
+    }
+  };
   
   // Clear errors when component unmounts or dependencies change
   useEffect(() => {
@@ -350,6 +583,55 @@ const ProposalsTab = ({
       fetchAllTimelockInfo();
     }
   }, [contracts, proposals]);
+
+  // New effect for checking timelock status for queued proposals
+  useEffect(() => {
+    // Only run if we have proposals and contracts
+    if (!proposals?.length || !contracts?.timelock) return;
+    
+    const checkTimelockForQueuedProposals = async () => {
+      console.log("Checking timelock status for queued proposals...");
+      
+      // Process each proposal that's in QUEUED state
+      for (const proposal of proposals) {
+        try {
+          // Only check proposals in QUEUED state
+          if (Number(proposal.state) === PROPOSAL_STATES.QUEUED || 
+              proposal.stateLabel?.toLowerCase() === 'queued') {
+            
+            console.log(`Checking timelock for proposal #${proposal.id}...`);
+            const timelockStatus = await checkTimelockStatus(proposal.id);
+            
+            if (timelockStatus) {
+              console.log(`Found timelock status for proposal #${proposal.id}:`, timelockStatus);
+              
+              // Update the proposal object with timelock information
+              proposal.timelockStatus = timelockStatus.status;
+              proposal.timelockEta = timelockStatus.eta;
+              proposal.isInTimelock = timelockStatus.isInTimelock;
+              proposal.timelockRemaining = timelockStatus.remainingTime;
+              proposal.readyForExecution = timelockStatus.readyForExecution;
+              
+              // Set a displayStateLabel that correctly shows timelock status
+              if (timelockStatus.executed) {
+                proposal.displayStateLabel = 'Executed';
+              } else if (timelockStatus.canceled) {
+                proposal.displayStateLabel = 'Canceled';
+              } else if (timelockStatus.readyForExecution) {
+                proposal.displayStateLabel = 'Ready For Execution';
+              } else if (timelockStatus.isInTimelock) {
+                proposal.displayStateLabel = 'In Timelock';
+              }
+            }
+          }
+        } catch (err) {
+          console.warn(`Error processing proposal #${proposal.id}:`, err);
+        }
+      }
+    };
+    
+    checkTimelockForQueuedProposals();
+  }, [proposals, contracts?.timelock]);
   
   // Watch pending transactions
   useEffect(() => {
@@ -487,56 +769,21 @@ const ProposalsTab = ({
       console.error("Error updating stake refund status:", error);
     }
   };
+
+  // Add console logs to debug PROPOSAL_TYPES
+  console.log("PROPOSAL_TYPES from import:", PROPOSAL_TYPES);
+  console.log("SIGNALING type value:", PROPOSAL_TYPES.SIGNALING);
   
-  const validateProposalInputs = (proposal) => {
-    // Check for signaling proposals by string or number
-    const isSignalingProposal = 
-      proposal.type === PROPOSAL_TYPES.SIGNALING || 
-      proposal.type === "7" ||
-      String(proposal.type).toLowerCase().includes("signaling");
-    
-    console.log("Is signaling by string check:", isSignalingProposal);
-    
-    // Skip validation for signaling proposals
-    if (isSignalingProposal) {
-      console.log("Skipping validation for signaling proposal");
-      return true;
+  // Make a separate, clear constant to use
+  const BINDING_COMMUNITY_VOTE_TYPE = 7; // If this is the correct value
+  
+  function validateProposalInputs(proposal) {
+    // Validate required fields; adjust as needed
+    if (!proposal.title || !proposal.description) {
+      return false;
     }
-    
-    switch (parseInt(proposal.type)) {
-      case PROPOSAL_TYPES.GENERAL:
-        return proposal.target && proposal.callData;
-      
-      case PROPOSAL_TYPES.WITHDRAWAL:
-        return proposal.recipient && proposal.amount;
-      
-      case PROPOSAL_TYPES.TOKEN_TRANSFER:
-        return proposal.recipient && proposal.amount;
-      
-      case PROPOSAL_TYPES.GOVERNANCE_CHANGE:
-        // At least one parameter must be changed and have a non-zero/non-empty value
-        return (proposal.newThreshold && parseFloat(proposal.newThreshold) > 0) || 
-               (proposal.newQuorum && parseFloat(proposal.newQuorum) > 0) || 
-               (proposal.newVotingDuration && parseInt(proposal.newVotingDuration) > 0) || 
-               (proposal.newProposalStake && parseFloat(proposal.newProposalStake) > 0);
-      
-      case PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER:
-        return proposal.recipient && proposal.token && proposal.amount;
-      
-      case PROPOSAL_TYPES.TOKEN_MINT:
-        return proposal.recipient && proposal.amount;
-      
-      case PROPOSAL_TYPES.TOKEN_BURN:
-        return proposal.recipient && proposal.amount;
-      
-      case PROPOSAL_TYPES.SIGNALING:
-        // Always return true for signaling proposals - no validation
-        return true;
-      
-      default:
-        return false;
-    }
-  };
+    return true;
+  }
 
   // Handler for rich text editor changes
   const handleDescriptionChange = (htmlContent, plainText) => {
@@ -544,8 +791,82 @@ const ProposalsTab = ({
       ...prev,
       descriptionHtml: htmlContent,
       description: plainText
+      
     }));
+    
   };
+
+  const safeParseEther = (value) => {
+    try {
+      // If value is null, undefined, or empty string, return 0
+      if (!value || value.trim() === '') {
+        return ethers.constants.Zero;
+      }
+      
+      // Convert to string and trim whitespace
+      const cleanValue = String(value).trim();
+      
+      // Check if the value is a valid number
+      const numValue = parseFloat(cleanValue);
+      if (isNaN(numValue)) {
+        console.warn(`Invalid numeric value: ${value}`);
+        return ethers.constants.Zero;
+      }
+      
+      // If value is less than or equal to 0, return Zero
+      if (numValue <= 0) {
+        return ethers.constants.Zero;
+      }
+      
+      // Parse to ether, with error handling
+      return ethers.utils.parseEther(cleanValue);
+    } catch (error) {
+      console.error('Error parsing ether value:', error);
+      return ethers.constants.Zero;
+    }
+  };
+
+
+  const safeParseDuration = (value) => {
+    try {
+      // If value is null, undefined, or empty string, return 0
+      if (!value || value.trim() === '') {
+        return 0;
+      }
+      
+      // Convert to string and trim whitespace
+      const cleanValue = String(value).trim();
+      
+      // Parse as integer
+      const numValue = parseInt(cleanValue);
+      
+      // Return 0 if not a valid positive number
+      return !isNaN(numValue) && numValue > 0 ? numValue : 0;
+    } catch (error) {
+      console.error('Error parsing duration:', error);
+      return 0;
+    }
+  };
+
+  // Convert values to proper format with robust parsing
+  const amount = safeParseEther(newProposal.amount);
+  const newThreshold = safeParseEther(newProposal.newThreshold);
+  const newQuorum = safeParseEther(newProposal.newQuorum);
+  const newVotingDuration = safeParseDuration(newProposal.newVotingDuration);
+  const newProposalStake = safeParseEther(newProposal.newProposalStake);
+  
+  console.log('Submitting proposal:', {
+    type: parseInt(newProposal.type),
+    target: newProposal.target,
+    callData: newProposal.callData || '0x',
+    amount: amount.toString(),
+    recipient: newProposal.recipient,
+    token: newProposal.token,
+    newThreshold: newThreshold.toString(),
+    newQuorum: newQuorum.toString(),
+    newVotingDuration,
+    newProposalStake: newProposalStake.toString()
+  });
 
   const handleSubmitProposal = async (e) => {
     e.preventDefault();
@@ -553,31 +874,33 @@ const ProposalsTab = ({
     setTransactionError('');
     setCreationStatus({ status: 'pending', message: 'Creating proposal...' });
     
-    // Check if this is a signaling proposal by string matching
-    const isSignalingProposal = 
-      newProposal.type === PROPOSAL_TYPES.SIGNALING || 
+    // Check if this is a Community Vote proposal by string matching
+    const isCommunityVoteProposal = 
+      newProposal.type === 7 || 
       newProposal.type === "7" || 
-      String(newProposal.type).toLowerCase().includes("signaling");
+      String(newProposal.type).toLowerCase().includes("signaling") ||
+      parseInt(newProposal.type) === PROPOSAL_TYPES.SIGNALING;
     
-    console.log("Is signaling by string check:", isSignalingProposal);
+    console.log("Is Community Vote proposal:", isCommunityVoteProposal);
     
     try {
-      // Format the description with the HTML content
-      let description;
-      if (newProposal.descriptionHtml) {
-        description = `${newProposal.title}\n\n${newProposal.description}\n\n|||HTML:${newProposal.descriptionHtml}`;
-      } else {
-        description = `${newProposal.title}\n\n${newProposal.description}`;
-      }
-      
-      // Handle signaling proposals with string matching
-      if (isSignalingProposal) {
-        console.log("Handling as signaling proposal");
+      // Handle Community Vote proposals with string matching
+      if (isCommunityVoteProposal) {
+        console.log("Handling as Binding Community Vote");
+        
+        // Skip validation entirely for signaling proposals
+        // Format the description with the HTML content
+        let description;
+        if (newProposal.descriptionHtml) {
+          description = `${newProposal.title}\n\n${newProposal.description}\n\n|||HTML:${newProposal.descriptionHtml}`;
+        } else {
+          description = `${newProposal.title}\n\n${newProposal.description}`;
+        }
         
         console.log('Submitting signaling proposal:', { description });
         
         try {
-          // Check if createSignalingProposal exists, otherwise use createProposal with type 7
+          // Check if createSignalingProposal exists, otherwise use createProposal
           if (typeof createSignalingProposal === 'function') {
             await createSignalingProposal(description);
           } else {
@@ -585,7 +908,7 @@ const ProposalsTab = ({
             console.log("createSignalingProposal not available, using createProposal");
             await createProposal(
               description,
-              PROPOSAL_TYPES.SIGNALING, // SIGNALING type
+              7, // BINDING_COMMUNITY_VOTE type
               ethers.constants.AddressZero, // target (not used)
               '0x', // callData (not used)
               0, // amount (not used)
@@ -601,6 +924,8 @@ const ProposalsTab = ({
             status: 'success', 
             message: 'Proposal created successfully!' 
           });
+          
+         
           
           // Reset form and close modal after a brief delay
           setTimeout(() => {
@@ -638,9 +963,6 @@ const ProposalsTab = ({
         return;
       }
       
-      // Handle non-signaling proposals
-      console.log("Handling as regular proposal");
-      
       // Only run validation for non-signaling proposals
       if (!validateProposalInputs(newProposal)) {
         console.log("Validation failed");
@@ -652,6 +974,18 @@ const ProposalsTab = ({
         setSubmitting(false);
         return;
       }
+      
+      // Rest of your existing code for other proposal types
+      console.log("Handling as regular proposal");
+      
+      // For other proposal types with HTML content
+      let description;
+      if (newProposal.descriptionHtml) {
+        description = `${newProposal.title}\n\n${newProposal.description}\n\n|||HTML:${newProposal.descriptionHtml}`;
+      } else {
+        description = `${newProposal.title}\n\n${newProposal.description}`;
+      }
+      
       
       // Add parameter details to description for governance changes to ensure they can be parsed later
       if (parseInt(newProposal.type) === PROPOSAL_TYPES.GOVERNANCE_CHANGE) {
@@ -706,49 +1040,37 @@ const ProposalsTab = ({
       await createProposal(
         description,
         parseInt(newProposal.type),
-        newProposal.target || ethers.constants.AddressZero,
+        newProposal.target,
         newProposal.callData || '0x',
         amount,
-        newProposal.recipient || ethers.constants.AddressZero,
-        newProposal.token || ethers.constants.AddressZero,
+        newProposal.recipient,
+        newProposal.token,
         newThreshold,
         newQuorum,
         newVotingDuration,
         finalParamValue
       );
       
-      setCreationStatus({ 
-        status: 'success', 
-        message: 'Proposal created successfully!' 
+      setShowCreateModal(false);
+      // Reset form
+      setNewProposal({
+        title: '',
+        description: '',
+        descriptionHtml: '',
+        type: PROPOSAL_TYPES.GENERAL,
+        target: '',
+        callData: '',
+        amount: '',
+        recipient: '',
+        token: '',
+        newThreshold: '',
+        newQuorum: '',
+        newVotingDuration: '',
+        newProposalStake: ''
       });
-      
-      // Reset form and close modal after a brief delay
-      setTimeout(() => {
-        setShowCreateModal(false);
-        setNewProposal({
-          title: '',
-          description: '',
-          descriptionHtml: '',
-          type: PROPOSAL_TYPES.GENERAL,
-          target: '',
-          callData: '',
-          amount: '',
-          recipient: '',
-          token: '',
-          newThreshold: '',
-          newQuorum: '',
-          newVotingDuration: '',
-          newProposalStake: ''
-        });
-        setCreationStatus({ status: null, message: '' });
-      }, 2000);
     } catch (error) {
       console.error("Error creating proposal:", error);
       setTransactionError(error.message || 'Error creating proposal. See console for details.');
-      setCreationStatus({ 
-        status: 'error', 
-        message: 'Failed to create proposal' 
-      });
     } finally {
       setSubmitting(false);
     }
@@ -856,84 +1178,8 @@ const ProposalsTab = ({
             }
           }));
           
-          // Set up transaction monitoring
-          const checkInterval = setInterval(async () => {
-            try {
-              const receipt = await provider.getTransactionReceipt(tx.hash);
-              
-              if (receipt) {
-                clearInterval(checkInterval);
-                
-                setPendingTxs(prev => ({
-                  ...prev,
-                  [txId]: {
-                    ...prev[txId],
-                    status: receipt.status ? 'success' : 'failed',
-                    receipt
-                  }
-                }));
-                
-                if (receipt.status) {
-                  console.log("Transaction confirmed successfully:", receipt);
-                  
-                  // Check updated proposal state
-                  try {
-                    const newState = await governance.getProposalState(proposalId);
-                    console.log(`Proposal state after queueing: ${newState} (${getProposalStateLabel(newState)})`);
-                    
-                    // Update the proposal's queued status
-                    await updateProposalQueuedStatus(proposalId);
-                    
-                    // Force a full refresh of proposals from blockchain
-                    if (typeof fetchProposals === 'function') {
-                      setTimeout(() => {
-                        fetchProposals().catch(e => console.error("Error refreshing proposals:", e));
-                      }, 2000);
-                    }
-                  } catch (e) {
-                    console.error("Error checking updated proposal state:", e);
-                  }
-                  
-                  // Auto-dismiss success notification
-                  setTimeout(() => {
-                    setPendingTxs(prev => {
-                      const updated = {...prev};
-                      delete updated[txId];
-                      return updated;
-                    });
-                  }, 5000);
-                } else {
-                  console.error("Transaction reverted:", receipt);
-                }
-              }
-            } catch (e) {
-              console.warn("Error checking transaction status:", e);
-            }
-          }, 5000);
-          
-          // Timeout for stuck transactions
-          const timeoutCheck = setTimeout(() => {
-            clearInterval(checkInterval);
-            
-            setPendingTxs(prev => {
-              if (prev[txId]?.status === 'pending') {
-                return {
-                  ...prev,
-                  [txId]: {
-                    ...prev[txId],
-                    warning: 'Transaction may have been dropped. Please retry with higher gas.',
-                    canRetry: true
-                  }
-                };
-              }
-              return prev;
-            });
-          }, 180000);
-          
-          return () => {
-            clearInterval(checkInterval);
-            clearTimeout(timeoutCheck);
-          };
+          // Use our enhanced monitoring function
+          await monitorAndVerifyTransaction(tx, proposalId, 'queueing');
         } catch (error) {
           console.error("Error queueing proposal:", error);
           
@@ -1114,50 +1360,8 @@ const ProposalsTab = ({
             }
           }));
           
-          // Monitor transaction
-          const checkInterval = setInterval(async () => {
-            try {
-              const receipt = await provider.getTransactionReceipt(tx.hash);
-              
-              if (receipt) {
-                clearInterval(checkInterval);
-                
-                setPendingTxs(prev => ({
-                  ...prev,
-                  [txId]: {
-                    ...prev[txId],
-                    status: receipt.status ? 'success' : 'failed',
-                    receipt
-                  }
-                }));
-                
-                if (receipt.status) {
-                  console.log("Execute transaction confirmed successfully");
-                  
-                  // Update the proposal's executed status
-                  await updateProposalExecutedStatus(proposalId);
-                  
-                  // Trigger full refresh
-                  if (typeof fetchProposals === 'function') {
-                    setTimeout(() => {
-                      fetchProposals().catch(e => console.error("Error refreshing proposals:", e));
-                    }, 2000);
-                  }
-                  
-                  // Auto-dismiss success notification
-                  setTimeout(() => {
-                    setPendingTxs(prev => {
-                      const updated = {...prev};
-                      delete updated[txId];
-                      return updated;
-                    });
-                  }, 5000);
-                }
-              }
-            } catch (e) {
-              console.warn("Error checking execute transaction:", e);
-            }
-          }, 5000);
+          // Use our enhanced monitoring function
+          await monitorAndVerifyTransaction(tx, proposalId, 'executing');
         } catch (error) {
           console.error("Error executing proposal:", error);
           
@@ -1200,6 +1404,23 @@ const ProposalsTab = ({
             // Check proposal state first to validate eligibility
             const state = await governance.getProposalState(proposalId);
             console.log(`Proposal state before claiming refund: ${state} (${getProposalStateLabel(state)})`);
+            
+            // Get proposal flags to check if already refunded
+            // This may fail if your contract doesn't expose this information
+            try {
+              const proposal = await governance.proposals(proposalId);
+              console.log(`Proposal flags: ${proposal.flags}`);
+              
+              // Check if bit 2 (STAKE_REFUNDED_FLAG) is set (0x04 or binary 100)
+              const isRefunded = (proposal.flags & 0x04) !== 0;
+              console.log(`Is stake already refunded according to flags? ${isRefunded}`);
+              
+              if (isRefunded) {
+                throw new Error('Stake has already been refunded for this proposal.');
+              }
+            } catch (flagsError) {
+              console.log('Could not check refund flags:', flagsError);
+            }
           } catch (checkError) {
             console.warn('Pre-checks encountered issues:', checkError);
             // Continue anyway - the contract will validate
@@ -1310,26 +1531,55 @@ const ProposalsTab = ({
           throw error;
         }
       } else {
-        // For other actions (cancel), use the original approach
-        const result = await action(proposalId);
+        // For cancelling actions, make sure to properly handle loading state
+        setLoading(true);
         
-        // Update transaction tracking on success
-        setPendingTxs(prev => ({
-          ...prev,
-          [txId]: { 
-            ...prev[txId],
-            status: 'success'
+        try {
+          // Use the original approach
+          const result = await action(proposalId);
+          
+          // Update transaction tracking on success
+          setPendingTxs(prev => ({
+            ...prev,
+            [txId]: { 
+              ...prev[txId],
+              status: 'success'
+            }
+          }));
+          
+          // Force a refresh of proposals
+          if (typeof fetchProposals === 'function') {
+            setTimeout(() => {
+              fetchProposals().catch(e => console.error("Error refreshing proposals:", e));
+            }, 2000);
           }
-        }));
-        
-        // Force a refresh of proposals
-        if (typeof fetchProposals === 'function') {
-          setTimeout(() => {
-            fetchProposals().catch(e => console.error("Error refreshing proposals:", e));
-          }, 2000);
+          
+          // Ensure loading state is cleared
+          setLoading(false);
+          
+          return result;
+        } catch (error) {
+          console.error(`Error cancelling proposal:`, error);
+          
+          // Update transaction tracking on failure
+          setPendingTxs(prev => ({
+            ...prev,
+            [txId]: { 
+              ...prev[txId],
+              status: 'failed',
+              error: error.message || `Error cancelling proposal`,
+              canRetry: retryCount < 3
+            }
+          }));
+          
+          // Always reset loading state
+          setLoading(false);
+          
+          // Show user-friendly error message
+          alert(`Error cancelling proposal: ${error.message || 'See console for details'}`);
+          
+          throw error;
         }
-        
-        return result;
       }
     } catch (error) {
       console.error(`Error ${actionName} proposal:`, error);
@@ -1355,15 +1605,20 @@ const ProposalsTab = ({
     // Safety check for null/undefined proposal
     if (!p) return false;
     
-    // Convert to lowercase safely
-    const stateLabelLower = (p.stateLabel || '').toLowerCase();
+    // Get display state for filtering (prioritize displayStateLabel if available)
+    const displayState = ((p.displayStateLabel || p.stateLabel) || '').toLowerCase();
     
     if (proposalType === 'all') {
       return true;
     } else if (proposalType === 'pending') {
-      return stateLabelLower === 'pending' || stateLabelLower === 'queued';
+      // Include anything with "pending", "queued", "in timelock", or "ready"
+      return displayState.includes('pending') || 
+             displayState.includes('queued') || 
+             displayState.includes('timelock') || 
+             displayState.includes('ready');
     } else {
-      return stateLabelLower === proposalType;
+      // For other filters, just check if the filter is in the state
+      return displayState.includes(proposalType.toLowerCase());
     }
   }) || [];
   
@@ -1658,8 +1913,7 @@ const ProposalsTab = ({
     
     return (
       <div className={`mb-4 p-4 rounded-lg border ${
-        isDarkMode ? 
-          'bg-red-900/30 border-red-700/70 text-red-200' : 
+        isDarkMode ?'bg-red-900/30 border-red-700/70 text-red-200' : 
           'bg-red-100 border-red-400 text-red-700'
       }`}>
         <div className="flex items-start">
@@ -1676,7 +1930,7 @@ const ProposalsTab = ({
   };
 
   // Check if the current proposal type is a signaling proposal
-  const isSignalingProposal = parseInt(newProposal.type) === PROPOSAL_TYPES.SIGNALING;
+  const isCommunityVoteProposal = parseInt(newProposal.type) === PROPOSAL_TYPES.SIGNALING;
 
   return (
     <div>
@@ -1730,8 +1984,10 @@ const ProposalsTab = ({
                     <p className="font-medium dark:text-white">Proposal #{proposal.id}</p>
                   </div>
                   <div className="flex items-center">
-                    <span className={`text-xs px-2 py-1 rounded-full ${getStatusColor(proposal.stateLabel.toLowerCase())}`}>
-                      {proposal.stateLabel}
+                    <span className={`text-xs px-2 py-1 rounded-full ${getStatusColor(
+                      (proposal.displayStateLabel || proposal.stateLabel).toLowerCase()
+                    )}`}>
+                      {proposal.displayStateLabel || proposal.stateLabel}
                     </span>
                   </div>
                 </div>
@@ -1747,13 +2003,13 @@ const ProposalsTab = ({
                       
                       // Try to identify signaling proposals by type
                       const type = Number(proposal.type);
-                      if (type === PROPOSAL_TYPES.SIGNALING) {
-                        return "Signaling";
+                      if (type === 7 || type === PROPOSAL_TYPES.SIGNALING) {
+                        return "Binding Community Vote";
                       }
                       
                       // As a fallback, check description for signaling keywords
                       if (proposal.description && proposal.description.toLowerCase().includes("signaling")) {
-                        return "Signaling";
+                        return "Binding Community Vote";
                       }
                       
                       // Finally, use our helper function
@@ -1769,6 +2025,27 @@ const ProposalsTab = ({
                     <p className="font-small dark:text-white">{formatAddress(proposal.proposer)}</p>
                   </div>
                 </div>
+                
+                {/* Timelock indicator for proposals in timelock */}
+                {proposal.isInTimelock && (
+                  <div className="mt-2 mb-4 bg-blue-50 dark:bg-blue-900/20 p-2 rounded-md border border-blue-200 dark:border-blue-700/50">
+                    <div className="flex items-center text-sm">
+                      <Clock className="h-4 w-4 text-blue-500 mr-2" />
+                      {proposal.readyForExecution ? (
+                        <span className="text-green-600 dark:text-green-400 font-medium">
+                          Timelock period complete - Ready for execution
+                        </span>
+                      ) : (
+                        <span className="text-blue-600 dark:text-blue-400">
+                          In timelock: {formatRelativeTime(proposal.timelockEta * 1000)} 
+                          <span className="text-xs ml-1">
+                            ({new Date(proposal.timelockEta * 1000).toLocaleString()})
+                          </span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
                 
                 <div className="border-t pt-4 mb-4">
                   {expandedProposalId === proposal.id ? (
@@ -1946,12 +2223,18 @@ const ProposalsTab = ({
                           </div>
                         )}
                         
-                        {/* Display Signaling proposal details */}
+                        {/* Display Binding Community Vote details */}
                         {proposal.type === PROPOSAL_TYPES.SIGNALING && (
                           <div className="mt-2 bg-gray-50 dark:bg-gray-700/50 p-4 rounded">
-                            <p className="text-sm text-gray-600 dark:text-gray-400 italic">
-                              This is a signaling proposal. It serves as a community discussion or vote without executing any code.
+                            <p className="text-sm text-gray-600 dark:text-gray-400">
+                              <span className="font-medium">Binding Community Vote</span> - This proposal represents a formal decision by the community that, while not executing code directly, establishes official consensus on governance matters.
                             </p>
+                            <div className="mt-2 flex items-center text-sm">
+                              <Shield className="h-4 w-4 text-indigo-500 mr-2" />
+                              <span className="text-gray-600 dark:text-gray-400">
+                                The outcome of this vote is recorded on-chain and binding for future governance actions.
+                              </span>
+                            </div>
                           </div>
                         )}
                         
@@ -2017,13 +2300,15 @@ const ProposalsTab = ({
                   )}
                   
                   {/* Show Execute button only for QUEUED proposals that haven't been executed yet */}
-                  {proposal.state === PROPOSAL_STATES.QUEUED && !proposal.isExecuted && (
+                  {(proposal.state === PROPOSAL_STATES.QUEUED || proposal.readyForExecution) && !proposal.isExecuted && (
                     <button 
-                      className="bg-purple-500 dark:bg-purple-600 hover:bg-purple-600 dark:hover:bg-purple-500 text-white px-3 py-1 rounded-md text-sm shadow-sm hover:shadow-md dark:shadow-purple-700/30 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-purple-500 dark:focus:ring-purple-400 focus:ring-opacity-50 disabled:opacity-60 disabled:cursor-not-allowed"
+                      className={`bg-purple-500 dark:bg-purple-600 hover:bg-purple-600 dark:hover:bg-purple-500 text-white px-3 py-1 rounded-md text-sm shadow-sm hover:shadow-md dark:shadow-purple-700/30 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-purple-500 dark:focus:ring-purple-400 focus:ring-opacity-50 disabled:opacity-60 disabled:cursor-not-allowed ${
+                        proposal.readyForExecution ? 'animate-pulse' : ''
+                      }`}
                       onClick={() => handleProposalAction(executeProposal, proposal.id, 'executing')}
                       disabled={loading}
                     >
-                      Execute
+                      {proposal.readyForExecution ? 'Execute (Ready)' : 'Execute'}
                     </button>
                   )}
                   
@@ -2063,7 +2348,7 @@ const ProposalsTab = ({
                 </div>
                 <div className="flex items-center space-x-2">
                   <button
-                    onClick={goToPreviousPage}onClick={goToPreviousPage}
+                    onClick={goToPreviousPage}
                     disabled={currentPage === 1}
                     className={`flex items-center justify-center p-2 rounded-md ${currentPage === 1 
                       ? 'text-gray-400 cursor-not-allowed' 
@@ -2164,14 +2449,14 @@ const ProposalsTab = ({
                     setNewProposal({...newProposal, type: e.target.value})
                   }}
                 >
-                  <option value={PROPOSAL_TYPES.GENERAL}>General</option>
-                  <option value={PROPOSAL_TYPES.WITHDRAWAL}>Withdrawal</option>
-                  <option value={PROPOSAL_TYPES.TOKEN_TRANSFER}>Token Transfer</option>
-                  <option value={PROPOSAL_TYPES.GOVERNANCE_CHANGE}>Governance Change</option>
-                  <option value={PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER}>External ERC20 Transfer</option>
-                  <option value={PROPOSAL_TYPES.TOKEN_MINT}>Token Mint</option>
-                  <option value={PROPOSAL_TYPES.TOKEN_BURN}>Token Burn</option>
-                  <option value={PROPOSAL_TYPES.SIGNALING}>Signaling (Text Proposal)</option>
+                  <option value={PROPOSAL_TYPES.GENERAL}>Contract Interaction</option>
+                  <option value={PROPOSAL_TYPES.WITHDRAWAL}>ETH Withdrawal</option>
+                  <option value={PROPOSAL_TYPES.TOKEN_TRANSFER}>Treasury Transfer</option>
+                  <option value={PROPOSAL_TYPES.GOVERNANCE_CHANGE}>Governance Parameter Update</option>
+                  <option value={PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER}>External Token Transfer</option>
+                  <option value={PROPOSAL_TYPES.TOKEN_MINT}>Token Issuance</option>
+                  <option value={PROPOSAL_TYPES.TOKEN_BURN}>Token Consolidation</option>
+                  <option value={PROPOSAL_TYPES.SIGNALING}>Binding Community Vote</option>
                 </select>
               </div>
               
@@ -2183,7 +2468,7 @@ const ProposalsTab = ({
                   onChange={handleDescriptionChange}
                   height="250px"
                   placeholder="Describe your proposal in detail..."
-                  isSignalingProposal={isSignalingProposal}
+                  isSignalingProposal={isCommunityVoteProposal}
                   darkMode={isDarkMode} // Add this prop to enable dark mode styling
                 />
               </div>
@@ -2284,7 +2569,7 @@ const ProposalsTab = ({
               {parseInt(newProposal.type) === PROPOSAL_TYPES.TOKEN_MINT && (
                 <>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Recipient Address</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Issuance Recipient Address</label>
                     <input 
                       type="text" 
                       className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
@@ -2293,10 +2578,10 @@ const ProposalsTab = ({
                       onChange={(e) => setNewProposal({...newProposal, recipient: e.target.value})}
                       required
                     />
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The address that will receive the minted JUST tokens</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The address that will receive the newly issued JUST tokens</p>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Amount (JUST)</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Issuance Amount (JUST)</label>
                     <input 
                       type="number"
                       step="0.000000000000000001"
@@ -2306,7 +2591,7 @@ const ProposalsTab = ({
                       onChange={(e) => setNewProposal({...newProposal, amount: e.target.value})}
                       required
                     />
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Amount of JUST tokens to mint</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Amount of new JUST tokens to issue</p>
                   </div>
                 </>
               )}
@@ -2315,7 +2600,7 @@ const ProposalsTab = ({
               {parseInt(newProposal.type) === PROPOSAL_TYPES.TOKEN_BURN && (
                 <>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Address to Burn From</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Consolidation Source Address</label>
                     <input 
                       type="text" 
                       className="w-full rounded-md border border-gray-300 p-2 dark:bg-gray-700 dark:text-white dark:border-gray-600"
@@ -2324,10 +2609,10 @@ const ProposalsTab = ({
                       onChange={(e) => setNewProposal({...newProposal, recipient: e.target.value})}
                       required
                     />
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The address from which JUST tokens will be burned</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">The address from which JUST tokens will be consolidated</p>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Amount (JUST)</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Consolidation Amount (JUST)</label>
                     <input 
                       type="number"
                       step="0.000000000000000001"
@@ -2337,7 +2622,7 @@ const ProposalsTab = ({
                       onChange={(e) => setNewProposal({...newProposal, amount: e.target.value})}
                       required
                     />
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Amount of JUST tokens to burn</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Amount of JUST tokens to consolidate from circulation</p>
                   </div>
                 </>
               )}
@@ -2438,18 +2723,18 @@ const ProposalsTab = ({
                 </>
               )}
               
-              {/* Fields for SIGNALING proposal type - NEW */}
+              {/* Fields for SIGNALING proposal type - BINDING COMMUNITY VOTE */}
               {parseInt(newProposal.type) === PROPOSAL_TYPES.SIGNALING && (
                 <div className="bg-indigo-50 border border-indigo-200 p-4 rounded-md dark:bg-indigo-900/20 dark:border-indigo-700">
-                  <p className="text-sm text-indigo-800 mb-2 dark:text-indigo-200">
-                    <strong>Signaling Proposal Information:</strong>
+                  <p className="text-sm text-indigo-800 dark:text-indigo-300 mb-2">
+                    <strong>Binding Community Vote Information:</strong>
                   </p>
                   <p className="text-sm text-indigo-700 dark:text-indigo-300 mt-2">
-                    A signaling proposal is used for community polls, sentiment gathering, or discussion topics without any on-chain actions.
-                    Only title and description are required. A proposal deposit will still be required.
+                    A Binding Community Vote enables formal decisions on important matters that don't require direct on-chain actions.
+                    These votes establish official community consensus and are recorded permanently on-chain.
                   </p>
                   <p className="text-sm text-indigo-700 dark:text-indigo-300 mt-2">
-                    Use the rich text editor above to format your proposal clearly. You can add headers, bullet points, and formatting to make your signaling proposal more structured and easier to read.
+                    Use the rich text editor above to format your proposal clearly with a detailed description, clear voting options, and implementation timeline. A proposal deposit is required to prevent spam.
                   </p>
                 </div>
               )}
@@ -2462,13 +2747,26 @@ const ProposalsTab = ({
                 >
                   Cancel
                 </button>
-                <button 
-                  type="submit"
-                  className="px-4 py-2 bg-indigo-600 dark:bg-indigo-500 text-white rounded-md hover:bg-indigo-700 dark:hover:bg-indigo-400 disabled:bg-indigo-400 dark:disabled:bg-indigo-700 disabled:cursor-not-allowed shadow-sm hover:shadow-md dark:shadow-indigo-700/30 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 dark:focus:ring-offset-gray-800"
-                  disabled={submitting}
-                >
-                  {submitting ? 'Creating Proposal...' : 'Create Proposal'}
-                </button>
+                {parseInt(newProposal.type) === PROPOSAL_TYPES.SIGNALING ? (
+                  // Special button for binding community vote proposals that uses title and description validation only
+                  <button 
+                    type="button"
+                    className="px-4 py-2 bg-indigo-600 dark:bg-indigo-500 text-white rounded-md hover:bg-indigo-700 dark:hover:bg-indigo-400 disabled:bg-indigo-400 dark:disabled:bg-indigo-700 disabled:cursor-not-allowed shadow-sm hover:shadow-md dark:shadow-indigo-700/30 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 dark:focus:ring-offset-gray-800"
+                    disabled={submitting || !newProposal.title || !newProposal.description}
+                    onClick={handleSubmitProposal}
+                  >
+                    {submitting ? 'Creating Binding Community Vote...' : 'Create Binding Community Vote'}
+                  </button>
+                ) : (
+                  // Regular submit button for other proposal types
+                  <button 
+                    type="submit"
+                    className="px-4 py-2 bg-indigo-600 dark:bg-indigo-500 text-white rounded-md hover:bg-indigo-700 dark:hover:bg-indigo-400 disabled:bg-indigo-400 dark:disabled:bg-indigo-700 disabled:cursor-not-allowed shadow-sm hover:shadow-md dark:shadow-indigo-700/30 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 dark:focus:ring-offset-gray-800"
+                    disabled={submitting}
+                  >
+                    {submitting ? 'Creating Proposal...' : 'Create Proposal'}
+                  </button>
+                )}
               </div>
             </form>
           </div>
