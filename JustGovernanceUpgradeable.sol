@@ -861,7 +861,6 @@ contract JustGovernanceUpgradeable is
     }
 
   receive() external payable whenNotPaused {
-    // Optional: Add any logic you need when receiving ETH
 }
 
     uint256[50] private __gap;
