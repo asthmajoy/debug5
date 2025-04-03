@@ -52,7 +52,7 @@ contract JustTokenUpgradeable is
     error DC(); // DelegCycle
     error DDL(); // DelegationDepthLimit
     error TEU(); // TransferExceedsUnlocked
-    error NU(); // NotUnlocked
+    error NEU(); // NotEnoughUnlocked
     error NAT(); // NotAdminOrTimelock
     error LCS(); // LessThanCurrSupply
     error TZA(); // TimelockZeroAddr
@@ -79,7 +79,7 @@ contract JustTokenUpgradeable is
     
     // Token parameters
     uint256 public maxTokenSupply;
- 
+
     uint8 public constant MAX_DELEGATION_DEPTH = 8;
 
     // Delegation mapping - who is this account delegating to
@@ -145,6 +145,7 @@ contract JustTokenUpgradeable is
     event GovernanceRoleChanged(address indexed account, bool isGranted);
     event TimelockUpdated(address indexed oldTimelock, address indexed newTimelock);
     event MaxTokenSupplyUpdated(uint256 oldSupply, uint256 newSupply);
+    event LockDurationsUpdated(uint256 oldMinDuration, uint256 oldMaxDuration, uint256 newMinDuration, uint256 newMaxDuration);
     event SnapshotMetricsUpdated(uint256 indexed snapshotId, uint256 totalSupply, uint256 activeDelegates);
     
     /**
@@ -160,7 +161,7 @@ contract JustTokenUpgradeable is
      */
     function _checkUnlockedTokens(address account, uint256 amount) internal view {
         if (balanceOf(account) < amount + _lockedTokens[account])
-            revert NU();
+            revert NEU();
     }
     
     /**
@@ -170,7 +171,7 @@ contract JustTokenUpgradeable is
         string memory name,
         string memory symbol,
         address admin
-
+       
     ) public initializer {
         if (admin == address(0)) revert ZA();
         
@@ -191,7 +192,7 @@ contract JustTokenUpgradeable is
         
         // Initialize with safe defaults
         maxTokenSupply = 1000000 * 10**18; // 1 million tokens
-    
+  
     }
     
     /**
@@ -358,21 +359,21 @@ contract JustTokenUpgradeable is
             address leaf = _allDelegates[i];
             
             // For each account, follow its delegation chain
-            address currentNode = leaf;
+            address current = leaf;
             uint8 chainLength = 0;
             bool containsDelegator = false;
             
-            while (currentNode != address(0) && chainLength <= MAX_DELEGATION_DEPTH) {
-                if (currentNode == delegator) {
+            while (current != address(0) && chainLength <= MAX_DELEGATION_DEPTH) {
+                if (current == delegator) {
                     containsDelegator = true;
                     break;
                 }
                 
-                address next = _delegates[currentNode];
-                if (next == address(0) || next == currentNode) break;
+                address next = _delegates[current];
+                if (next == address(0) || next == current) break;
                 
                 chainLength++;
-                currentNode = next;
+                current = next;
             }
             
             // If chain contains delegator, record its length to delegator
@@ -878,6 +879,7 @@ contract JustTokenUpgradeable is
         return true;
     }
     
+    
     /**
      * @notice Transfer tokens via governance
      */
@@ -1013,16 +1015,14 @@ contract JustTokenUpgradeable is
     
     // Safety Functions
     function rescueETH() external onlyRole(ADMIN_ROLE) nonReentrant {
-        // CHECKS
         uint256 balance = address(this).balance;
         if (balance == 0) revert NO();
         
-        // EFFECTS - Emit event before external call
-        emit ETHRescued(msg.sender, balance);
-        
-        // INTERACTIONS - External call comes last
+        // Set a gas limit for the transfer to prevent potential reentrancy attack vectors
         (bool success, ) = payable(msg.sender).call{value: balance, gas: 30000}("");
         if (!success) revert ETF();
+        
+        emit ETHRescued(msg.sender, balance);
     }
     
     function rescueERC20(address tokenAddress) external onlyRole(ADMIN_ROLE) nonReentrant {

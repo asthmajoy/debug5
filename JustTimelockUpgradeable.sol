@@ -16,14 +16,6 @@ interface JustTokenInterface {
 }
 
 /**
- * @title JustGovernanceInterface
- * @notice Interface for getting governance proposal information
- */
-interface JustGovernanceInterface {
-    function getProposalType(uint256 proposalId) external view returns (uint8);
-}
-
-/**
  * @title JustTimelockUpgradeable
  * @notice Complete timelock contract for the JustGovernance system, modified for proxy compatibility
  * @dev Implements a delay mechanism with variable timeouts based on threat levels
@@ -92,9 +84,6 @@ contract JustTimelockUpgradeable is
     // Reference to the JustToken contract
     JustTokenInterface public justToken;
     
-    // Reference to the governance contract (new)
-    JustGovernanceInterface public governanceContract;
-    
     // Transaction storage structure
     struct TimelockTransaction {
         address target;
@@ -124,7 +113,6 @@ contract JustTimelockUpgradeable is
     event GovernanceRoleTransferred(address indexed oldGovernance, address indexed newGovernance);
     event GovernanceRoleChanged(address indexed account, bool isGranted);
     event JustTokenSet(address indexed tokenAddress);
-    event GovernanceContractSet(address indexed governanceAddress);
     event ThreatLevelDelaysUpdated(uint256 lowDelay, uint256 mediumDelay, uint256 highDelay, uint256 criticalDelay);
     event FunctionThreatLevelSet(bytes4 indexed selector, ThreatLevel level);
     event AddressThreatLevelSet(address indexed target, ThreatLevel level);
@@ -138,7 +126,6 @@ contract JustTimelockUpgradeable is
     event ExecutorThresholdUpdated(uint256 newThreshold);
     event ExpiredTransactionExecuted(bytes32 indexed txHash, address indexed target, uint256 value, bytes data);
     event FailedTransactionRetried(bytes32 indexed txHash, address indexed target, uint256 value, bytes data);
-    event Debug(string message, bytes data, bytes4 selector);
     // ==================== INITIALIZATION ====================
     /**
      * @notice Initializes the JustTimelockUpgradeable contract
@@ -196,9 +183,6 @@ contract JustTimelockUpgradeable is
         functionThreatLevels[bytes4(keccak256("governanceMint(address,uint256)"))] = ThreatLevel.HIGH;
         functionThreatLevels[bytes4(keccak256("governanceBurn(address,uint256)"))] = ThreatLevel.HIGH;
         
-        // Governance proposal execution (default to MEDIUM if specific type not detected)
-        functionThreatLevels[bytes4(keccak256("executeProposalLogic(uint256)"))] = ThreatLevel.MEDIUM;
-        
         _setupRole(DEFAULT_ADMIN_ROLE, admin);
         _setupRole(ADMIN_ROLE, admin);
         _setupRole(TIMELOCK_ADMIN_ROLE, admin);
@@ -242,22 +226,6 @@ contract JustTimelockUpgradeable is
         if (tokenAddress == address(0)) revert ZeroAddress("tokenAddress");
         justToken = JustTokenInterface(tokenAddress);
         emit JustTokenSet(tokenAddress);
-    }
-
-    /**
-     * @notice Set the Governance contract address
-     * @param governanceAddress The address of the Governance contract
-     */
-    function setGovernanceContract(address governanceAddress) external onlyRole(ADMIN_ROLE) {
-        if (governanceAddress == address(0)) revert ZeroAddress("governanceAddress");
-        governanceContract = JustGovernanceInterface(governanceAddress);
-        
-        // Auto-grant EXECUTOR_ROLE to governance contract
-        if (!hasRole(EXECUTOR_ROLE, governanceAddress)) {
-            grantRole(EXECUTOR_ROLE, governanceAddress);
-        }
-        
-        emit GovernanceContractSet(governanceAddress);
     }
 
     /**
@@ -435,80 +403,79 @@ contract JustTimelockUpgradeable is
      * @return The appropriate threat level
      */
     function getThreatLevel(address target, bytes memory data) public view returns (ThreatLevel) {
-        // Initialize with the lowest threat level
-        ThreatLevel highestThreatLevel = ThreatLevel.LOW;
+    // Initialize with the lowest threat level
+    ThreatLevel highestThreatLevel = ThreatLevel.LOW;
+    
+    // Check the target address threat level
+    ThreatLevel addressLevel = addressThreatLevels[target];
+    if (addressLevel > highestThreatLevel) {
+        highestThreatLevel = addressLevel;
+    }
+    
+    // Check function selector threat level if data has sufficient length
+    if (data.length >= 4) {
+        // Extract the function selector using byte-by-byte method to avoid bit manipulation issues
+        bytes4 selector;
         
-        // Check the target address threat level
-        ThreatLevel addressLevel = addressThreatLevels[target];
-        if (addressLevel > highestThreatLevel) {
-            highestThreatLevel = addressLevel;
+        {
+            // Explicitly extract each byte
+            bytes1 b0 = data[0];
+            bytes1 b1 = data[1];
+            bytes1 b2 = data[2];
+            bytes1 b3 = data[3];
+            
+            // Combine bytes to form selector (using string concatenation)
+            selector = bytes4(abi.encodePacked(b0, b1, b2, b3));
         }
         
-        // Check function selector threat level if data has sufficient length
-        if (data.length >= 4) {
-            // Extract the function selector using assembly for efficiency
-            bytes4 selector;
-            assembly {
-                selector := mload(add(data, 32))
+        // Check if this selector has a threat level
+        ThreatLevel functionLevel = functionThreatLevels[selector];
+        if (functionLevel > highestThreatLevel) {
+            highestThreatLevel = functionLevel;
+        }
+        
+        // CRITICAL selectors fallback - direct check for specific selectors
+        if (bytes4(abi.encodePacked(data[0], data[1], data[2], data[3])) == bytes4(hex"3659cfe6")) { // upgradeTo
+            if (ThreatLevel.CRITICAL > highestThreatLevel) {
+                highestThreatLevel = ThreatLevel.CRITICAL;
             }
-            selector = bytes4(selector);
+        }
+        
+        // Check if this is a governance proposal execution - only if previous checks didn't find HIGH threat
+        if (highestThreatLevel < ThreatLevel.HIGH && 
+            bytes4(abi.encodePacked(data[0], data[1], data[2], data[3])) == bytes4(hex"fa0af14c")) {
             
-            // Check if this selector has a threat level
-            ThreatLevel functionLevel = functionThreatLevels[selector];
-            if (functionLevel > highestThreatLevel) {
-                highestThreatLevel = functionLevel;
-            }
-            
-            // Special handling for governance proposal execution
-            if (selector == bytes4(keccak256("executeProposalLogic(uint256)"))) {
-                // This is a proposal execution
-                uint256 proposalId;
+            // If data has enough length for proposal type (at least 4 + 32 + 32 bytes)
+            if (data.length >= 68) {
+                uint8 proposalType;
                 
-                // Extract the proposalId parameter from the calldata
-                if (data.length >= 36) {  // selector (4 bytes) + uint256 (32 bytes)
-                    assembly {
-                        // Skip the first 4 bytes (selector) and load the next 32 bytes (proposalId)
-                        proposalId := mload(add(data, 36))
+                // Extract the proposal type from the calldata - byte at position 67
+                proposalType = uint8(data[67]);
+                
+                // Assign threat levels based on proposal type
+                if (proposalType == 5 || // TokenMint (5)
+                    proposalType == 6 || // TokenBurn (6)
+                    proposalType == 3) { // GovernanceChange (3)
+                    // HIGH threat for these critical operations
+                    if (ThreatLevel.HIGH > highestThreatLevel) {
+                        highestThreatLevel = ThreatLevel.HIGH;
                     }
-                    
-                    // Get proposal type through governance interface if available
-                    if (address(governanceContract) != address(0)) {
-                        try governanceContract.getProposalType(proposalId) returns (uint8 proposalType) {
-                            // Upgrade threat level based on proposal type
-                            if (proposalType == 0) { // General proposal
-                                if (ThreatLevel.MEDIUM > highestThreatLevel) {
-                                    highestThreatLevel = ThreatLevel.MEDIUM;
-                                }
-                            } else if (proposalType == 1 || proposalType == 2 || proposalType == 4) { 
-                                // Withdrawal (1), TokenTransfer (2), ExternalERC20Transfer (4)
-                                if (ThreatLevel.MEDIUM > highestThreatLevel) {
-                                    highestThreatLevel = ThreatLevel.MEDIUM;
-                                }
-                            } else if (proposalType == 3 || proposalType == 5 || proposalType == 6) { 
-                                // GovernanceChange (3), TokenMint (5), TokenBurn (6)
-                                if (ThreatLevel.HIGH > highestThreatLevel) {
-                                    highestThreatLevel = ThreatLevel.HIGH;
-                                }
-                            }
-                            // Signaling (7) remains at current threat level
-                        } catch {
-                            // If call fails, default to MEDIUM threat level for proposal execution
-                            if (ThreatLevel.MEDIUM > highestThreatLevel) {
-                                highestThreatLevel = ThreatLevel.MEDIUM;
-                            }
-                        }
-                    } else {
-                        // If governance contract not set, default to MEDIUM threat level for proposal execution
-                        if (ThreatLevel.MEDIUM > highestThreatLevel) {
-                            highestThreatLevel = ThreatLevel.MEDIUM;
-                        }
+                } 
+                else if (proposalType == 4 || // ExternalERC20Transfer (4)
+                         proposalType == 2 || // TokenTransfer (2) 
+                         proposalType == 1) { // Withdrawal (1)
+                    // MEDIUM threat for these financial operations
+                    if (ThreatLevel.MEDIUM > highestThreatLevel) {
+                        highestThreatLevel = ThreatLevel.MEDIUM;
                     }
                 }
+                // Signaling (7) or General (0) proposals remain at their current threat level
             }
         }
-        
-        return highestThreatLevel;
     }
+    
+    return highestThreatLevel;
+}
 
     /**
      * @notice Gets the delay for a specific threat level
@@ -634,6 +601,9 @@ contract JustTimelockUpgradeable is
      * @param txHash The hash of the transaction to execute
      * @return returnData Data returned from the executed transaction
      */
+    // Fix for the JustTimelockUpgradeable contract's executeTransaction function
+
+
     function executeTransaction(bytes32 txHash) 
         external 
         whenNotPaused
@@ -658,20 +628,11 @@ contract JustTimelockUpgradeable is
         if (block.timestamp > transaction.eta + gracePeriod) 
             revert TxExpired(txHash, transaction.eta, gracePeriod, block.timestamp);
         
-        // Check authorization - always allow governance contract and holders of EXECUTOR_ROLE
-        bool isAuthorized = false;
-        
-        // Check EXECUTOR_ROLE first
-        if (hasRole(EXECUTOR_ROLE, msg.sender)) {
-            isAuthorized = true;
-        } 
-        // If not executor, check token holdings if token contract is set
-        else if (address(justToken) != address(0)) {
-            isAuthorized = isAuthorizedByTokens(msg.sender);
-        }
-        
+        // Check authorization
+        bool isAuthorized = isAuthorizedByTokens(msg.sender);
         if (!isAuthorized) {
-            revert NotAuthorized(msg.sender, EXECUTOR_ROLE);
+            if (!hasRole(EXECUTOR_ROLE, msg.sender))
+                revert NotAuthorized(msg.sender, EXECUTOR_ROLE);
         }
         
         // Save values to local variables before updating state
@@ -685,21 +646,20 @@ contract JustTimelockUpgradeable is
         
         emit TransactionExecuted(txHash, target, value, data);
         
-        // Execute the transaction after state changes
-        bool success;
-        (success, returnData) = target.call{value: value}(data);
+        // Execute the transaction
+        (bool success, bytes memory result) = target.call{value: value}(data);
         
         if (!success) {
-            // Mark as failed before reverting
+            // If the call failed
             transaction.state = TransactionState.FAILED;
-            emit TransactionExecutionFailed(txHash, target, string(returnData));
-            
-            // Revert for proper governance refund
+            emit TransactionExecutionFailed(txHash, target, string(result));
             revert CallFailed(target, data);
         }
         
-        return returnData;
+        return result;
+       
     }
+
     
     /**
      * @notice Explicitly mark a transaction as failed without executing it
