@@ -145,7 +145,6 @@ contract JustTokenUpgradeable is
     event GovernanceRoleChanged(address indexed account, bool isGranted);
     event TimelockUpdated(address indexed oldTimelock, address indexed newTimelock);
     event MaxTokenSupplyUpdated(uint256 oldSupply, uint256 newSupply);
-    event LockDurationsUpdated(uint256 oldMinDuration, uint256 oldMaxDuration, uint256 newMinDuration, uint256 newMaxDuration);
     event SnapshotMetricsUpdated(uint256 indexed snapshotId, uint256 totalSupply, uint256 activeDelegates);
     
     /**
@@ -423,6 +422,12 @@ contract JustTokenUpgradeable is
     address currentDelegate = _delegates[msg.sender];
     uint256 fullBalance = balanceOf(msg.sender);
     
+    // Reset all visited flags before any operations
+    for (uint i = 0; i < _allDelegates.length; i++) {
+        _visitedDelegation[_allDelegates[i]] = false;
+    }
+    
+    // Handle current delegation if it exists
     if (currentDelegate != address(0)) {
         if (currentDelegate == msg.sender) {
             uint256 previouslyLockedAmount = _lockedTokens[msg.sender];
@@ -441,11 +446,6 @@ contract JustTokenUpgradeable is
                     previouslyLockedAmount
                 );
                 
-                // Reset visited flags - this is important!
-                for (uint i = 0; i < _allDelegates.length; i++) {
-                    _visitedDelegation[_allDelegates[i]] = false;
-                }
-                
                 _propagateDelegationRemoval(currentDelegate, previouslyLockedAmount, 0);
             }
             
@@ -453,11 +453,10 @@ contract JustTokenUpgradeable is
         }
     }
     
+    // Update all state variables BEFORE propagation
     _delegates[msg.sender] = delegatee;
     _addToAllDelegates(delegatee);
-    
     _lockedTokens[msg.sender] = fullBalance;
-    
     _delegatedToAddress[delegatee] += fullBalance;
     
     // Reset visited flags again before propagation
@@ -465,14 +464,14 @@ contract JustTokenUpgradeable is
         _visitedDelegation[_allDelegates[i]] = false;
     }
     
+    // Propagate changes after all state is updated
     _propagateDelegationChange(delegatee, fullBalance, 0, 0);
-    
     _addDelegatorOf(msg.sender, delegatee);
     
+    // Emit events after all state changes
     emit DelegateChanged(msg.sender, currentDelegate, delegatee);
     emit TokensLocked(msg.sender, delegatee, fullBalance);
 }
-    
     /**
      * @notice Simplified cycle detection function for delegation
      */

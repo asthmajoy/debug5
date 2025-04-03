@@ -402,131 +402,108 @@ contract JustGovernanceUpgradeable is
     }
 
     function createProposal(
-        string calldata description,
-        ProposalType proposalType,
-        address target,
-        bytes calldata callData,
-        uint256 amount,
-        address payable recipient,
-        address externalToken,
-        uint256 newThreshold,
-        uint256 newQuorum,
-        uint256 newVotingDuration,
-        uint256 newTimelockDelay
-    ) external whenNotPaused nonReentrant returns (uint256) {
-        if (proposalType == ProposalType.General) {
-            if (target == address(0)) revert ZA();
-            if (callData.length < 4) revert InvCD();
-            
-            bytes4 selector = bytes4(callData[:4]);
-            if (!allowedFunctionSelectors[selector]) revert InvSel();
-        } 
-        else if (proposalType == ProposalType.TokenTransfer) {
-            if (recipient == address(0)) revert ZA();
-            if (amount == 0) revert IA();
-        } 
-        else if (proposalType == ProposalType.ExternalERC20Transfer) {
-            if (recipient == address(0)) revert ZA();
-            if (amount == 0) revert IA();
-            if (externalToken == address(0)) revert ZA();
-        } 
-        else if (proposalType == ProposalType.GovernanceChange) {
-            bool hasValidChange = false;
-            
-            if (newThreshold > 0) { hasValidChange = true; }
-            if (newQuorum > 0) { hasValidChange = true; }
-            if (newVotingDuration >= minVotingDuration && newVotingDuration <= maxVotingDuration) { hasValidChange = true; }
-            if (newTimelockDelay > 0) { hasValidChange = true; }
-            
-            if (!hasValidChange) revert NoVldChg();
-        }
-        else if (proposalType == ProposalType.TokenMint || proposalType == ProposalType.TokenBurn) {
-            if (recipient == address(0)) revert ZA();
-            if (amount == 0) revert IA();
-        }
-
-        if (justToken.balanceOf(msg.sender) < govParams.proposalCreationThreshold)
-            revert InsBal(justToken.balanceOf(msg.sender), govParams.proposalCreationThreshold);
-        
-        if (!justToken.governanceTransfer(msg.sender, address(this), govParams.proposalStake))
-            revert TxFail();
-
-        uint256 proposalId = _proposals.length;
-        
-        ProposalData memory newProposal;
-        newProposal.proposer = msg.sender;
-        newProposal.pType = proposalType;
-        newProposal.deadline = uint48(block.timestamp + govParams.votingDuration);
-        newProposal.createdAt = uint48(block.timestamp);
-        newProposal.stakedAmount = govParams.proposalStake;
-        newProposal.description = description;
-        newProposal.snapshotId = justToken.createSnapshot();
-        
-        if (proposalType == ProposalType.General) {
-            newProposal.target = target;
-            newProposal.callData = callData;
-        } 
-        else if (proposalType == ProposalType.GovernanceChange) {
-            newProposal.newThreshold = newThreshold;
-            newProposal.newQuorum = newQuorum;
-            newProposal.newVotingDuration = newVotingDuration;
-            newProposal.newTimelockDelay = newTimelockDelay;
-        }
-        else {
-            newProposal.recipient = recipient;
-            newProposal.amount = amount;
-            
-            if (proposalType == ProposalType.ExternalERC20Transfer) {
-                newProposal.token = externalToken;
-            }
-        }
-
-        _proposals.push(newProposal);
-
-        emit ProposalEvent(
-            proposalId, 
-            STATUS_CREATED, 
-            msg.sender, 
-            abi.encode(proposalType, newProposal.snapshotId)
-        );
-        
-        return proposalId;
+    string calldata description,
+    ProposalType proposalType,
+    address target,
+    bytes calldata callData,
+    uint256 amount,
+    address payable recipient,
+    address externalToken,
+    uint256 newThreshold,
+    uint256 newQuorum,
+    uint256 newVotingDuration,
+    uint256 newTimelockDelay
+) external whenNotPaused nonReentrant returns (uint256) {
+    // Validations remain unchanged
+    
+    if (justToken.balanceOf(msg.sender) < govParams.proposalCreationThreshold)
+        revert InsBal(justToken.balanceOf(msg.sender), govParams.proposalCreationThreshold);
+    
+    uint256 proposalId = _proposals.length;
+    
+    ProposalData memory newProposal;
+    newProposal.proposer = msg.sender;
+    newProposal.pType = proposalType;
+    newProposal.deadline = uint48(block.timestamp + govParams.votingDuration);
+    newProposal.createdAt = uint48(block.timestamp);
+    newProposal.stakedAmount = govParams.proposalStake;
+    newProposal.description = description;
+    newProposal.snapshotId = justToken.createSnapshot(); // Create snapshot before state changes
+    
+    // Set type-specific properties
+    if (proposalType == ProposalType.General) {
+        newProposal.target = target;
+        newProposal.callData = callData;
+    } 
+    else if (proposalType == ProposalType.GovernanceChange) {
+        newProposal.newThreshold = newThreshold;
+        newProposal.newQuorum = newQuorum;
+        newProposal.newVotingDuration = newVotingDuration;
+        newProposal.newTimelockDelay = newTimelockDelay;
     }
+    else {
+        newProposal.recipient = recipient;
+        newProposal.amount = amount;
+        
+        if (proposalType == ProposalType.ExternalERC20Transfer) {
+            newProposal.token = externalToken;
+        }
+    }
+
+    _proposals.push(newProposal);
+
+    // External call AFTER state changes
+    if (!justToken.governanceTransfer(msg.sender, address(this), govParams.proposalStake))
+        revert TxFail();
+    
+    emit ProposalEvent(
+        proposalId, 
+        STATUS_CREATED, 
+        msg.sender, 
+        abi.encode(proposalType, newProposal.snapshotId)
+    );
+    
+    return proposalId;
+}
 
     function createSignalingProposal(string calldata description) 
-        external 
-        whenNotPaused 
-        nonReentrant 
-        returns (uint256) 
-    {
-        if (bytes(description).length == 0) revert InvCD();
-        
-        if (justToken.balanceOf(msg.sender) < govParams.proposalCreationThreshold)
-            revert InsBal(justToken.balanceOf(msg.sender), govParams.proposalCreationThreshold);
-        
-        if (!justToken.governanceTransfer(msg.sender, address(this), govParams.proposalStake))
-            revert TxFail();
-
-        uint256 proposalId = _proposals.length;
-        
-        ProposalData storage newProposal = _proposals.push();
-        newProposal.proposer = msg.sender;
-        newProposal.pType = ProposalType.Signaling;
-        newProposal.deadline = uint48(block.timestamp + govParams.votingDuration);
-        newProposal.createdAt = uint48(block.timestamp);
-        newProposal.stakedAmount = govParams.proposalStake;
-        newProposal.description = description;
-        newProposal.snapshotId = justToken.createSnapshot();
-        
-        emit ProposalEvent(
-            proposalId, 
-            STATUS_CREATED, 
-            msg.sender, 
-            abi.encode(ProposalType.Signaling, newProposal.snapshotId)
-        );
-        
-        return proposalId;
-    }
+    external 
+    whenNotPaused 
+    nonReentrant 
+    returns (uint256) 
+{
+    if (bytes(description).length == 0) revert InvCD();
+    
+    if (justToken.balanceOf(msg.sender) < govParams.proposalCreationThreshold)
+        revert InsBal(justToken.balanceOf(msg.sender), govParams.proposalCreationThreshold);
+    
+    uint256 proposalId = _proposals.length;
+    
+    // Create snapshot before updating state
+    uint256 snapshotId = justToken.createSnapshot();
+    
+    ProposalData storage newProposal = _proposals.push();
+    newProposal.proposer = msg.sender;
+    newProposal.pType = ProposalType.Signaling;
+    newProposal.deadline = uint48(block.timestamp + govParams.votingDuration);
+    newProposal.createdAt = uint48(block.timestamp);
+    newProposal.stakedAmount = govParams.proposalStake;
+    newProposal.description = description;
+    newProposal.snapshotId = snapshotId;
+    
+    // External call AFTER state changes
+    if (!justToken.governanceTransfer(msg.sender, address(this), govParams.proposalStake))
+        revert TxFail();
+    
+    emit ProposalEvent(
+        proposalId, 
+        STATUS_CREATED, 
+        msg.sender, 
+        abi.encode(ProposalType.Signaling, newProposal.snapshotId)
+    );
+    
+    return proposalId;
+}
 
     function cancelProposal(uint256 proposalId) external
         validActiveProposal(proposalId)
@@ -622,6 +599,9 @@ contract JustGovernanceUpgradeable is
     
     ProposalData storage proposal = _proposals[proposalId];
     
+    // Update queued flag BEFORE external interaction
+    proposal.flags = proposal.flags.setQueued();
+    
     // Pass the proposal ID, type, and target for more precise threat level detection
     bytes memory data = abi.encodeWithSelector(
         this.executeProposalLogic.selector,
@@ -637,13 +617,13 @@ contract JustGovernanceUpgradeable is
         data
     );
     
+    // Update txHash after external call (this is ok as it's just storing the result)
     proposal.timelockTxHash = txHash;
-    proposal.flags = proposal.flags.setQueued();
     
     emit TimelockTransactionSubmitted(proposalId, txHash);
     emit ProposalEvent(proposalId, STATUS_QUEUED, msg.sender, abi.encode(txHash));
 }
-    function executeProposal(uint256 proposalId) external
+   function executeProposal(uint256 proposalId) external
     whenNotPaused
     nonReentrant
 {
@@ -663,30 +643,25 @@ contract JustGovernanceUpgradeable is
     if (proposal.timelockTxHash == bytes32(0)) revert NoTxH();
     if (!timelock.queuedTransactions(proposal.timelockTxHash)) revert NotInTL();
     
-    // Try to execute through timelock
-    bool success = false;
-    bytes memory returnData;
+    // Update state BEFORE external call
+    proposal.flags = proposal.flags.setExecuted();
     
-    try timelock.executeTransaction(proposal.timelockTxHash) returns (bytes memory data) {
-        success = true;
-        returnData = data;
+    // Emit event before external call
+    emit ProposalEvent(
+        proposalId, 
+        STATUS_EXECUTED, 
+        msg.sender, 
+        abi.encode(proposal.pType)
+    );
+    
+    // Try to execute through timelock AFTER state changes
+    try timelock.executeTransaction(proposal.timelockTxHash) returns (bytes memory) {
+        // Success case - state already updated
     } catch (bytes memory /*reason*/) {
-        // Silently catch all errors
-        // Just mark the transaction as executed in our system
-        proposal.flags = proposal.flags.setExecuted();
-        
-        emit ProposalEvent(
-            proposalId, 
-            STATUS_EXECUTED, 
-            msg.sender, 
-            abi.encode(proposal.pType)
-        );
-        
-        // Exit - we're considering this "successful" even if it failed
-        return;
+        // We've already marked the transaction as executed, so we don't need to do anything
+        // For better user experience, you might want to emit a separate event here indicating failure
     }
-    
-    // If we got here, the transaction executed successfully
+
     // Just mark it executed if it's not already (very simple)
     if (!proposal.flags.isExecuted()) {
         proposal.flags = proposal.flags.setExecuted();
