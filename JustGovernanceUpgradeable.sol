@@ -591,38 +591,42 @@ contract JustGovernanceUpgradeable is
     }
     
    function queueProposal(uint256 proposalId) external
-    whenNotPaused
-    validActiveProposal(proposalId)
-    nonReentrant
-{
-    if (getProposalState(proposalId) != ProposalState.Succeeded) revert NotSucc();
+        whenNotPaused
+        validActiveProposal(proposalId)
+        nonReentrant
+    {
+        if (getProposalState(proposalId) != ProposalState.Succeeded) revert NotSucc();
+        
+        ProposalData storage proposal = _proposals[proposalId];
+        
+        // Update queued flag BEFORE external interaction
+        proposal.flags = proposal.flags.setQueued();
+        
+        // Encode all necessary proposal parameters regardless of proposal type
+        bytes memory data = abi.encodeWithSelector(
+            this.executeProposalLogic.selector,
+            proposalId,
+            proposal.pType,
+            proposal.target,
+            proposal.recipient,
+            proposal.amount,
+            proposal.token
+        );
+        
+        // Let the timelock determine the appropriate threat level
+        bytes32 txHash = timelock.queueTransactionWithThreatLevel(
+            address(this),
+            0,
+            data
+        );
+        
+        // Update txHash after external call (this is ok as it's just storing the result)
+        proposal.timelockTxHash = txHash;
+        
+        emit TimelockTransactionSubmitted(proposalId, txHash);
+        emit ProposalEvent(proposalId, STATUS_QUEUED, msg.sender, abi.encode(txHash));
+    }
     
-    ProposalData storage proposal = _proposals[proposalId];
-    
-    // Update queued flag BEFORE external interaction
-    proposal.flags = proposal.flags.setQueued();
-    
-    // Pass the proposal ID, type, and target for more precise threat level detection
-    bytes memory data = abi.encodeWithSelector(
-        this.executeProposalLogic.selector,
-        proposalId,
-        proposal.pType,
-        proposal.target
-    );
-    
-    // Let the timelock determine the appropriate threat level
-    bytes32 txHash = timelock.queueTransactionWithThreatLevel(
-        address(this),
-        0,
-        data
-    );
-    
-    // Update txHash after external call (this is ok as it's just storing the result)
-    proposal.timelockTxHash = txHash;
-    
-    emit TimelockTransactionSubmitted(proposalId, txHash);
-    emit ProposalEvent(proposalId, STATUS_QUEUED, msg.sender, abi.encode(txHash));
-}
    function executeProposal(uint256 proposalId) external
     whenNotPaused
     nonReentrant
@@ -675,41 +679,64 @@ contract JustGovernanceUpgradeable is
     }
 }
     function executeProposalLogic(
-    uint256 proposalId,
-    ProposalType proposalType,
-    address proposalTarget
-) external {
-    if (msg.sender != address(timelock)) revert NotAuth();
-    if (proposalId >= _proposals.length) revert InvPId();
-    
-    ProposalData storage proposal = _proposals[proposalId];
-    
-    // Skip the execution check - this allows re-execution
-    // if (proposal.flags.isExecuted()) revert PropExec();
-    
-    if (!proposal.flags.isQueued()) revert NotQ();
-    
-    _executeProposal(proposalId);
-    
-    proposal.flags = proposal.flags.setExecuted();
-    
-    // Simple stake refund without complex try/catch
-    if (!proposal.flags.isStakeRefunded()) {
-        uint256 balance = justToken.balanceOf(address(this));
-        if (balance >= proposal.stakedAmount) {
-            if (justToken.governanceTransfer(address(this), proposal.proposer, proposal.stakedAmount)) {
-                proposal.flags = proposal.flags.setStakeRefunded();
+        uint256 proposalId,
+        ProposalType proposalType,
+        address proposalTarget,
+        address recipient,
+        uint256 amount,
+        address token
+    ) external {
+        if (msg.sender != address(timelock)) revert NotAuth();
+        if (proposalId >= _proposals.length) revert InvPId();
+        
+        ProposalData storage proposal = _proposals[proposalId];
+        
+        // Skip the execution check - this allows re-execution
+        // if (proposal.flags.isExecuted()) revert PropExec();
+        
+        if (!proposal.flags.isQueued()) revert NotQ();
+        
+        // Use the passed parameters for execution
+        // This ensures even if the proposal data is corrupted, we use the parameters
+        // that were passed through the timelock
+        if (proposalType == ProposalType.TokenTransfer) {
+            // For TokenTransfer, use the passed recipient and amount
+            if (recipient == address(0)) revert ZA();
+            if (amount == 0) revert IA();
+            
+            if (!justToken.governanceTransfer(address(this), recipient, amount)) revert TxFail();
+        } else if (proposalType == ProposalType.ExternalERC20Transfer) {
+            // For ExternalERC20Transfer, use passed token, recipient and amount
+            if (recipient == address(0)) revert ZA();
+            if (amount == 0) revert IA();
+            if (token == address(0)) revert ZA();
+            
+            IERC20Upgradeable(token).safeTransfer(recipient, amount);
+        } else {
+            // For other proposal types, use the stored proposal data
+            _executeProposal(proposalId);
+        }
+        
+        proposal.flags = proposal.flags.setExecuted();
+        
+        // Simple stake refund without complex try/catch
+        if (!proposal.flags.isStakeRefunded()) {
+            uint256 balance = justToken.balanceOf(address(this));
+            if (balance >= proposal.stakedAmount) {
+                if (justToken.governanceTransfer(address(this), proposal.proposer, proposal.stakedAmount)) {
+                    proposal.flags = proposal.flags.setStakeRefunded();
+                }
             }
         }
+        
+        emit ProposalEvent(
+            proposalId, 
+            STATUS_EXECUTED, 
+            msg.sender, 
+            abi.encode(proposalType)
+        );
     }
-    
-    emit ProposalEvent(
-        proposalId, 
-        STATUS_EXECUTED, 
-        msg.sender, 
-        abi.encode(proposal.pType)
-    );
-}
+   
 
     function _executeProposal(uint256 proposalId) internal {
         ProposalData storage proposal = _proposals[proposalId];

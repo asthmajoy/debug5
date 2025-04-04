@@ -402,7 +402,11 @@ contract JustTimelockUpgradeable is
      * @param data Call data
      * @return The appropriate threat level
      */
-    function getThreatLevel(address target, bytes memory data) public view returns (ThreatLevel) {
+    // In the JustTimelockUpgradeable.sol file, update the interface for the governance contract
+
+// Modify the threat level detection logic in the getThreatLevel function to account for the new function signature:
+
+function getThreatLevel(address target, bytes memory data) public view returns (ThreatLevel) {
     // Initialize with the lowest threat level
     ThreatLevel highestThreatLevel = ThreatLevel.LOW;
     
@@ -441,10 +445,11 @@ contract JustTimelockUpgradeable is
             }
         }
         
-        // Check if this is a governance proposal execution - only if previous checks didn't find HIGH threat
-        if (highestThreatLevel < ThreatLevel.HIGH && 
-            bytes4(abi.encodePacked(data[0], data[1], data[2], data[3])) == bytes4(hex"fa0af14c")) {
-            
+        // Check if this is a governance proposal execution with updated signature
+        // The new executeProposalLogic selector (will need to be calculated)
+        bytes4 newExecuteProposalLogicSelector = bytes4(keccak256("executeProposalLogic(uint256,uint8,address,address,uint256,address)"));
+        
+        if (selector == newExecuteProposalLogicSelector) {
             // If data has enough length for proposal type (at least 4 + 32 + 32 bytes)
             if (data.length >= 68) {
                 uint8 proposalType;
