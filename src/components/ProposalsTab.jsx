@@ -8,6 +8,8 @@ import { ChevronDown, ChevronUp, Copy, Check, AlertTriangle, Clock, Shield, Chev
 import TimelockInfoDisplay from './TimelockInfoDisplay';
 import ProposalRichTextEditor from './ProposalRichTextEditor';
 import { useDarkMode } from '../contexts/DarkModeContext';
+import { renderProposalContent } from '../utils/proposalRenderHelpers';
+
 
 
 // Helper function to get human-readable proposal state label
@@ -734,7 +736,74 @@ const ProposalsTab = ({
     setCopiedText(text);
     setTimeout(() => setCopiedText(null), 2000);
   };
-
+  function safelyTruncateHtml(html, maxLength = 200) {
+    if (!html) return '';
+    
+    try {
+      // Create a temporary div to parse the HTML
+      const tempDiv = document.createElement('div');
+      tempDiv.innerHTML = html;
+      
+      // Get the text content
+      const textContent = tempDiv.textContent || tempDiv.innerText || '';
+      
+      // If the text is short enough, return the original HTML
+      if (textContent.length <= maxLength) {
+        return html;
+      }
+      
+      // Otherwise return truncated text with ellipsis
+      return textContent.substring(0, maxLength) + '...';
+    } catch (error) {
+      console.warn("Error truncating HTML:", error);
+      // Fallback for safety
+      return html.substring(0, maxLength) + '...';
+    }
+  }
+  
+  // Function to render proposal content based on type and HTML presence
+  function renderProposalContent(proposal, isExpanded = false) {
+    // For signaling proposals or those with HTML, render with dangerouslySetInnerHTML
+    if (proposal.descriptionHtml) {
+      if (isExpanded) {
+        // Full HTML content for expanded view
+        return (
+          <div 
+            className="prose max-w-none text-sm text-gray-700 mb-4 dark:prose-invert dark:text-gray-200"
+            dangerouslySetInnerHTML={{ __html: proposal.descriptionHtml }}
+          />
+        );
+      } else {
+        // Truncated for collapsed view
+        return (
+          <div 
+            className="text-sm text-gray-700 dark:text-gray-300 mb-2"
+            dangerouslySetInnerHTML={{ __html: safelyTruncateHtml(proposal.descriptionHtml, 200) }}
+          />
+        );
+      }
+    }
+    
+    // For plain text proposals
+    if (isExpanded) {
+      return (
+        <p className="text-sm text-gray-700 dark:text-gray-300 mb-4 whitespace-pre-wrap">
+          {proposal.description || "No description available"}
+        </p>
+      );
+    } else {
+      const truncatedDesc = proposal.description 
+        ? proposal.description.substring(0, 200) + (proposal.description.length > 200 ? '...' : '')
+        : "No description available";
+      
+      return (
+        <p className="text-sm text-gray-700 dark:text-gray-300 mb-2 whitespace-pre-wrap">
+          {truncatedDesc}
+        </p>
+      );
+    }
+  }
+  
  // Enhanced renderAddress function for better display
  const renderAddress = (address, label) => {
   return (
@@ -2130,34 +2199,27 @@ const ProposalsTab = ({
                     </div>
                   </div>
                 )}
-                
                 <div className="border-t pt-4 mb-4">
-                  {expandedProposalId === proposal.id ? (
-                    <div>
-                      {/* If there's HTML content available, display that, otherwise display plain text */}
-                      {proposal.descriptionHtml ? (
-                        <div 
-                        className="prose max-w-none text-sm text-gray-700 mb-4 dark:prose-invert dark:text-gray-200"
-                        dangerouslySetInnerHTML={{ __html: proposal.descriptionHtml }}
-                      />
-                      ) : (
-                        <p className="text-sm text-gray-700 dark:text-gray-300 mb-4 whitespace-pre-wrap">{proposal.description}</p>
-                      )}
-                      <div className="mt-4 border-t pt-4">
-                        <h2 className="text-xl font-semibold dark:text-white">Proposal Details</h2>
-                        {/* Display proposer address in full with copy button */}
-                        {renderAddress(proposal.proposer, "Proposer")}
-                        
-                        {/* Display proposal-specific details */}
-                        {proposal.type === PROPOSAL_TYPES.GENERAL && (
-                          <div className="mt-2 bg-gray-50 dark:bg-gray-700/50 p-4 rounded">
-                            {renderAddress(proposal.target, "Target")}
-                            <div className="mt-2">
-                              <p className="font-medium mb-1 dark:text-gray-300">Call Data:</p>
-                              <pre className="bg-gray-100 dark:bg-gray-800 p-2 mt-1 rounded overflow-x-auto text-xs dark:text-gray-300">{proposal.callData}</pre>
-                            </div>
-                          </div>
-                        )}
+  {expandedProposalId === proposal.id ? (
+    <div>
+      {/* Use renderProposalContent for consistent HTML/plain text rendering */}
+      {renderProposalContent(proposal, true)}
+      
+      <div className="mt-4 border-t pt-4">
+        <h2 className="text-xl font-semibold dark:text-white">Proposal Details</h2>
+        {/* Display proposer address in full with copy button */}
+        {renderAddress(proposal.proposer, "Proposer")}
+        
+        {/* Display proposal-specific details */}
+        {proposal.type === PROPOSAL_TYPES.GENERAL && (
+          <div className="mt-2 bg-gray-50 dark:bg-gray-700/50 p-4 rounded">
+            {renderAddress(proposal.target, "Target")}
+            <div className="mt-2">
+              <p className="font-medium mb-1 dark:text-gray-300">Call Data:</p>
+              <pre className="bg-gray-100 dark:bg-gray-800 p-2 mt-1 rounded overflow-x-auto text-xs dark:text-gray-300">{proposal.callData}</pre>
+            </div>
+          </div>
+        )}
                         
                         {(proposal.type === PROPOSAL_TYPES.WITHDRAWAL || 
                           proposal.type === PROPOSAL_TYPES.TOKEN_TRANSFER || 

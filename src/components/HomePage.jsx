@@ -147,14 +147,14 @@ const JustDAOLandingPage = ({ onNavigateToMain }) => {
         },
         clientDemographics: {
           incomeDistribution: {
-            belowPoverty: 68,
-            lowIncome: 25,
-            middleIncome: 7
+            belowPoverty: 0,
+            lowIncome: 0,
+            middleIncome: 0
           },
           languages: {
-            english: 53,
-            spanish: 32,
-            chinese: 7,
+            english: 1,
+            spanish: 0,
+            chinese: 0,
             other: 8
           }
         },
@@ -169,7 +169,7 @@ const JustDAOLandingPage = ({ onNavigateToMain }) => {
             legalSecurity: 0
           }
         },
-        npsScore: 76,
+        npsScore: 0,
         lastUpdated: new Date().toISOString()
       };
       
@@ -1028,13 +1028,13 @@ const JustDAOLandingPage = ({ onNavigateToMain }) => {
                             <dt className="text-sm font-medium text-gray-500 dark:text-gray-400">Delegation Stability Index</dt>
                             <dd className="mt-1 text-sm text-gray-900 dark:text-white sm:mt-0 sm:col-span-2">
                               <div className="space-y-1">
-                                <span className="text-indigo-600 dark:text-indigo-400 font-medium">{daoStats?.delegationStabilityIndex || "8.3"}/10</span>
+                                <span className="text-indigo-600 dark:text-indigo-400 font-medium">{daoStats?.delegationStabilityIndex || "0"}/10</span>
                                 <div className="flex flex-wrap gap-1 text-xs">
                                   <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300">
-                                    {daoStats?.stableDelegatesPercentage || "86"}% stable delegates
+                                    {daoStats?.stableDelegatesPercentage || "0"}% stable delegates
                                   </span>
                                   <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300">
-                                    {daoStats?.changedDelegatesPercentage || "14"}% changed in last 3 months
+                                    {daoStats?.changedDelegatesPercentage || "0"}% changed in last 3 months
                                   </span>
                                 </div>
                               </div>

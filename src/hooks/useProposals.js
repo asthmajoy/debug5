@@ -1,8 +1,9 @@
-// src/hooks/useProposals.js - Updated with all fixes
+// src/hooks/useProposals.js - Updated with direct blockchain loading
 import { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
 import { useWeb3 } from '../contexts/Web3Context';
 import { PROPOSAL_STATES, PROPOSAL_TYPES } from '../utils/constants';
+import { loadProposalsFromBlockchain } from '../services/ProposalLoader';
 
 export function useProposals() {
   const { contracts, account, isConnected, contractsReady, refreshCounter } = useWeb3();
@@ -100,264 +101,80 @@ export function useProposals() {
       [PROPOSAL_TYPES.TOKEN_MINT]: "Token Issuance",
       [PROPOSAL_TYPES.TOKEN_BURN]: "Token Consolidation",
       [PROPOSAL_TYPES.SIGNALING]: "Binding Community Vote"
-
     };
     
     return typeLabels[type] || "Unknown";
   }, []);
 
-  // Enhanced function to get proposal details including transaction data
-  const getProposalDetailsFromEvents = useCallback(async (proposalId) => {
-    try {
-      // First check if the proposal exists by getting its state
-      const proposalState = await contracts.governance.getProposalState(proposalId);
-      
-      // Look for the transaction that created this proposal
-      // This will give us access to the input data which contains all proposal details
-      const provider = contracts.governance.provider;
-      
-      // Create a filter for ProposalEvent events related to this proposal
-      const filter = contracts.governance.filters.ProposalEvent(proposalId, 0); // Type 0 is creation event
-      const events = await contracts.governance.queryFilter(filter);
-      
-      if (events.length === 0) {
-        // If no events found, create a minimal proposal object
-        return {
-          id: proposalId,
-          title: `Proposal #${proposalId}`,
-          description: "No description available",
-          state: proposalState,
-          stateLabel: getProposalStateLabel(proposalState),
-          type: PROPOSAL_TYPES.GENERAL,
-          typeLabel: getProposalTypeLabel(PROPOSAL_TYPES.GENERAL),
-          yesVotes: "0",
-          noVotes: "0",
-          abstainVotes: "0",
-          hasVoted: false,
-          snapshotId: 0,
-          target: ethers.constants.AddressZero,
-          callData: "0x",
-          proposer: ethers.constants.AddressZero,
-          createdAt: new Date(),
-          deadline: new Date(Date.now() + 3*24*60*60*1000), // Default 3 day deadline
-          stakeRefunded: false
-        };
-      }
-      
-      // Get the creation event
-      const creationEvent = events[0];
-      
-      // Get the transaction that created the proposal
-      const txHash = creationEvent.transactionHash;
-      const tx = await provider.getTransaction(txHash);
-      const txReceipt = await provider.getTransactionReceipt(txHash);
-      
-      // Get timestamp for the block
-      const block = await provider.getBlock(txReceipt.blockNumber);
-      const createdAt = new Date(block.timestamp * 1000);
-      
-      // Parse the input data to get proposal details
-      // The createProposal function signature looks like:
-      // createProposal(string calldata description, ProposalType proposalType, address target, bytes calldata callData, 
-      //                uint256 amount, address payable recipient, address externalToken, uint256 newThreshold, 
-      //                uint256 newQuorum, uint256 newVotingDuration, uint256 newTimelockDelay)
-      
-      let proposalDescription = "No description available";
-      let proposalType = PROPOSAL_TYPES.GENERAL;
-      let target = ethers.constants.AddressZero;
-      let callData = "0x";
-      let amount = "0";
-      let recipient = ethers.constants.AddressZero;
-      let externalToken = ethers.constants.AddressZero;
-      
-      try {
-        // Create the interface for decoding
-        const iface = new ethers.utils.Interface([
-          "function createProposal(string description, uint8 proposalType, address target, bytes callData, uint256 amount, address recipient, address externalToken, uint256 newThreshold, uint256 newQuorum, uint256 newVotingDuration, uint256 newTimelockDelay) returns (uint256)"
-        ]);
-        
-        // Decode the input data
-        const decodedData = iface.parseTransaction({ data: tx.data });
-        
-        if (decodedData && decodedData.args) {
-          proposalDescription = decodedData.args[0] || proposalDescription;
-          proposalType = decodedData.args[1] !== undefined ? Number(decodedData.args[1]) : proposalType;
-          target = decodedData.args[2] || target;
-          callData = decodedData.args[3] || callData;
-          amount = decodedData.args[4] ? ethers.utils.formatEther(decodedData.args[4]) : amount;
-          recipient = decodedData.args[5] || recipient;
-          externalToken = decodedData.args[6] || externalToken;
-        }
-      } catch (decodeErr) {
-        console.warn("Couldn't decode transaction data:", decodeErr);
-      }
-      
-      // Get more data from the creation event
-      const proposer = creationEvent.args.actor;
-      let snapshotId = 0;
-      
-      // Try to decode the data field which contains type and snapshotId
-      try {
-        const data = creationEvent.args.data;
-        const decoded = ethers.utils.defaultAbiCoder.decode(['uint8', 'uint256'], data);
-        proposalType = Number(decoded[0]);
-        snapshotId = decoded[1].toNumber();
-      } catch (err) {
-        console.warn("Couldn't decode event data:", err);
-      }
-      
-      // Try to get vote counts (this is challenging without direct access)
-      let yesVotes = "0";
-      let noVotes = "0";
-      let abstainVotes = "0";
-      
-      // Look for vote events (event type 6)
-      const voteFilter = contracts.governance.filters.ProposalEvent(proposalId, 6); // Type 6 is vote event
-      const voteEvents = await contracts.governance.queryFilter(voteFilter);
-      
-      // Aggregate votes from events
-      for (const event of voteEvents) {
-        try {
-          const data = event.args.data;
-          const decoded = ethers.utils.defaultAbiCoder.decode(['uint8', 'uint256'], data);
-          const voteType = decoded[0].toNumber();
-          const votePower = ethers.utils.formatEther(decoded[1]);
-          
-          if (voteType === 1) { // FOR
-            yesVotes = (parseFloat(yesVotes) + parseFloat(votePower)).toString();
-          } else if (voteType === 0) { // AGAINST
-            noVotes = (parseFloat(noVotes) + parseFloat(votePower)).toString();
-          } else if (voteType === 2) { // ABSTAIN
-            abstainVotes = (parseFloat(abstainVotes) + parseFloat(votePower)).toString();
-          }
-        } catch (err) {
-          console.warn("Couldn't decode vote event:", err);
-        }
-      }
-      
-      // Calculate deadline based on voting duration (from governance parameters)
-      let deadline = new Date(createdAt);
-      try {
-        const govParams = await contracts.governance.govParams();
-        deadline = new Date(createdAt.getTime() + (govParams.votingDuration.toNumber() * 1000));
-      } catch (err) {
-        console.warn("Couldn't get voting duration:", err);
-        // Default to 3 days if we can't get the actual duration
-        deadline = new Date(createdAt.getTime() + (3 * 24 * 60 * 60 * 1000));
-      }
-      
-      // Check if the user has voted on this proposal
-      let hasVoted = false;
-      let votedYes = false;
-      let votedNo = false;
-      let votedAbstain = false;
-      
-      if (account) {
-        try {
-          const voteDetails = await getVoteDetails(proposalId, account);
-          hasVoted = voteDetails.hasVoted;
-          votedYes = voteDetails.voteType === 1;  // FOR
-          votedNo = voteDetails.voteType === 0;   // AGAINST
-          votedAbstain = voteDetails.voteType === 2; // ABSTAIN
-        } catch (err) {
-          console.warn(`Error checking vote status for proposal ${proposalId}:`, err);
-        }
-      }
-      
-      // Extract title and description
-      const { title, description } = extractTitleAndDescription(proposalDescription);
-      
-      // Check for timelock transaction hash in queued event
-      let timelockTxHash = ethers.constants.HashZero;
-      const queuedFilter = contracts.governance.filters.ProposalEvent(proposalId, 2); // Type 2 is queued event
-      const queuedEvents = await contracts.governance.queryFilter(queuedFilter);
-      
-      if (queuedEvents.length > 0) {
-        try {
-          const data = queuedEvents[0].args.data;
-          const decoded = ethers.utils.defaultAbiCoder.decode(['bytes32'], data);
-          timelockTxHash = decoded[0];
-        } catch (err) {
-          console.warn("Couldn't decode queued event:", err);
-        }
-      }
-      
-      // Check if stake has been refunded
-      let stakeRefunded = false;
-      try {
-        // Look for stake refund events (event type 5)
-        const refundFilter = contracts.governance.filters.ProposalEvent(proposalId, 5); // Type 5 is stake event
-        const refundEvents = await contracts.governance.queryFilter(refundFilter);
-        
-        // If there are any stake events, assume the stake has been refunded
-        if (refundEvents.length > 0) {
-          console.log(`Found ${refundEvents.length} stake events for proposal ${proposalId}`);
-          stakeRefunded = true;
-          
-          // Try to decode the event data for more details
-          for (const event of refundEvents) {
-            try {
-              if (event.args && event.args.data) {
-                const data = event.args.data;
-                const decoded = ethers.utils.defaultAbiCoder.decode(['uint8', 'uint256'], data);
-                const refundType = decoded[0].toNumber();
-                const refundAmount = ethers.utils.formatEther(decoded[1]);
-                console.log(`Refund event: type=${refundType}, amount=${refundAmount}`);
-              }
-            } catch (decodeErr) {
-              console.warn("Couldn't decode stake refund event:", decodeErr);
-            }
-          }
-        }
-      } catch (eventsErr) {
-        console.warn("Error checking stake refund events:", eventsErr);
-      }
-      
-      // Alternative way to check if a proposal is in a state that would allow refund
-      try {
-        const currentState = await contracts.governance.getProposalState(proposalId);
-        const isRefundableState = 
-          currentState === PROPOSAL_STATES.DEFEATED || 
-          currentState === PROPOSAL_STATES.CANCELED || 
-          currentState === PROPOSAL_STATES.EXPIRED;
-        
-        console.log(`Proposal ${proposalId} is in ${getProposalStateLabel(currentState)} state, refundable: ${isRefundableState}, already refunded: ${stakeRefunded}`);
-      } catch (stateErr) {
-        console.warn("Error checking proposal state for refund eligibility:", stateErr);
-      }
-      
-      return {
-        id: proposalId,
-        title: title || `Proposal #${proposalId}`,
-        description: description || "No description available",
-        proposer,
-        deadline,
-        createdAt,
-        state: proposalState,
-        stateLabel: getProposalStateLabel(proposalState),
-        type: proposalType,
-        typeLabel: getProposalTypeLabel(proposalType),
-        yesVotes,
-        noVotes,
-        abstainVotes,
-        timelockTxHash,
-        hasVoted,
-        votedYes,
-        votedNo,
-        votedAbstain,
-        snapshotId,
-        target,
-        callData,
-        recipient,
-        amount,
-        token: externalToken,
-        stakeRefunded
-      };
-    } catch (err) {
-      console.warn(`Error loading proposal ${proposalId}:`, err);
-      return null;
+  // UPDATED: Fetch proposals directly from blockchain
+  const fetchProposals = useCallback(async () => {
+    if (!isConnected || !contractsReady || !contracts.governance) {
+      setLoading(false);
+      setProposals([]);
+      return;
     }
-  }, [contracts, account, getProposalStateLabel, getProposalTypeLabel, getVoteDetails, extractTitleAndDescription]);
+    
+    try {
+      setLoading(true);
+      setError(null);
+      
+      console.log("Fetching proposals directly from blockchain...");
+      
+      // Use our new direct blockchain loading method
+      const proposalData = await loadProposalsFromBlockchain(contracts);
+      
+      console.log(`Successfully loaded ${proposalData.length} proposals from blockchain`);
+      
+      // Process proposals to ensure they have all required fields
+      const processedProposals = proposalData.map(proposal => {
+        // Ensure the proposal has all required fields with defaults
+        return {
+          ...proposal,
+          id: proposal.id,
+          title: proposal.title || `Proposal #${proposal.id}`,
+          description: proposal.description || '',
+          state: typeof proposal.state === 'number' ? proposal.state : Number(proposal.state || 0),
+          stateLabel: proposal.stateLabel || getProposalStateLabel(Number(proposal.state || 0)),
+          type: typeof proposal.type === 'number' ? proposal.type : Number(proposal.type || 0),
+          typeLabel: proposal.typeLabel || getProposalTypeLabel(Number(proposal.type || 0)),
+          yesVotes: proposal.yesVotes || '0',
+          noVotes: proposal.noVotes || '0',
+          abstainVotes: proposal.abstainVotes || '0',
+          createdAt: proposal.createdAt || new Date(),
+          deadline: proposal.deadline || new Date(),
+          proposer: proposal.proposer || ethers.constants.AddressZero,
+          stakeRefunded: !!proposal.stakeRefunded,
+          
+          // Preserve HTML content if available
+          descriptionHtml: proposal.descriptionHtml || null,
+          hasHtml: !!proposal.descriptionHtml
+        };
+      });
+      
+      setProposals(processedProposals);
+      
+      // Collect unique proposers for token holder count
+      const uniqueProposers = new Set(
+        processedProposals
+          .map(p => p.proposer?.toLowerCase())
+          .filter(Boolean)
+      );
+      
+      setTokenHolders(uniqueProposers.size);
+      
+    } catch (err) {
+      console.error("Error fetching proposals:", err);
+      setError("Failed to fetch proposals: " + err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [
+    contracts,
+    isConnected,
+    contractsReady,
+    getProposalStateLabel,
+    getProposalTypeLabel
+  ]);
 
   // Helper function to extract meaningful error messages
   const extractErrorMessage = (error) => {
@@ -465,167 +282,6 @@ export function useProposals() {
     // Default case
     return `Failed to execute: ${error.message || error}`;
   };
-
-  // Fetch proposals using enhanced approach
-  const fetchProposals = useCallback(async () => {
-    if (!isConnected || !contractsReady || !contracts.governance) {
-      setLoading(false);
-      return;
-    }
-    
-    try {
-      setLoading(true);
-      setError(null);
-      
-      console.log("Fetching proposals from governance contract...");
-      
-      // Find the upper limit of proposal IDs more efficiently
-      let maxId = -1;
-      try {
-        // Try a binary search approach to find the highest valid proposal ID
-        let low = 0;
-        let high = 100; // Start with a reasonable upper bound
-        
-        // First, find an upper bound that's definitely too high
-        let foundTooHigh = false;
-        while (!foundTooHigh) {
-          try {
-            await contracts.governance.getProposalState(high);
-            // If this succeeds, our high is still valid, double it
-            low = high;
-            high = high * 2;
-            if (high > 10000) {
-              // Set a reasonable maximum to prevent infinite loops
-              foundTooHigh = true;
-            }
-          } catch (err) {
-            // Found a proposal ID that doesn't exist
-            foundTooHigh = true;
-          }
-        }
-        
-        // Now do binary search between known low and high
-        while (low <= high) {
-          const mid = Math.floor((low + high) / 2);
-          
-          try {
-            await contracts.governance.getProposalState(mid);
-            // If we can get the state, this ID exists
-            low = mid + 1;
-          } catch (err) {
-            // If we can't get the state, this ID doesn't exist
-            high = mid - 1;
-          }
-        }
-        
-        maxId = high; // The highest valid proposal ID
-        console.log("Highest valid proposal ID:", maxId);
-      } catch (err) {
-        console.error("Error finding max proposal ID:", err);
-        maxId = -1; // Reset if something went wrong
-      }
-      
-      // If we didn't find any proposals, try a linear search for a small range
-      if (maxId === -1) {
-        for (let i = 0; i < 20; i++) {
-          try {
-            await contracts.governance.getProposalState(i);
-            maxId = i;
-          } catch (err) {
-            // Skip if proposal doesn't exist
-          }
-        }
-      }
-      
-      if (maxId === -1) {
-        console.log("No proposals found");
-        setProposals([]);
-        setLoading(false);
-        return;
-      }
-      
-      // Fetch all proposals up to maxId with detailed information
-      const proposalData = [];
-      const uniqueProposers = new Set();
-      
-      // Load proposals in batches to avoid overloading the provider
-      const batchSize = 5;
-      for (let batch = 0; batch <= Math.ceil(maxId / batchSize); batch++) {
-        const batchPromises = [];
-        const startIdx = batch * batchSize;
-        const endIdx = Math.min(startIdx + batchSize, maxId + 1);
-        
-        for (let i = startIdx; i < endIdx; i++) {
-          batchPromises.push(getProposalDetailsFromEvents(i));
-        }
-        
-        const batchResults = await Promise.allSettled(batchPromises);
-        
-        batchResults.forEach(result => {
-          if (result.status === 'fulfilled' && result.value) {
-            proposalData.push(result.value);
-            if (result.value.proposer !== ethers.constants.AddressZero) {
-              uniqueProposers.add(result.value.proposer);
-            }
-          }
-        });
-        
-        // Short delay between batches to avoid rate limiting
-        if (batch < Math.ceil(maxId / batchSize)) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-        }
-      }
-      
-      console.log("Found", proposalData.length, "proposals");
-      
-      // Enhanced sorting logic to prioritize by state and recency
-      const sortedProposals = proposalData.sort((a, b) => {
-        // First sort by state priority
-        const statePriority = {
-          [PROPOSAL_STATES.ACTIVE]: 1,  // Active proposals have highest priority
-          [PROPOSAL_STATES.SUCCEEDED]: 2,
-          [PROPOSAL_STATES.QUEUED]: 3,
-          [PROPOSAL_STATES.EXECUTED]: 4,
-          [PROPOSAL_STATES.DEFEATED]: 5,
-          [PROPOSAL_STATES.CANCELED]: 6,
-          [PROPOSAL_STATES.EXPIRED]: 7
-        };
-        
-        const aStatePriority = statePriority[a.state] || 999;
-        const bStatePriority = statePriority[b.state] || 999;
-        
-        // If states are different, sort by state priority
-        if (aStatePriority !== bStatePriority) {
-          return aStatePriority - bStatePriority;
-        }
-        
-        // Then sort by creation date (newest first)
-        if (a.createdAt && b.createdAt) {
-          return new Date(b.createdAt) - new Date(a.createdAt);
-        }
-        
-        // Fall back to ID sorting (newest first)
-        return b.id - a.id;
-      });
-      
-      console.log("Sorted proposals:", sortedProposals.map(p => ({
-        id: p.id,
-        state: p.stateLabel,
-        created: p.createdAt ? new Date(p.createdAt).toISOString() : 'unknown'
-      })));
-      
-      setProposals(sortedProposals);
-      
-      // Update token holders count
-      setTokenHolders(uniqueProposers.size);
-      
-    } catch (err) {
-      console.error("Error fetching proposals:", err);
-      setError("Failed to fetch proposals: " + err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [contracts, isConnected, contractsReady, getProposalDetailsFromEvents]);
 
   // Updated createProposal function with enhanced error handling
   const createProposal = async (
@@ -818,6 +474,83 @@ export function useProposals() {
       console.error("Error creating proposal:", err);
       
       // Check for specific error messages in the error
+      const errorMessage = extractErrorMessage(err);
+      
+      setError(errorMessage);
+      setCreateProposalStatus({
+        isSubmitting: false,
+        error: errorMessage,
+        success: false
+      });
+      throw new Error(errorMessage);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Specialized function for signaling proposals to handle HTML content
+  const createSignalingProposal = async (description) => {
+    if (!isConnected || !contractsReady) throw new Error("Not connected");
+    if (!contracts.governance) throw new Error("Governance contract not initialized");
+    
+    try {
+      setLoading(true);
+      setError(null);
+      setCreateProposalStatus({
+        isSubmitting: true,
+        error: null,
+        success: false
+      });
+      
+      // Check if governance contract has the createSignalingProposal function
+      const hasSignalingFunction = typeof contracts.governance.createSignalingProposal === 'function';
+      
+      console.log(`Creating signaling proposal with${hasSignalingFunction ? '' : 'out'} dedicated function`);
+      
+      let tx;
+      
+      if (hasSignalingFunction) {
+        // Use the dedicated function if available
+        tx = await contracts.governance.createSignalingProposal(
+          description,
+          { gasLimit: 3000000 }
+        );
+      } else {
+        // Fall back to regular createProposal with SIGNALING type
+        tx = await contracts.governance.createProposal(
+          description,
+          PROPOSAL_TYPES.SIGNALING,
+          ethers.constants.AddressZero, // target (not used)
+          '0x', // callData (not used)
+          0, // amount (not used)
+          ethers.constants.AddressZero, // recipient (not used)
+          ethers.constants.AddressZero, // token (not used)
+          0, // newThreshold (not used)
+          0, // newQuorum (not used)
+          0, // newVotingDuration (not used)
+          0, // newTimelockDelay (not used)
+          { gasLimit: 3000000 }
+        );
+      }
+      
+      console.log("Signaling proposal creation transaction sent:", tx.hash);
+      
+      const receipt = await tx.wait();
+      console.log("Signaling proposal creation confirmed:", receipt);
+      
+      setCreateProposalStatus({
+        isSubmitting: false,
+        error: null,
+        success: true
+      });
+      
+      // Refresh proposals list
+      await fetchProposals();
+      
+      return true;
+    } catch (err) {
+      console.error("Error creating signaling proposal:", err);
+      
       const errorMessage = extractErrorMessage(err);
       
       setError(errorMessage);
@@ -1146,6 +879,7 @@ export function useProposals() {
     createProposalStatus,
     fetchProposals,
     createProposal,
+    createSignalingProposal,
     cancelProposal,
     queueProposal,
     executeProposal,
