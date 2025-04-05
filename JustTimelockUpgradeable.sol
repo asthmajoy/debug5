@@ -407,9 +407,7 @@ contract JustTimelockUpgradeable is
 // Modify the threat level detection logic in the getThreatLevel function to account for the new function signature:
 
 function getThreatLevel(address target, bytes memory data) public view returns (ThreatLevel) {
-    
     // Initialize with the lowest threat level
-
     ThreatLevel highestThreatLevel = ThreatLevel.LOW;
     
     // Check the target address threat level
