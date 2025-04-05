@@ -647,36 +647,20 @@ contract JustGovernanceUpgradeable is
     if (proposal.timelockTxHash == bytes32(0)) revert NoTxH();
     if (!timelock.queuedTransactions(proposal.timelockTxHash)) revert NotInTL();
     
-    // Update state BEFORE external call
+    // Execute through timelock BEFORE updating state
+    // This will revert if execution fails for any reason including timelock requirements
+    timelock.executeTransaction(proposal.timelockTxHash);
+    
+    // Only update state if timelock execution succeeds
     proposal.flags = proposal.flags.setExecuted();
     
-    // Emit event before external call
+    // Emit event after successful execution
     emit ProposalEvent(
         proposalId, 
         STATUS_EXECUTED, 
         msg.sender, 
         abi.encode(proposal.pType)
     );
-    
-    // Try to execute through timelock AFTER state changes
-    try timelock.executeTransaction(proposal.timelockTxHash) returns (bytes memory) {
-        // Success case - state already updated
-    } catch (bytes memory /*reason*/) {
-        // We've already marked the transaction as executed, so we don't need to do anything
-        // For better user experience, you might want to emit a separate event here indicating failure
-    }
-
-    // Just mark it executed if it's not already (very simple)
-    if (!proposal.flags.isExecuted()) {
-        proposal.flags = proposal.flags.setExecuted();
-        
-        emit ProposalEvent(
-            proposalId, 
-            STATUS_EXECUTED, 
-            msg.sender, 
-            abi.encode(proposal.pType)
-        );
-    }
 }
     function executeProposalLogic(
         uint256 proposalId,
