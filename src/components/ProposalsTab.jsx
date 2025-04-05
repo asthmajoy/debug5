@@ -150,7 +150,6 @@ function getStatusColor(status) {
       return 'bg-yellow-100 text-yellow-800';
     case 'succeeded':
       return 'bg-green-100 text-green-800';
-    case 'pending':
     case 'queued':
     case 'in timelock':
       return 'bg-blue-100 text-blue-800';
@@ -186,6 +185,7 @@ const ProposalsTab = ({
   const [expandedProposalId, setExpandedProposalId] = useState(null);
   const [copiedText, setCopiedText] = useState(null);
   const [newProposal, setNewProposal] = useState({
+    
     title: '',
     description: '',
     descriptionHtml: '',
@@ -211,14 +211,43 @@ const ProposalsTab = ({
   const [timelockInfo, setTimelockInfo] = useState({});
   
   // Transaction status tracking
-  const [pendingTxs, setPendingTxs] = useState({});
+  const [queuedTxs, setQueuedTxs] = useState({});
   const [loading, setLoading] = useState(globalLoading);
   const { isDarkMode } = useDarkMode();
 
   const [creationStatus, setCreationStatus] = useState({
-    status: null, // 'pending', 'success', 'error'
+    status: null, // 'queued', 'success', 'error'
     message: ''
   });
+
+  // NEW: Add state for processed proposals to solve HTML rendering inconsistency
+  const [processedProposals, setProcessedProposals] = useState([]);
+
+  // Process proposals to extract HTML content properly
+  useEffect(() => {
+    if (proposals && proposals.length > 0) {
+      // Create a copy of proposals and process HTML content
+      const newProcessedProposals = proposals.map(proposal => {
+        // Create a new object to avoid mutating the original
+        const processedProposal = { ...proposal };
+        
+        // Process HTML content if needed
+        if (processedProposal.description && !processedProposal.descriptionHtml) {
+          const parsed = parseProposalDescription(processedProposal.description);
+          if (parsed.descriptionHtml) {
+            processedProposal.descriptionHtml = parsed.descriptionHtml;
+          }
+        }
+        
+        return processedProposal;
+      });
+      
+      // Update state with processed proposals
+      setProcessedProposals(newProcessedProposals);
+    } else {
+      setProcessedProposals([]);
+    }
+  }, [proposals]);
 
   // New function to check timelock status for a proposal
   const checkTimelockStatus = async (proposalId) => {
@@ -229,7 +258,7 @@ const ProposalsTab = ({
       const timelockContract = contracts.timelock.connect(provider);
       
       // Get the current proposal from our local data
-      const existingProposal = proposals.find(p => Number(p.id) === Number(proposalId));
+      const existingProposal = processedProposals.find(p => Number(p.id) === Number(proposalId));
       if (!existingProposal) {
         console.log(`Proposal #${proposalId} not found in local data`);
         return null;
@@ -316,7 +345,7 @@ const ProposalsTab = ({
       } else if (isCanceled) {
         timelockStatus = 'canceled';
       } else if (currentTimestamp < etaTimestamp) {
-        timelockStatus = 'pending';
+        timelockStatus = 'queued';
         const remainingTime = etaTimestamp - currentTimestamp;
         console.log(`Proposal #${proposalId} is in timelock. ${remainingTime} seconds remaining.`);
       } else {
@@ -370,29 +399,28 @@ const ProposalsTab = ({
               
               // Update UI state with the verified information
               if (timelockStatus) {
-                // Find the proposal in the list and update it
-                const proposalIndex = proposals.findIndex(p => Number(p.id) === Number(proposalId));
-                
-                if (proposalIndex !== -1) {
-                  // Update the proposal with timelock information
-                  const updatedProposal = {
-                    ...proposals[proposalIndex],
-                    state: newState,
-                    stateLabel: getProposalStateLabel(newState),
-                    displayStateLabel: timelockStatus.status === 'pending' ? 'In Timelock' : 
-                                      timelockStatus.status === 'ready' ? 'Ready For Execution' : 
-                                      getProposalStateLabel(newState),
-                    timelockStatus: timelockStatus.status,
-                    timelockEta: timelockStatus.eta,
-                    isInTimelock: timelockStatus.isInTimelock,
-                    timelockRemaining: timelockStatus.remainingTime,
-                    timelockTxHash: timelockStatus.txHash,
-                    readyForExecution: timelockStatus.readyForExecution
-                  };
-                  
-                  // Update the proposal in our array
-                  proposals[proposalIndex] = updatedProposal;
-                }
+                // Create updated proposal with timelock information
+                setProcessedProposals(prevProposals => {
+                  return prevProposals.map(p => {
+                    if (Number(p.id) === Number(proposalId)) {
+                      return {
+                        ...p,
+                        state: newState,
+                        stateLabel: getProposalStateLabel(newState),
+                        displayStateLabel: timelockStatus.status === 'queued' ? 'In Timelock' : 
+                                        timelockStatus.status === 'ready' ? 'Ready For Execution' : 
+                                        getProposalStateLabel(newState),
+                        timelockStatus: timelockStatus.status,
+                        timelockEta: timelockStatus.eta,
+                        isInTimelock: timelockStatus.isInTimelock,
+                        timelockRemaining: timelockStatus.remainingTime,
+                        timelockTxHash: timelockStatus.txHash,
+                        readyForExecution: timelockStatus.readyForExecution
+                      };
+                    }
+                    return p;
+                  });
+                });
               }
             }
           } catch (stateError) {
@@ -421,7 +449,7 @@ const ProposalsTab = ({
   useEffect(() => {
     return () => {
       setTransactionError('');
-      setPendingTxs({});
+      setQueuedTxs({});
     };
   }, []);
   
@@ -437,10 +465,10 @@ const ProposalsTab = ({
   // Fetch timelock information for queued proposals
   useEffect(() => {
     // Only attempt to fetch timelock info if we have contracts and proposals
-    if (contracts?.timelock && proposals?.length > 0) {
+    if (contracts?.timelock && processedProposals?.length > 0) {
       const fetchAllTimelockInfo = async () => {
         try {
-          for (const proposal of proposals) {
+          for (const proposal of processedProposals) {
             // Only fetch for queued proposals
             if (proposal.stateLabel?.toLowerCase() === 'queued') {
               try {
@@ -582,18 +610,23 @@ const ProposalsTab = ({
       
       fetchAllTimelockInfo();
     }
-  }, [contracts, proposals]);
+  }, [contracts, processedProposals]);
 
   // New effect for checking timelock status for queued proposals
   useEffect(() => {
     // Only run if we have proposals and contracts
-    if (!proposals?.length || !contracts?.timelock) return;
+    if (!processedProposals?.length || !contracts?.timelock) return;
     
     const checkTimelockForQueuedProposals = async () => {
       console.log("Checking timelock status for queued proposals...");
       
+      // Create a copy of processed proposals to update
+      const updatedProposals = [...processedProposals];
+      let hasUpdates = false;
+      
       // Process each proposal that's in QUEUED state
-      for (const proposal of proposals) {
+      for (let i = 0; i < updatedProposals.length; i++) {
+        const proposal = updatedProposals[i];
         try {
           // Only check proposals in QUEUED state
           if (Number(proposal.state) === PROPOSAL_STATES.QUEUED || 
@@ -606,47 +639,51 @@ const ProposalsTab = ({
               console.log(`Found timelock status for proposal #${proposal.id}:`, timelockStatus);
               
               // Update the proposal object with timelock information
-              proposal.timelockStatus = timelockStatus.status;
-              proposal.timelockEta = timelockStatus.eta;
-              proposal.isInTimelock = timelockStatus.isInTimelock;
-              proposal.timelockRemaining = timelockStatus.remainingTime;
-              proposal.readyForExecution = timelockStatus.readyForExecution;
+              updatedProposals[i] = {
+                ...proposal,
+                timelockStatus: timelockStatus.status,
+                timelockEta: timelockStatus.eta,
+                isInTimelock: timelockStatus.isInTimelock,
+                timelockRemaining: timelockStatus.remainingTime,
+                readyForExecution: timelockStatus.readyForExecution,
+                // Set a displayStateLabel that correctly shows timelock status
+                displayStateLabel: timelockStatus.executed ? 'Executed' :
+                                  timelockStatus.canceled ? 'Canceled' :
+                                  timelockStatus.readyForExecution ? 'Ready For Execution' :
+                                  timelockStatus.isInTimelock ? 'In Timelock' : proposal.stateLabel
+              };
               
-              // Set a displayStateLabel that correctly shows timelock status
-              if (timelockStatus.executed) {
-                proposal.displayStateLabel = 'Executed';
-              } else if (timelockStatus.canceled) {
-                proposal.displayStateLabel = 'Canceled';
-              } else if (timelockStatus.readyForExecution) {
-                proposal.displayStateLabel = 'Ready For Execution';
-              } else if (timelockStatus.isInTimelock) {
-                proposal.displayStateLabel = 'In Timelock';
-              }
+              hasUpdates = true;
             }
           }
         } catch (err) {
           console.warn(`Error processing proposal #${proposal.id}:`, err);
         }
       }
+      
+      // Only update state if there were changes
+      if (hasUpdates) {
+        setProcessedProposals(updatedProposals);
+      }
     };
     
     checkTimelockForQueuedProposals();
-  }, [proposals, contracts?.timelock]);
+  }, [processedProposals, contracts?.timelock]);
   
-  // Watch pending transactions
+  // Watch queued transactions
   useEffect(() => {
-    const checkPendingTxs = async () => {
-      const updatedPendingTxs = { ...pendingTxs };
+    const checkQueuedTxs = async () => {
+      const updatedQueuedTxs = { ...queuedTxs };
       let hasChanges = false;
       
-      for (const [txId, txInfo] of Object.entries(pendingTxs)) {
-        if (txInfo.status === 'pending' && txInfo.hash) {
+      for (const [txId, txInfo] of Object.entries(queuedTxs)) {
+        if (txInfo.status === 'queued' && txInfo.hash) {
           try {
             const provider = new ethers.providers.Web3Provider(window.ethereum);
             const receipt = await provider.getTransactionReceipt(txInfo.hash);
             
             if (receipt) {
-              updatedPendingTxs[txId] = {
+              updatedQueuedTxs[txId] = {
                 ...txInfo,
                 status: receipt.status ? 'success' : 'failed',
                 receipt
@@ -656,7 +693,7 @@ const ProposalsTab = ({
               // Auto-dismiss successful transactions after 5 seconds
               if (receipt.status) {
                 setTimeout(() => {
-                  setPendingTxs(prev => {
+                  setQueuedTxs(prev => {
                     const updated = { ...prev };
                     delete updated[txId];
                     return updated;
@@ -671,33 +708,18 @@ const ProposalsTab = ({
       }
       
       if (hasChanges) {
-        setPendingTxs(updatedPendingTxs);
+        setQueuedTxs(updatedQueuedTxs);
       }
     };
     
-    const interval = setInterval(checkPendingTxs, 10000);
+    const interval = setInterval(checkQueuedTxs, 10000);
     return () => clearInterval(interval);
-  }, [pendingTxs]);
+  }, [queuedTxs]);
 
   // Update global loading state
   useEffect(() => {
-    setLoading(globalLoading || Object.values(pendingTxs).some(tx => tx.status === 'pending'));
-  }, [globalLoading, pendingTxs]);
-
-  // Process proposals to extract HTML content
-  useEffect(() => {
-    if (proposals && proposals.length > 0) {
-      // Process each proposal to extract HTML content if available
-      proposals.forEach(proposal => {
-        if (proposal.description && !proposal.descriptionHtml) {
-          const parsed = parseProposalDescription(proposal.description);
-          if (parsed.descriptionHtml) {
-            proposal.descriptionHtml = parsed.descriptionHtml;
-          }
-        }
-      });
-    }
-  }, [proposals]);
+    setLoading(globalLoading || Object.values(queuedTxs).some(tx => tx.status === 'queued'));
+  }, [globalLoading, queuedTxs]);
 
   const toggleProposalDetails = (proposalId) => {
     if (expandedProposalId === proposalId) {
@@ -872,7 +894,7 @@ const ProposalsTab = ({
     e.preventDefault();
     setSubmitting(true);
     setTransactionError('');
-    setCreationStatus({ status: 'pending', message: 'Creating proposal...' });
+    setCreationStatus({ status: 'queued', message: 'Creating proposal...' });
     
     // Check if this is a Community Vote proposal by string matching
     const isCommunityVoteProposal = 
@@ -1107,11 +1129,11 @@ const ProposalsTab = ({
     // Generate a unique transaction ID
     const txId = `${actionName}-${proposalId}-${Date.now()}`;
     
-    // Set up pending transaction tracking
-    setPendingTxs(prev => ({
+    // Set up queued transaction tracking
+    setQueuedTxs(prev => ({
       ...prev,
       [txId]: { 
-        status: 'pending', 
+        status: 'queued', 
         action: actionName, 
         proposalId, 
         startTime: Date.now(),
@@ -1168,12 +1190,12 @@ const ProposalsTab = ({
           console.log("Queue transaction sent:", tx.hash);
           
           // Track transaction
-          setPendingTxs(prev => ({
+          setQueuedTxs(prev => ({
             ...prev,
             [txId]: {
               ...prev[txId],
               hash: tx.hash,
-              status: 'pending',
+              status: 'queued',
               lastChecked: Date.now()
             }
           }));
@@ -1194,7 +1216,7 @@ const ProposalsTab = ({
             console.log("Direct queueing failed, trying alternative method...");
             
             // Find the proposal by ID
-            const proposal = proposals.find(p => p.id === Number(proposalId));
+            const proposal = processedProposals.find(p => p.id === Number(proposalId));
             if (!proposal) {
               throw new Error("Proposal not found");
             }
@@ -1300,12 +1322,12 @@ const ProposalsTab = ({
               console.log("Alternative queue transaction sent:", tx.hash);
               
               // Set up tracking for this alternative transaction
-              setPendingTxs(prev => ({
+              setQueuedTxs(prev => ({
                 ...prev,
                 [txId]: {
                   ...prev[txId],
                   hash: tx.hash,
-                  status: 'pending',
+                  status: 'queued',
                   lastChecked: Date.now(),
                   isAlternativeMethod: true
                 }
@@ -1350,12 +1372,12 @@ const ProposalsTab = ({
           console.log("Execute transaction sent:", tx.hash);
           
           // Update tracking
-          setPendingTxs(prev => ({
+          setQueuedTxs(prev => ({
             ...prev,
             [txId]: {
               ...prev[txId],
               hash: tx.hash,
-              status: 'pending',
+              status: 'queued',
               lastChecked: Date.now()
             }
           }));
@@ -1365,7 +1387,7 @@ const ProposalsTab = ({
         } catch (error) {
           console.error("Error executing proposal:", error);
           
-          setPendingTxs(prev => ({
+          setQueuedTxs(prev => ({
             ...prev,
             [txId]: {
               ...prev[txId],
@@ -1450,12 +1472,12 @@ const ProposalsTab = ({
           
           console.log("Claim refund transaction sent:", tx.hash);
           
-          setPendingTxs(prev => ({
+          setQueuedTxs(prev => ({
             ...prev,
             [txId]: {
               ...prev[txId],
               hash: tx.hash,
-              status: 'pending',
+              status: 'queued',
               lastChecked: Date.now()
             }
           }));
@@ -1466,7 +1488,7 @@ const ProposalsTab = ({
           console.log("Claim refund transaction confirmed:", receipt);
           
           // Update the transaction status
-          setPendingTxs(prev => ({
+          setQueuedTxs(prev => ({
             ...prev,
             [txId]: {
               ...prev[txId],
@@ -1480,7 +1502,7 @@ const ProposalsTab = ({
           
           // Auto-dismiss success notification
           setTimeout(() => {
-            setPendingTxs(prev => {
+            setQueuedTxs(prev => {
               const updated = {...prev};
               delete updated[txId];
               return updated;
@@ -1517,7 +1539,7 @@ const ProposalsTab = ({
             errorMessage = 'This proposal is not in a state that allows refunds (must be Defeated, Canceled, or Expired).';
           }
           
-          setPendingTxs(prev => ({
+          setQueuedTxs(prev => ({
             ...prev,
             [txId]: {
               ...prev[txId],
@@ -1539,7 +1561,7 @@ const ProposalsTab = ({
           const result = await action(proposalId);
           
           // Update transaction tracking on success
-          setPendingTxs(prev => ({
+          setQueuedTxs(prev => ({
             ...prev,
             [txId]: { 
               ...prev[txId],
@@ -1562,7 +1584,7 @@ const ProposalsTab = ({
           console.error(`Error cancelling proposal:`, error);
           
           // Update transaction tracking on failure
-          setPendingTxs(prev => ({
+          setQueuedTxs(prev => ({
             ...prev,
             [txId]: { 
               ...prev[txId],
@@ -1585,7 +1607,7 @@ const ProposalsTab = ({
       console.error(`Error ${actionName} proposal:`, error);
       
       // Update transaction tracking on failure
-      setPendingTxs(prev => ({
+      setQueuedTxs(prev => ({
         ...prev,
         [txId]: { 
           ...prev[txId],
@@ -1601,7 +1623,7 @@ const ProposalsTab = ({
   };
 
   // Filter out proposals based on the selected filter type
-  const filteredProposals = proposals?.filter(p => {
+  const filteredProposals = processedProposals?.filter(p => {
     // Safety check for null/undefined proposal
     if (!p) return false;
     
@@ -1610,9 +1632,9 @@ const ProposalsTab = ({
     
     if (proposalType === 'all') {
       return true;
-    } else if (proposalType === 'pending') {
-      // Include anything with "pending", "queued", "in timelock", or "ready"
-      return displayState.includes('pending') || 
+    } else if (proposalType === 'queued') {
+      // Include anything with "queued", "queued", "in timelock", or "ready"
+      return displayState.includes('queued') || 
              displayState.includes('queued') || 
              displayState.includes('timelock') || 
              displayState.includes('ready');
@@ -1747,7 +1769,7 @@ const ProposalsTab = ({
 
   // Improved transaction notification card with better error message handling
   const renderTransactionNotifications = () => {
-    const txEntries = Object.entries(pendingTxs);
+    const txEntries = Object.entries(queuedTxs);
     if (txEntries.length === 0) return null;
     
     return (
@@ -1756,7 +1778,7 @@ const ProposalsTab = ({
           <div 
             key={id} 
             className={`rounded-xl shadow-xl p-5 transform transition-all duration-300 ${
-              tx.status === 'pending' ? 
+              tx.status === 'queued' ? 
                 isDarkMode ? 'bg-blue-900/30 border-2 border-blue-700/70 backdrop-blur-sm' : 'bg-blue-50 border-2 border-blue-300' :
               tx.status === 'success' ? 
                 isDarkMode ? 'bg-green-900/30 border-2 border-green-700/70 backdrop-blur-sm' : 'bg-green-50 border-2 border-green-300' :
@@ -1765,7 +1787,7 @@ const ProposalsTab = ({
           >
             <div className="flex items-start">
               <div className="flex-shrink-0 mt-1">
-                {tx.status === 'pending' ? (
+                {tx.status === 'queued' ? (
                   <div className={`h-8 w-8 border-3 rounded-full animate-spin ${
                     isDarkMode ? 'border-blue-400 border-t-transparent' : 'border-blue-500 border-t-transparent'
                   }`}></div>
@@ -1777,12 +1799,12 @@ const ProposalsTab = ({
               </div>
               <div className="ml-4 flex-1 overflow-hidden">
                 <p className={`text-lg font-semibold ${isDarkMode ? 'text-gray-100' : 'text-gray-900'}`}>
-                  {tx.status === 'pending' ? 'Transaction in Progress' :
+                  {tx.status === 'queued' ? 'Transaction in Progress' :
                    tx.status === 'success' ? 'Transaction Successful' :
                    'Transaction Failed'}
                 </p>
                 <p className={`mt-2 text-base ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-                  {tx.status === 'pending' 
+                  {tx.status === 'queued' 
                     ? `${tx.action} proposal #${tx.proposalId}...` 
                     : tx.status === 'success'
                     ? `Successfully ${tx.action} proposal #${tx.proposalId}`
@@ -1826,7 +1848,7 @@ const ProposalsTab = ({
                     <button 
                       onClick={() => {
                         // First remove the current transaction notification
-                        setPendingTxs(prev => {
+                        setQueuedTxs(prev => {
                           const updated = {...prev};
                           delete updated[id];
                           return updated;
@@ -1856,7 +1878,7 @@ const ProposalsTab = ({
               <div className="ml-4 flex-shrink-0 flex">
                 <button
                   onClick={() => {
-                    setPendingTxs(prev => {
+                    setQueuedTxs(prev => {
                       const updated = {...prev};
                       delete updated[id];
                       return updated;
@@ -1886,14 +1908,14 @@ const ProposalsTab = ({
     
     return (
       <div className={`mb-4 p-4 rounded-lg border ${
-        creationStatus.status === 'pending' ?
+        creationStatus.status === 'queued' ?
           (isDarkMode ? 'bg-blue-900/30 border-blue-700 text-blue-200' : 'bg-blue-100 border-blue-300 text-blue-800') :
         creationStatus.status === 'success' ?
           (isDarkMode ? 'bg-green-900/30 border-green-700 text-green-200' : 'bg-green-100 border-green-300 text-green-800') :
           (isDarkMode ? 'bg-red-900/30 border-red-700 text-red-200' : 'bg-red-100 border-red-300 text-red-800')
       }`}>
         <div className="flex items-center">
-          {creationStatus.status === 'pending' ? (
+          {creationStatus.status === 'queued' ? (
             <div className={`h-5 w-5 border-2 rounded-full animate-spin mr-3 ${
               isDarkMode ? 'border-blue-400 border-t-transparent' : 'border-blue-500 border-t-transparent'
             }`}></div>
@@ -1946,10 +1968,11 @@ const ProposalsTab = ({
           Create Proposal
         </button>
       </div>
+
       {/* Filter options */}
       <div className="bg-white p-4 rounded-lg shadow mb-6 dark:bg-gray-800 dark:shadow-gray-700/20">
         <div className="flex flex-wrap gap-2">
-          {['all', 'active', 'pending', 'succeeded', 'executed', 'defeated', 'canceled', 'expired'].map(type => {
+          {['all', 'active', 'queued', 'succeeded', 'executed', 'defeated', 'canceled', 'expired'].map(type => {
             // Get appropriate colors for each filter type based on status colors
             let buttonColors;
             if (proposalType === type) {
@@ -1961,7 +1984,7 @@ const ProposalsTab = ({
                 case 'active':
                   buttonColors = 'bg-yellow-200 text-yellow-800 dark:bg-yellow-900/50 dark:text-yellow-200';
                   break;
-                case 'pending':
+                case 'queued':
                   buttonColors = 'bg-blue-200 text-blue-800 dark:bg-blue-900/50 dark:text-blue-200';
                   break;
                 case 'succeeded':
@@ -1989,7 +2012,7 @@ const ProposalsTab = ({
                 case 'active':
                   buttonColors = 'bg-yellow-50 text-yellow-600 hover:bg-yellow-100 hover:text-yellow-700 dark:bg-gray-700 dark:text-yellow-300/70 dark:hover:bg-yellow-900/30 dark:hover:text-yellow-300';
                   break;
-                case 'pending':
+                case 'queued':
                   buttonColors = 'bg-blue-50 text-blue-600 hover:bg-blue-100 hover:text-blue-700 dark:bg-gray-700 dark:text-blue-300/70 dark:hover:bg-blue-900/30 dark:hover:text-blue-300';
                   break;
                 case 'succeeded':
