@@ -98,7 +98,9 @@ export function useProposals() {
       [PROPOSAL_TYPES.GOVERNANCE_CHANGE]: "Governance Parameter Update",
       [PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER]: "External Token Transfer",
       [PROPOSAL_TYPES.TOKEN_MINT]: "Token Issuance",
-      [PROPOSAL_TYPES.TOKEN_BURN]: "Token Consolidation"
+      [PROPOSAL_TYPES.TOKEN_BURN]: "Token Consolidation",
+      [PROPOSAL_TYPES.SIGNALING]: "Binding Community Vote"
+
     };
     
     return typeLabels[type] || "Unknown";

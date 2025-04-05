@@ -56,27 +56,29 @@ const ProposalQuillEditor = ({
 
   // Special placeholder for signaling proposals
   const signalingPlaceholder = isSignalingProposal 
-    ? "Describe your signaling proposal in detail. Include:\n• The specific question or topic for community consideration\n• Background information and context\n• Options or perspectives to consider\n• Expected outcome of this signaling proposal"
+    ? "Describe your community vote proposal in detail, please include:\n• The specific question or topic for community consideration\n• Background information and context\n• Options or perspectives to consider\n• Expected outcome of this signaling proposal"
     : placeholder;
 
     const isSyntaxAvailable = typeof window !== 'undefined' && window.hljs;
 
-  // Quill editor modules configuration
+  // Quill editor modules configuration - UPDATED WITH COLORS
   const modules = {
-  toolbar: [
-    [{ 'header': [1, 2, 3, false] }],
-    ['bold', 'italic', 'underline'],
-    [{'list': 'ordered'}, {'list': 'bullet'}],
-    ['link'],
-    ['clean']
-  ]
-};
+    toolbar: [
+      [{ 'header': [1, 2, 3, false] }],
+      ['bold', 'italic', 'underline'],
+      [{'list': 'ordered'}, {'list': 'bullet'}],
+      [{ 'color': [] }, { 'background': [] }], // Added color options
+      ['link'],
+      ['clean']
+    ]
+  };
 
-  // Quill editor formats configuration
+  // Quill editor formats configuration - UPDATED WITH COLORS
   const formats = [
     'header',
     'bold', 'italic', 'underline',
     'list', 'bullet',
+    'color', 'background', // Added color formats
     'link'
   ];
 
@@ -98,8 +100,8 @@ const ProposalQuillEditor = ({
             style={headerBgStyle}>
           <div className="flex items-center space-x-2">
             {isSignalingProposal && (
-              <span className="bg-indigo-100 text-indigo-800 px-2 py-1 rounded-md text-xs font-medium">
-                Signaling Proposal
+              <span className="">
+               
               </span>
             )}
             <h3 className="text-sm font-medium editor-mode-label" style={modeLabelStyle}>
@@ -126,7 +128,7 @@ const ProposalQuillEditor = ({
           </div>
         </div>
 
-        {/* Editor or Preview */}
+        {/* Editor or Preview - UPDATED WITH OVERFLOW SCROLLING */}
         <div style={{ minHeight: height }}>
           {isPreviewMode ? (
             <div 
@@ -139,7 +141,7 @@ const ProposalQuillEditor = ({
               dangerouslySetInnerHTML={{ __html: editorValue }}
             />
           ) : (
-            <div style={{ height }}>
+            <div className="quill-editor-container" style={{ minHeight: height }}>
               <ReactQuill
                 theme="snow"
                 value={editorValue}
@@ -148,7 +150,6 @@ const ProposalQuillEditor = ({
                 formats={formats}
                 placeholder={signalingPlaceholder}
                 readOnly={readOnly}
-                style={{ height: '100%' }}
               />
             </div>
           )}
@@ -156,20 +157,34 @@ const ProposalQuillEditor = ({
 
         {/* Information footer for signaling proposals */}
         {isSignalingProposal && (
-          <div className="bg-indigo-50 p-3 text-sm text-indigo-700 border-t border-indigo-100">
-            <p>
-              Signaling proposals are used for community discussion and polling without executing on-chain actions.
-              Be clear about what you're asking the community to signal on.
-            </p>
+          <div >
+           
           </div>
         )}
       </div>
       
-      {/* Add custom styles for dark mode and placeholder color */}
+      {/* Add custom styles for dark mode, placeholder color, and SCROLLING */}
       <style jsx>{`
         /* Base editor styles */
         .ql-editor p {
           margin-bottom: 10px;
+        }
+        
+        /* Make editor scrollable when content exceeds height */
+        .quill-editor-container {
+          display: flex;
+          flex-direction: column;
+        }
+        
+        .quill-editor-container .ql-container {
+          overflow-y: auto;
+        }
+        
+        /* Set the editor to expand normally but scroll when content exceeds */
+        .ql-editor {
+          min-height: 230px; /* Give enough room for normal editing */
+          max-height: 65vh; /* Limit maximum height and enable scrolling */
+          overflow-y: auto;
         }
         
         /* Dark mode styles */
@@ -216,6 +231,23 @@ const ProposalQuillEditor = ({
           background-color: #2d2d2d;
           border-color: #444;
           color: #e0e0e0;
+        }
+        
+        /* Color picker styles for dark mode */
+        .quill-editor-dark .ql-color .ql-picker-label,
+        .quill-editor-dark .ql-background .ql-picker-label {
+          padding: 0 4px;
+        }
+        
+        .quill-editor-dark .ql-color .ql-picker-options,
+        .quill-editor-dark .ql-background .ql-picker-options {
+          padding: 3px 5px;
+        }
+        
+        /* Make color swatches more visible in dark mode */
+        .quill-editor-dark .ql-color-picker .ql-picker-item,
+        .quill-editor-dark .ql-background-picker .ql-picker-item {
+          border: 1px solid #444;
         }
       `}</style>
     </div>

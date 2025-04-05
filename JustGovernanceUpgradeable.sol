@@ -591,46 +591,53 @@ contract JustGovernanceUpgradeable is
     }
     
    function queueProposal(uint256 proposalId) external
-        whenNotPaused
-        validActiveProposal(proposalId)
-        nonReentrant
-    {
-        if (getProposalState(proposalId) != ProposalState.Succeeded) revert NotSucc();
-        
-        ProposalData storage proposal = _proposals[proposalId];
-        
-        // Update queued flag BEFORE external interaction
-        proposal.flags = proposal.flags.setQueued();
-        
-        // Encode all necessary proposal parameters regardless of proposal type
-        bytes memory data = abi.encodeWithSelector(
-            this.executeProposalLogic.selector,
-            proposalId,
-            proposal.pType,
-            proposal.target,
-            proposal.recipient,
-            proposal.amount,
-            proposal.token
-        );
-        
-        // Let the timelock determine the appropriate threat level
-        bytes32 txHash = timelock.queueTransactionWithThreatLevel(
-            address(this),
-            0,
-            data
-        );
-        
-        // Update txHash after external call (this is ok as it's just storing the result)
-        proposal.timelockTxHash = txHash;
-        
-        emit TimelockTransactionSubmitted(proposalId, txHash);
-        emit ProposalEvent(proposalId, STATUS_QUEUED, msg.sender, abi.encode(txHash));
-    }
+    whenNotPaused
+    validActiveProposal(proposalId)
+    nonReentrant
+{
+    // Check token balance for proposal queueing
+    if (justToken.balanceOf(msg.sender) < govParams.proposalCreationThreshold)
+        revert InsBal(justToken.balanceOf(msg.sender), govParams.proposalCreationThreshold);
     
+    if (getProposalState(proposalId) != ProposalState.Succeeded) revert NotSucc();
+    
+    ProposalData storage proposal = _proposals[proposalId];
+    
+    // Update queued flag BEFORE external interaction
+    proposal.flags = proposal.flags.setQueued();
+    
+    // Encode all necessary proposal parameters regardless of proposal type
+    bytes memory data = abi.encodeWithSelector(
+        this.executeProposalLogic.selector,
+        proposalId,
+        proposal.pType,
+        proposal.target,
+        proposal.recipient,
+        proposal.amount,
+        proposal.token
+    );
+    
+    // Let the timelock determine the appropriate threat level
+    bytes32 txHash = timelock.queueTransactionWithThreatLevel(
+        address(this),
+        0,
+        data
+    );
+    
+    // Update txHash after external call (this is ok as it's just storing the result)
+    proposal.timelockTxHash = txHash;
+    
+    emit TimelockTransactionSubmitted(proposalId, txHash);
+    emit ProposalEvent(proposalId, STATUS_QUEUED, msg.sender, abi.encode(txHash));
+}
    function executeProposal(uint256 proposalId) external
     whenNotPaused
     nonReentrant
 {
+    // Check token balance for proposal execution
+    if (justToken.balanceOf(msg.sender) < govParams.proposalCreationThreshold)
+        revert InsBal(justToken.balanceOf(msg.sender), govParams.proposalCreationThreshold);
+    
     // Check if proposal exists
     if (proposalId >= _proposals.length) revert InvPId();
     

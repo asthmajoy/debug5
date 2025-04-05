@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
 import useGovernanceParams from '../hooks/useGovernanceParams';
 import { PROPOSAL_TYPES } from '../utils/constants';
-import { Clock, Check, X, X as XIcon, Calendar, Users, BarChart2, Settings, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Clock, Check, X, X as XIcon, Calendar, Users, BarChart2, Settings, ChevronLeft, ChevronRight,  ChevronUp, ChevronDown } from 'lucide-react';
 import { PROPOSAL_STATES, VOTE_TYPES, THREAT_LEVELS } from '../utils/constants';
 import { formatCountdown } from '../utils/formatters';
 import Loader from './Loader';
@@ -160,6 +160,8 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
   const [currentThreatLevel, setCurrentThreatLevel] = useState(THREAT_LEVELS.LOW);
   const [threatLevelDelays, setThreatLevelDelays] = useState({});
   const [autoScroll, setAutoScroll] = useState(true);
+  
+  const [isGovExpanded, setIsGovExpanded] = useState(true);
   
   // Debug logging for proposals
   useEffect(() => {
@@ -1110,41 +1112,23 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
     if (proposal.typeLabel) {
       return proposal.typeLabel;
     }
-
-
-    // Helper function to get human-readable proposal type label
-    function getProposalTypeLabel(type) {
-      const typeLabels = {
-        [PROPOSAL_TYPES.GENERAL]: "Contract Interaction",
-        [PROPOSAL_TYPES.WITHDRAWAL]: "ETH Withdrawal",
-        [PROPOSAL_TYPES.TOKEN_TRANSFER]: "Treasury Transfer",
-        [PROPOSAL_TYPES.GOVERNANCE_CHANGE]: "Governance Parameter Update",
-        [PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER]: "External Token Transfer",
-        [PROPOSAL_TYPES.TOKEN_MINT]: "Token Issuance",
-        [PROPOSAL_TYPES.TOKEN_BURN]: "Token Consolidation",
-        [PROPOSAL_TYPES.SIGNALING]: "Binding Community Vote"
-      };
-      
-      return typeLabels[type] || "Unknown";
-    }
     
+    // Define the type labels mapping
+    const typeLabels = {
+      [PROPOSAL_TYPES.GENERAL]: "Contract Interaction",
+      [PROPOSAL_TYPES.WITHDRAWAL]: "ETH Withdrawal",
+      [PROPOSAL_TYPES.TOKEN_TRANSFER]: "Treasury Transfer",
+      [PROPOSAL_TYPES.GOVERNANCE_CHANGE]: "Governance Parameter Update",
+      [PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER]: "External Token Transfer",
+      [PROPOSAL_TYPES.TOKEN_MINT]: "Token Issuance",
+      [PROPOSAL_TYPES.TOKEN_BURN]: "Token Consolidation",
+      [PROPOSAL_TYPES.SIGNALING]: "Binding Community Vote"
+    };
     
-    // Fallback to numeric type if available - with updated display names
-    if (proposal.type !== undefined) {
-      switch (parseInt(proposal.type)) {
-        case 0: return "Community Vote";
-        case 1: return "ETH Withdrawal";
-        case 2: return "Treasury Transfer";
-        case 3: return "Governance Parameter Update";
-        case 4: return "External Token Transfer";
-        case 5: return "Token Issuance";
-        case 6: return "Token Consolidation";
-        default: return "Community Vote";
-      }
-    }
-    
-    return "Community Vote";
+    // Return the type label based on the proposal type
+    return typeLabels[proposal.type] || "Binding Community Vote";
   };
+  
   
   // Helper to get proposal state label and color
   const getProposalStateInfo = (proposal) => {
@@ -1257,82 +1241,113 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
         <p className="text-gray-500 dark:text-gray-400">Cast your votes on active proposals</p>
       </div>
       
-      {/* Governance Parameters Section */}
-      <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow mb-6">
-        <div className="mb-4">
-          <div className="flex items-center">
-            <Settings className="h-5 w-5 text-indigo-600 dark:text-indigo-400 mr-2" />
-            <h3 className="text-lg font-medium dark:text-white">Governance Parameters</h3>
-            {govParams.loading && <Loader size="small" className="ml-2" />}
+{/* Governance Parameters Section */}
+<div className={`bg-white dark:bg-gray-800 rounded-lg shadow mb-6 border-l-4 border-indigo-500 dark:border-indigo-400 transition-all duration-300 ${isGovExpanded ? 'p-6' : 'p-4'}`}>
+  <div className={`${isGovExpanded ? 'mb-4' : 'mb-0'}`}>
+    <div className="flex items-center justify-between">
+      <div className="flex items-center">
+        <Settings 
+          className={`h-5 w-5 text-indigo-600 dark:text-indigo-400 mr-2 transition-transform duration-300 ${isGovExpanded ? '' : 'transform rotate-180'}`} 
+        />
+        <h3 className="text-lg font-medium dark:text-white">Governance Parameters</h3>
+        {govParams.loading && <Loader size="small" className="ml-2" />}
+      </div>
+      <button 
+        onClick={() => setIsGovExpanded(!isGovExpanded)}
+        className="p-1 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-full transition-colors"
+        aria-label={isGovExpanded ? "Collapse section" : "Expand section"}
+      >
+        {isGovExpanded ? 
+          <ChevronUp className="h-5 w-5 text-indigo-500 dark:text-indigo-400" /> : 
+          <ChevronDown className="h-5 w-5 text-indigo-500 dark:text-indigo-400" />
+        }
+      </button>
+    </div>
+    {govParams.error && (
+      <div className="text-sm text-red-500 dark:text-red-400 mt-1">
+        {govParams.error}
+      </div>
+    )}
+  </div>
+  
+  {/* Collapsible content with smooth transition */}
+  <div 
+    className={`overflow-hidden transition-all duration-300 ease-in-out ${
+      isGovExpanded ? 'max-h-[500px] opacity-100' : 'max-h-0 opacity-0'
+    }`}
+  >
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <div className="bg-gradient-to-br from-indigo-50 to-purple-50 dark:from-indigo-900/40 dark:to-purple-900/20 p-3 rounded-lg">
+        <div className="text-sm text-indigo-700 dark:text-indigo-300 font-medium">Quorum</div>
+        <div className="text-lg font-bold dark:text-white">{govParams.formattedQuorum} JST</div>
+      </div>
+      <div className="bg-gradient-to-br from-indigo-50 to-purple-50 dark:from-indigo-900/40 dark:to-purple-900/20 p-3 rounded-lg">
+        <div className="text-sm text-indigo-700 dark:text-indigo-300 font-medium">Voting Duration</div>
+        <div className="text-lg font-bold dark:text-white">{govParams.formattedDuration}</div>
+      </div>
+      <div className="bg-gradient-to-br from-indigo-50 to-purple-50 dark:from-indigo-900/40 dark:to-purple-900/20 p-3 rounded-lg">
+        <div className="text-sm text-indigo-700 dark:text-indigo-300 font-medium">Proposal Threshold</div>
+        <div className="text-lg font-bold dark:text-white">{govParams.formattedThreshold} JST</div>
+      </div>
+      <div className="bg-gradient-to-br from-indigo-50 to-purple-50 dark:from-indigo-900/40 dark:to-purple-900/20 p-3 rounded-lg">
+        <div className="text-sm text-indigo-700 dark:text-indigo-300 font-medium">Proposal Stake</div>
+        <div className="text-lg font-bold dark:text-white">{govParams.formattedStake} JST</div>
+      </div>
+    </div>
+    
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/80">
+        <div className="text-sm text-gray-700 dark:text-gray-300 font-medium">Defeated Refund</div>
+        <div className="text-lg dark:text-white">{govParams.defeatedRefundPercentage}%</div>
+      </div>
+      <div className="p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/80">
+        <div className="text-sm text-gray-700 dark:text-gray-300 font-medium">Canceled Refund</div>
+        <div className="text-lg dark:text-white">{govParams.canceledRefundPercentage}%</div>
+      </div>
+      <div className="p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/80">
+        <div className="text-sm text-gray-700 dark:text-gray-300 font-medium">Expired Refund</div>
+        <div className="text-lg dark:text-white">{govParams.expiredRefundPercentage}%</div>
+      </div>
+      
+      <div className="p-3 rounded-lg border border-gray-200 dark:border-gray-700 relative bg-gray-50 dark:bg-gray-800/80" style={{ height: "85px", width: "100%" }}>
+        <div className="flex justify-center items-center">
+          <div className="text-xs text-gray-700 dark:text-gray-300 font-medium text-center">
+            Threat Level Delays
           </div>
-          {govParams.error && (
-            <div className="text-sm text-red-500 dark:text-red-400 mt-1">
-              {govParams.error}
-            </div>
-          )}
         </div>
-        
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-          <div className="bg-indigo-50 dark:bg-indigo-900/40 p-3 rounded-lg">
-            <div className="text-sm text-indigo-700 dark:text-indigo-300 font-medium">Quorum</div>
-            <div className="text-lg font-bold dark:text-white">{govParams.formattedQuorum} JST</div>
+        <div className="flex flex-col items-center justify-center mt-1" style={{ height: "40px" }}>
+          <div className={`text-xs font-medium ${
+            getThreatLevelName(currentThreatLevel) === 'LOW' ? 'text-green-600 dark:text-green-400' :
+            getThreatLevelName(currentThreatLevel) === 'MEDIUM' ? 'text-yellow-600 dark:text-yellow-400' :
+            getThreatLevelName(currentThreatLevel) === 'HIGH' ? 'text-orange-600 dark:text-orange-400' :
+            'text-red-600 dark:text-red-400'
+          }`}>
+            {getThreatLevelName(currentThreatLevel)}
           </div>
-          <div className="bg-indigo-50 dark:bg-indigo-900/40 p-3 rounded-lg">
-            <div className="text-sm text-indigo-700 dark:text-indigo-300 font-medium">Voting Duration</div>
-            <div className="text-lg font-bold dark:text-white">{govParams.formattedDuration}</div>
-          </div>
-          <div className="bg-indigo-50 dark:bg-indigo-900/40 p-3 rounded-lg">
-            <div className="text-sm text-indigo-700 dark:text-indigo-300 font-medium">Proposal Threshold</div>
-            <div className="text-lg font-bold dark:text-white">{govParams.formattedThreshold} JST</div>
-          </div>
-          <div className="bg-indigo-50 dark:bg-indigo-900/40 p-3 rounded-lg">
-            <div className="text-sm text-indigo-700 dark:text-indigo-300 font-medium">Proposal Stake</div>
-            <div className="text-lg font-bold dark:text-white">{govParams.formattedStake} JST</div>
+          <div className="text-sm font-medium mt-1 dark:text-white">
+            {formatTimeDuration(threatLevelDelays[currentThreatLevel] || 0)}
           </div>
         </div>
-        
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div className="p-3 rounded-lg border border-gray-200 dark:border-gray-700">
-            <div className="text-sm text-gray-700 dark:text-gray-300 font-medium">Defeated Refund</div>
-            <div className="text-lg dark:text-white">{govParams.defeatedRefundPercentage}%</div>
-          </div>
-          <div className="p-3 rounded-lg border border-gray-200 dark:border-gray-700">
-            <div className="text-sm text-gray-700 dark:text-gray-300 font-medium">Canceled Refund</div>
-            <div className="text-lg dark:text-white">{govParams.canceledRefundPercentage}%</div>
-          </div>
-          <div className="p-3 rounded-lg border border-gray-200 dark:border-gray-700">
-            <div className="text-sm text-gray-700 dark:text-gray-300 font-medium">Expired Refund</div>
-            <div className="text-lg dark:text-white">{govParams.expiredRefundPercentage}%</div>
-          </div>
-          
-          <div className="p-3 rounded-lg border border-gray-200 dark:border-gray-700 relative" style={{ height: "85px", width: "100%" }}>
-            <div className="flex justify-center items-center">
-              <div className="text-xs text-gray-700 dark:text-gray-300 font-medium text-center">
-                Threat Level Delays
-              </div>
-            </div>
-            <div className="flex flex-col items-center justify-center mt-1" style={{ height: "40px" }}>
-              <div className="text-xs font-medium text-indigo-600 dark:text-indigo-400">
-                {getThreatLevelName(currentThreatLevel)}
-              </div>
-              <div className="text-sm font-medium mt-1 dark:text-white">
-                {formatTimeDuration(threatLevelDelays[currentThreatLevel] || 0)}
-              </div>
-            </div>
-            <div className="absolute bottom-1 left-0 w-full px-3">
-              <div className="h-0.5 bg-indigo-100 dark:bg-indigo-900 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-indigo-500 dark:bg-indigo-400 transition-all duration-500 ease-in-out"
-                  style={{ 
-                    width: `${(Object.values(THREAT_LEVELS).indexOf(currentThreatLevel) + 1) * 25}%`,
-                  }}
-                />
-              </div>
-            </div>
+        <div className="absolute bottom-1 left-0 w-full px-3">
+          <div className="h-0.5 bg-indigo-100 dark:bg-indigo-900 rounded-full overflow-hidden">
+            <div 
+              className={`h-full transition-all duration-500 ease-in-out ${
+                getThreatLevelName(currentThreatLevel) === 'LOW' ? 'bg-gradient-to-r from-green-400 to-green-600 dark:from-green-500 dark:to-green-300' :
+                getThreatLevelName(currentThreatLevel) === 'MEDIUM' ? 'bg-gradient-to-r from-yellow-400 to-yellow-600 dark:from-yellow-500 dark:to-yellow-300' :
+                getThreatLevelName(currentThreatLevel) === 'HIGH' ? 'bg-gradient-to-r from-orange-400 to-orange-600 dark:from-orange-500 dark:to-orange-300' :
+                'bg-gradient-to-r from-red-400 to-red-600 dark:from-red-500 dark:to-red-300'
+              }`}
+              style={{ 
+                width: `${(Object.values(THREAT_LEVELS).indexOf(currentThreatLevel) + 1) * 25}%`,
+              }}
+            />
           </div>
         </div>
       </div>
-      
+    </div>
+  </div>
+</div>
+
       {/* Filter options */}
       <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow mb-8">
         <div className="flex flex-wrap gap-3">

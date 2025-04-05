@@ -236,30 +236,44 @@ contract JustTimelockUpgradeable is
      * @return txHash The hash of the transaction
      */
     function queueTransactionWithThreatLevel(
-        address target,
-        uint256 value,
-        bytes memory data
-    ) public whenNotPaused returns (bytes32) {
-        if (target == address(0)) revert ZeroAddress("target");
-        
-        // Only proposers or governance can queue
-        if (!hasRole(PROPOSER_ROLE, msg.sender) && !hasRole(GOVERNANCE_ROLE, msg.sender))
-            revert NotAuthorized(msg.sender, PROPOSER_ROLE);
-        
-        // Determine threat level internally
-        ThreatLevel level = getThreatLevel(target, data);
-        
-        // Get corresponding delay
-        uint256 delay = getDelayForThreatLevel(level);
-        
-        // Validate delay
-        if (delay < minDelay) revert DelayTooShort(delay, minDelay);
-        if (delay > maxDelay) revert DelayTooLong(delay, maxDelay);
-        
-        // Queue with determined delay and threat level
-        return _queueTransaction(target, value, data, delay, level);
+    address target,
+    uint256 value,
+    bytes memory data
+) public whenNotPaused returns (bytes32) {
+    if (target == address(0)) revert ZeroAddress("target");
+    
+    // Check if the caller has sufficient tokens OR has a role
+    bool isAuthorized = false;
+    
+    // Check token balance first
+    if (address(justToken) != address(0)) {
+        try justToken.balanceOf(msg.sender) returns (uint256 balance) {
+            if (balance >= minExecutorTokenThreshold) {
+                isAuthorized = true;
+            }
+        } catch {
+            // If token balance check fails, fall back to role check
+        }
     }
-
+    
+    // If not authorized by tokens, check roles
+    if (!isAuthorized && !hasRole(PROPOSER_ROLE, msg.sender) && !hasRole(GOVERNANCE_ROLE, msg.sender)) {
+        revert NotAuthorized(msg.sender, PROPOSER_ROLE);
+    }
+    
+    // Determine threat level internally
+    ThreatLevel level = getThreatLevel(target, data);
+    
+    // Get corresponding delay
+    uint256 delay = getDelayForThreatLevel(level);
+    
+    // Validate delay
+    if (delay < minDelay) revert DelayTooShort(delay, minDelay);
+    if (delay > maxDelay) revert DelayTooLong(delay, maxDelay);
+    
+    // Queue with determined delay and threat level
+    return _queueTransaction(target, value, data, delay, level);
+}
     /**
      * @notice Execute an expired transaction (past grace period) by admin or governance
      * @param txHash Hash of the transaction
@@ -610,60 +624,61 @@ function getThreatLevel(address target, bytes memory data) public view returns (
 
 
     function executeTransaction(bytes32 txHash) 
-        external 
-        whenNotPaused
-        nonReentrant
-        returns (bytes memory returnData) 
-    {
-        TimelockTransaction storage transaction = _timelockTransactions[txHash];
-        
-        // Check transaction state
-        if (transaction.state != TransactionState.QUEUED) {
-            if (transaction.state == TransactionState.NONEXISTENT) 
-                revert TxNotQueued(txHash);
-            if (transaction.state == TransactionState.EXECUTED) 
-                revert TxAlreadyExecuted(txHash);
-            if (transaction.state == TransactionState.CANCELED) 
-                revert AlreadyCanceled(txHash);
-        }
-        
-        // Check if transaction is ready to execute
-        if (block.timestamp < transaction.eta) 
-            revert TxNotReady(txHash, transaction.eta, block.timestamp);
-        if (block.timestamp > transaction.eta + gracePeriod) 
-            revert TxExpired(txHash, transaction.eta, gracePeriod, block.timestamp);
-        
-        // Check authorization
-        bool isAuthorized = isAuthorizedByTokens(msg.sender);
-        if (!isAuthorized) {
-            if (!hasRole(EXECUTOR_ROLE, msg.sender))
-                revert NotAuthorized(msg.sender, EXECUTOR_ROLE);
-        }
-        
-        // Save values to local variables before updating state
-        address target = transaction.target;
-        uint256 value = transaction.value;
-        bytes memory data = transaction.data;
-        
-        // Update state before external interaction
-        transaction.state = TransactionState.EXECUTED;
-        queuedTransactions[txHash] = false;
-        
-        emit TransactionExecuted(txHash, target, value, data);
-        
-        // Execute the transaction
-        (bool success, bytes memory result) = target.call{value: value}(data);
-        
-        if (!success) {
-            // If the call failed
-            transaction.state = TransactionState.FAILED;
-            emit TransactionExecutionFailed(txHash, target, string(result));
-            revert CallFailed(target, data);
-        }
-        
-        return result;
-       
+    external 
+    whenNotPaused
+    nonReentrant
+    returns (bytes memory returnData) 
+{
+    TimelockTransaction storage transaction = _timelockTransactions[txHash];
+    
+    // Check transaction state
+    if (transaction.state != TransactionState.QUEUED) {
+        if (transaction.state == TransactionState.NONEXISTENT) 
+            revert TxNotQueued(txHash);
+        if (transaction.state == TransactionState.EXECUTED) 
+            revert TxAlreadyExecuted(txHash);
+        if (transaction.state == TransactionState.CANCELED) 
+            revert AlreadyCanceled(txHash);
     }
+    
+    // Check if transaction is ready to execute
+    if (block.timestamp < transaction.eta) 
+        revert TxNotReady(txHash, transaction.eta, block.timestamp);
+    if (block.timestamp > transaction.eta + gracePeriod) 
+        revert TxExpired(txHash, transaction.eta, gracePeriod, block.timestamp);
+    
+    // Check authorization - having enough tokens OR having a role
+    bool isAuthorized = isAuthorizedByTokens(msg.sender);
+    
+    // If not authorized by tokens, check if they have the executor role
+    if (!isAuthorized && !hasRole(EXECUTOR_ROLE, msg.sender) && 
+        !hasRole(ADMIN_ROLE, msg.sender) && !hasRole(GOVERNANCE_ROLE, msg.sender)) {
+        revert NotAuthorized(msg.sender, EXECUTOR_ROLE);
+    }
+    
+    // Save values to local variables before updating state
+    address target = transaction.target;
+    uint256 value = transaction.value;
+    bytes memory data = transaction.data;
+    
+    // Update state before external interaction
+    transaction.state = TransactionState.EXECUTED;
+    queuedTransactions[txHash] = false;
+    
+    emit TransactionExecuted(txHash, target, value, data);
+    
+    // Execute the transaction
+    (bool success, bytes memory result) = target.call{value: value}(data);
+    
+    if (!success) {
+        // If the call failed
+        transaction.state = TransactionState.FAILED;
+        emit TransactionExecutionFailed(txHash, target, string(result));
+        revert CallFailed(target, data);
+    }
+    
+    return result;
+}
 
     
     /**

@@ -1946,22 +1946,83 @@ const ProposalsTab = ({
           Create Proposal
         </button>
       </div>
-      
       {/* Filter options */}
       <div className="bg-white p-4 rounded-lg shadow mb-6 dark:bg-gray-800 dark:shadow-gray-700/20">
         <div className="flex flex-wrap gap-2">
-          {['all', 'active', 'pending', 'succeeded', 'executed', 'defeated', 'canceled', 'expired'].map(type => (
-            <button
-              key={type}
-              className={`px-3 py-1 rounded-full text-sm ${proposalType === type ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/50 dark:text-indigo-200' : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'}`}              
-              onClick={() => {
-                setProposalType(type);
-                setCurrentPage(1); // Reset to first page on filter change
-              }}
-            >
-              {type.charAt(0).toUpperCase() + type.slice(1)}
-            </button>
-          ))}
+          {['all', 'active', 'pending', 'succeeded', 'executed', 'defeated', 'canceled', 'expired'].map(type => {
+            // Get appropriate colors for each filter type based on status colors
+            let buttonColors;
+            if (proposalType === type) {
+              // Selected button - use slightly stronger version of the status color
+              switch (type) {
+                case 'all':
+                  buttonColors = 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/50 dark:text-indigo-200';
+                  break;
+                case 'active':
+                  buttonColors = 'bg-yellow-200 text-yellow-800 dark:bg-yellow-900/50 dark:text-yellow-200';
+                  break;
+                case 'pending':
+                  buttonColors = 'bg-blue-200 text-blue-800 dark:bg-blue-900/50 dark:text-blue-200';
+                  break;
+                case 'succeeded':
+                  buttonColors = 'bg-green-200 text-green-800 dark:bg-green-900/50 dark:text-green-200';
+                  break;
+                case 'executed':
+                  buttonColors = 'bg-indigo-200 text-indigo-800 dark:bg-indigo-900/50 dark:text-indigo-200';
+                  break;
+                case 'defeated':
+                  buttonColors = 'bg-red-200 text-red-800 dark:bg-red-900/50 dark:text-red-200';
+                  break;
+                case 'canceled':
+                case 'expired':
+                  buttonColors = 'bg-gray-200 text-gray-800 dark:bg-gray-900/50 dark:text-gray-200';
+                  break;
+                default:
+                  buttonColors = 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/50 dark:text-indigo-200';
+              }
+            } else {
+              // Unselected button - use lighter version of the status color
+              switch (type) {
+                case 'all':
+                  buttonColors = 'bg-gray-50 text-gray-600 hover:bg-indigo-50 hover:text-indigo-700 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-indigo-900/30 dark:hover:text-indigo-300';
+                  break;
+                case 'active':
+                  buttonColors = 'bg-yellow-50 text-yellow-600 hover:bg-yellow-100 hover:text-yellow-700 dark:bg-gray-700 dark:text-yellow-300/70 dark:hover:bg-yellow-900/30 dark:hover:text-yellow-300';
+                  break;
+                case 'pending':
+                  buttonColors = 'bg-blue-50 text-blue-600 hover:bg-blue-100 hover:text-blue-700 dark:bg-gray-700 dark:text-blue-300/70 dark:hover:bg-blue-900/30 dark:hover:text-blue-300';
+                  break;
+                case 'succeeded':
+                  buttonColors = 'bg-green-50 text-green-600 hover:bg-green-100 hover:text-green-700 dark:bg-gray-700 dark:text-green-300/70 dark:hover:bg-green-900/30 dark:hover:text-green-300';
+                  break;
+                case 'executed':
+                  buttonColors = 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100 hover:text-indigo-700 dark:bg-gray-700 dark:text-indigo-300/70 dark:hover:bg-indigo-900/30 dark:hover:text-indigo-300';
+                  break;
+                case 'defeated':
+                  buttonColors = 'bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700 dark:bg-gray-700 dark:text-red-300/70 dark:hover:bg-red-900/30 dark:hover:text-red-300';
+                  break;
+                case 'canceled':
+                case 'expired':
+                  buttonColors = 'bg-gray-50 text-gray-600 hover:bg-gray-100 hover:text-gray-700 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600 dark:hover:text-gray-200';
+                  break;
+                default:
+                  buttonColors = 'bg-gray-50 text-gray-600 hover:bg-gray-100 hover:text-gray-700 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600 dark:hover:text-gray-200';
+              }
+            }
+            
+            return (
+              <button
+                key={type}
+                className={`px-3 py-1 rounded-full text-sm font-medium transition-colors duration-200 ${buttonColors}`}              
+                onClick={() => {
+                  setProposalType(type);
+                  setCurrentPage(1); // Reset to first page on filter change
+                }}
+              >
+                {type.charAt(0).toUpperCase() + type.slice(1)}
+              </button>
+            );
+          })}
         </div>
       </div>
       

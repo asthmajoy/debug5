@@ -7,9 +7,11 @@ import blockchainDataCache from '../utils/blockchainDataCache';
 import { useWeb3 } from '../contexts/Web3Context';
 import DismissibleMintNotice from './DismissibleMintNotice';
 
-
 // Cache expiration time in milliseconds (1 minute)
 const CACHE_EXPIRATION = 60 * 1000;
+
+// Proposal batch size for optimized loading
+const PROPOSAL_BATCH_SIZE = 20;
 
 const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, onRefresh }) => {
   const { contracts, isConnected } = useWeb3();
@@ -121,11 +123,15 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
       // If onRefresh is provided from parent, call it
       if (onRefresh) await onRefresh();
       
-      // Count proposals using our cached method
-      await countProposalsWithCache();
-      
-      // Fetch vote data for proposals
-      await fetchVoteDataWithCache();
+      try {
+        // Optimize by running these in parallel instead of sequentially
+        await Promise.all([
+          countProposalsWithCache(),
+          fetchVoteDataWithCache()
+        ]);
+      } catch (error) {
+        console.error("Error refreshing data:", error);
+      }
       
       setIsRefreshing(false);
     }
@@ -147,7 +153,7 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
     return () => clearInterval(timer);
   }, [lastRefreshTime, refreshAllData]);
 
-  // Cached proposal counting
+  // OPTIMIZED: Batch proposal counting using multicall if available, or optimized batches if not
   const countProposalsWithCache = useCallback(async () => {
     if (!isConnected || !contracts.governance) {
       setDirectStats(prev => ({
@@ -179,7 +185,7 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
         return;
       }
       
-      console.log("Cache expired or missing, directly counting proposals...");
+      console.log("Cache expired or missing, counting proposals with optimized method...");
       
       // State names for logging
       const stateNames = [
@@ -203,36 +209,133 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
         expired: 0
       };
       
+      // First, try to use the analyticsHelper contract if available
+      // This is much faster as it can return all data in a single call
+      if (contracts.analyticsHelper) {
+        try {
+          console.log("Using analyticsHelper for fast proposal counting");
+          
+          // Try to get the latest proposal ID first to optimize the range
+          let latestProposalId = 0;
+          
+          // Check if we can get total proposals directly from the analytics helper
+          if (typeof contracts.analyticsHelper.getTotalProposalsCount === 'function') {
+            try {
+              const count = await contracts.analyticsHelper.getTotalProposalsCount();
+              latestProposalId = Math.max(0, Number(count) - 1);
+              console.log(`Got total proposal count: ${count}, latest ID: ${latestProposalId}`);
+            } catch (e) {
+              console.warn("Error getting total proposals count:", e);
+            }
+          }
+          
+          // If we couldn't get the count, try to estimate it by checking recent IDs
+          if (latestProposalId === 0) {
+            for (let i = 100; i >= 0; i -= 5) { // Check every 5th ID for efficiency
+              try {
+                await contracts.governance.getProposalState(i);
+                // If this succeeds, start checking sequentially from this point
+                for (let j = i + 1; j <= i + 5; j++) {
+                  try {
+                    await contracts.governance.getProposalState(j);
+                    latestProposalId = Math.max(latestProposalId, j);
+                  } catch {
+                    break;
+                  }
+                }
+                break;
+              } catch {
+                // This ID doesn't exist, continue checking
+              }
+            }
+          }
+          
+          // Get proposal analytics from the helper
+          const analytics = await contracts.analyticsHelper.getProposalAnalytics(0, latestProposalId);
+          
+          // Process the analytics data
+          stateBreakdown.active = Number(analytics.activeProposals) || 0;
+          stateBreakdown.canceled = Number(analytics.canceledProposals) || 0;
+          stateBreakdown.defeated = Number(analytics.defeatedProposals) || 0;
+          stateBreakdown.succeeded = Number(analytics.succeededProposals) || 0;
+          stateBreakdown.queued = Number(analytics.queuedProposals) || 0;
+          stateBreakdown.executed = Number(analytics.executedProposals) || 0;
+          stateBreakdown.expired = Number(analytics.expiredProposals) || 0;
+          
+          const totalProposals = Number(analytics.totalProposals) || 0;
+          
+          console.log("Fast proposal counting results:", {
+            total: totalProposals,
+            active: stateBreakdown.active,
+            breakdown: stateBreakdown
+          });
+          
+          // Create the data to cache and set in state
+          const dataToCache = {
+            activeProposalsCount: stateBreakdown.active,
+            totalProposalsCount: totalProposals,
+            stateBreakdown
+          };
+          
+          // Cache the results
+          blockchainDataCache.set(cacheKey, {
+            timestamp: now,
+            data: dataToCache
+          });
+          
+          // Update state with fresh data
+          setDirectStats({
+            ...dataToCache,
+            loading: false,
+            lastUpdated: now
+          });
+          
+          return;
+        } catch (error) {
+          console.error("Error using analytics helper for proposal counting:", error);
+          // Continue to fallback method
+        }
+      }
+      
+      // Fallback: Use batch processing for better performance
+      console.log("Using optimized batch processing for proposal counting");
+      
       let foundProposals = 0;
       const MAX_PROPOSAL_ID = 100; // Adjust as needed
       
-      const results = [];
-      
-      // Check each proposal ID
-      for (let id = 0; id < MAX_PROPOSAL_ID; id++) {
-        try {
-          // Try to get the state - if it fails, the proposal doesn't exist
-          const state = await contracts.governance.getProposalState(id);
-          
-          // Convert state to number (handle BigNumber or other formats)
-          const stateNum = typeof state === 'object' && state.toNumber 
-            ? state.toNumber() 
-            : Number(state);
-          
-          // Save the result for logging
-          results.push({ id, state: stateNum, stateName: stateNames[stateNum] });
-          
-          // Count by state
-          const stateName = stateNames[stateNum];
-          if (stateName && stateBreakdown.hasOwnProperty(stateName)) {
-            stateBreakdown[stateName]++;
+      // Process proposals in batches for better performance
+      for (let batchStart = 0; batchStart < MAX_PROPOSAL_ID; batchStart += PROPOSAL_BATCH_SIZE) {
+        const batchEnd = Math.min(batchStart + PROPOSAL_BATCH_SIZE, MAX_PROPOSAL_ID);
+        const batchPromises = [];
+        
+        // Create a batch of promises
+        for (let id = batchStart; id < batchEnd; id++) {
+          batchPromises.push(
+            contracts.governance.getProposalState(id)
+              .then(state => {
+                // Convert state to number (handle BigNumber or other formats)
+                const stateNum = typeof state === 'object' && state.toNumber 
+                  ? state.toNumber() 
+                  : Number(state);
+                
+                return { id, state: stateNum };
+              })
+              .catch(() => null) // Return null for non-existent proposals
+          );
+        }
+        
+        // Execute batch in parallel
+        const results = await Promise.all(batchPromises);
+        
+        // Process results
+        for (const result of results) {
+          if (result) {
+            foundProposals++;
+            const stateName = stateNames[result.state];
+            if (stateName && stateBreakdown.hasOwnProperty(stateName)) {
+              stateBreakdown[stateName]++;
+            }
           }
-          
-          // Increment total proposals counter
-          foundProposals++;
-        } catch (error) {
-          // Skip non-existent proposals
-          continue;
         }
       }
       
@@ -258,14 +361,14 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
         lastUpdated: now
       });
     } catch (error) {
-      console.error("Error in direct proposal counting:", error);
+      console.error("Error in proposal counting:", error);
       setDirectStats(prev => ({
         ...prev,
         loading: false,
         lastUpdated: Date.now()
       }));
     }
-  }, [contracts.governance, isConnected]);
+  }, [contracts.governance, contracts.analyticsHelper, isConnected]);
 
   // Initial load of proposal counts
   useEffect(() => {
@@ -275,95 +378,177 @@ const DashboardTab = ({ user, stats, loading, proposals, getProposalVoteTotals, 
     }
   }, [countProposalsWithCache, directStats.loading, directStats.lastUpdated]);
 
-  // Cached vote data fetching
+  // OPTIMIZED: Optimized vote data fetching with batch processing
   const fetchVoteDataWithCache = useCallback(async () => {
     if (!getProposalVoteTotals || !proposals || proposals.length === 0) return;
     
-    console.log("Checking cached vote data for active proposals");
+    console.log("Optimized vote data fetching for", proposals.length, "proposals");
     const now = Date.now();
-    const voteData = {};
+    let voteData = {};
     
-    // Check all proposals in parallel for better performance
-    const results = await Promise.allSettled(
-      proposals.map(async (proposal) => {
+    // Check cached data first for all proposals
+    const cachedData = {};
+    const proposalsNeedingFetch = [];
+    
+    // First pass: Check cache for all proposals
+    for (const proposal of proposals) {
+      const cacheKey = `dashboard-votes-${proposal.id}`;
+      const cached = blockchainDataCache.get(cacheKey);
+      
+      if (cached && cached.fetchedAt && (now - cached.fetchedAt < CACHE_EXPIRATION)) {
+        console.log(`Using cached vote data for proposal #${proposal.id}`);
+        cachedData[proposal.id] = cached;
+      } else {
+        proposalsNeedingFetch.push(proposal);
+      }
+    }
+    
+    // If we need to fetch data for some proposals
+    if (proposalsNeedingFetch.length > 0) {
+      console.log(`Fetching fresh vote data for ${proposalsNeedingFetch.length} proposals`);
+      
+      // Check if we can use the analyticsHelper for a batch request
+      if (contracts.analyticsHelper && 
+          typeof contracts.analyticsHelper.getProposalVoteTotals === 'function') {
         try {
-          // Check if cached data is available first
-          const cacheKey = `dashboard-votes-${proposal.id}`;
-          const cachedData = blockchainDataCache.get(cacheKey);
+          console.log("Using analyticsHelper for batch vote data fetch");
           
-          // If we have valid cached data that's less than 1 minute old, use it
-          if (cachedData && cachedData.fetchedAt && (now - cachedData.fetchedAt < CACHE_EXPIRATION)) {
-            console.log(`Using cached vote data for proposal #${proposal.id} from`, new Date(cachedData.fetchedAt));
-            return {
-              id: proposal.id,
-              data: cachedData
+          // Map proposals to just their IDs
+          const proposalIds = proposalsNeedingFetch.map(p => p.id);
+          
+          // Use the helper to get vote data for all proposals in one call
+          const batchResults = await contracts.analyticsHelper.getProposalVoteTotals(proposalIds);
+          
+          // Process the batch results
+          for (let i = 0; i < proposalIds.length; i++) {
+            const id = proposalIds[i];
+            const data = batchResults[i] || {};
+            
+            // Process the data to ensure consistent format
+            const processedData = {
+              yesVotes: parseFloat(data.yesVotes) || 0,
+              noVotes: parseFloat(data.noVotes) || 0,
+              abstainVotes: parseFloat(data.abstainVotes) || 0,
+              yesVotingPower: parseFloat(data.yesVotes || data.yesVotingPower) || 0,
+              noVotingPower: parseFloat(data.noVotes || data.noVotingPower) || 0,
+              abstainVotingPower: parseFloat(data.abstainVotes || data.abstainVotingPower) || 0,
+              totalVoters: data.totalVoters || 0,
+              fetchedAt: now
             };
-          }
-          
-          console.log(`Cache expired or missing for proposal #${proposal.id}, fetching fresh data...`);
-          // Use the getProposalVoteTotals function from the context
-          const data = await getProposalVoteTotals(proposal.id);
-          
-          // Process the data to ensure consistent format
-          const processedData = {
-            // Note: In the contract, yesVotes/noVotes/abstainVotes are actually voting power values
-            yesVotes: parseFloat(data.yesVotes) || 0,
-            noVotes: parseFloat(data.noVotes) || 0,
-            abstainVotes: parseFloat(data.abstainVotes) || 0,
-            yesVotingPower: parseFloat(data.yesVotes || data.yesVotingPower) || 0,
-            noVotingPower: parseFloat(data.noVotes || data.noVotingPower) || 0,
-            abstainVotingPower: parseFloat(data.abstainVotes || data.abstainVotingPower) || 0,
-            totalVoters: data.totalVoters || 0,
             
-            // Store percentages based on voting power
-            yesPercentage: data.yesPercentage || 0,
-            noPercentage: data.noPercentage || 0,
-            abstainPercentage: data.abstainPercentage || 0,
-            
-            // Add a timestamp to know when the data was fetched
-            fetchedAt: now
-          };
-          
-          // Calculate total voting power
-          processedData.totalVotingPower = processedData.yesVotingPower + 
+            // Calculate total voting power
+            processedData.totalVotingPower = processedData.yesVotingPower + 
                                           processedData.noVotingPower + 
                                           processedData.abstainVotingPower;
-          
-          // If percentages aren't provided, calculate them based on voting power
-          if (!data.yesPercentage && !data.noPercentage && !data.abstainPercentage) {
+            
+            // Calculate percentages
             if (processedData.totalVotingPower > 0) {
               processedData.yesPercentage = (processedData.yesVotingPower / processedData.totalVotingPower) * 100;
               processedData.noPercentage = (processedData.noVotingPower / processedData.totalVotingPower) * 100;
               processedData.abstainPercentage = (processedData.abstainVotingPower / processedData.totalVotingPower) * 100;
+            } else {
+              processedData.yesPercentage = 0;
+              processedData.noPercentage = 0;
+              processedData.abstainPercentage = 0;
             }
+            
+            // Cache the result
+            const cacheKey = `dashboard-votes-${id}`;
+            blockchainDataCache.set(cacheKey, processedData);
+            
+            // Store in our results
+            cachedData[id] = processedData;
           }
-          
-          // Cache the result
-          blockchainDataCache.set(cacheKey, processedData);
-          
-          return {
-            id: proposal.id,
-            data: processedData
-          };
         } catch (error) {
-          console.error(`Error fetching vote data for proposal ${proposal.id}:`, error);
-          return {
-            id: proposal.id,
-            data: null
-          };
+          console.error("Error in batch vote data fetch:", error);
+          // Fall back to individual fetches
         }
-      })
-    );
-    
-    // Collect successful results
-    results.forEach(result => {
-      if (result.status === 'fulfilled' && result.value && result.value.data) {
-        voteData[result.value.id] = result.value.data;
       }
-    });
+      
+      // If we still have proposals needing data (batch method failed or isn't available)
+      const remainingProposals = proposalsNeedingFetch.filter(p => !cachedData[p.id]);
+      
+      if (remainingProposals.length > 0) {
+        console.log(`Fetching individual vote data for ${remainingProposals.length} proposals`);
+        
+        // Process remaining proposals in smaller batches for better performance
+        const batchSize = 5;
+        for (let i = 0; i < remainingProposals.length; i += batchSize) {
+          const batch = remainingProposals.slice(i, i + batchSize);
+          
+          // Process this batch in parallel
+          const batchResults = await Promise.allSettled(
+            batch.map(async (proposal) => {
+              try {
+                console.log(`Fetching vote data for proposal #${proposal.id}`);
+                
+                // Use the getProposalVoteTotals function from the context
+                const data = await getProposalVoteTotals(proposal.id);
+                
+                // Process the data to ensure consistent format
+                const processedData = {
+                  yesVotes: parseFloat(data.yesVotes) || 0,
+                  noVotes: parseFloat(data.noVotes) || 0,
+                  abstainVotes: parseFloat(data.abstainVotes) || 0,
+                  yesVotingPower: parseFloat(data.yesVotes || data.yesVotingPower) || 0,
+                  noVotingPower: parseFloat(data.noVotes || data.noVotingPower) || 0,
+                  abstainVotingPower: parseFloat(data.abstainVotes || data.abstainVotingPower) || 0,
+                  totalVoters: data.totalVoters || 0,
+                  
+                  // Store percentages based on voting power
+                  yesPercentage: data.yesPercentage || 0,
+                  noPercentage: data.noPercentage || 0,
+                  abstainPercentage: data.abstainPercentage || 0,
+                  
+                  // Add a timestamp to know when the data was fetched
+                  fetchedAt: now
+                };
+                
+                // Calculate total voting power
+                processedData.totalVotingPower = processedData.yesVotingPower + 
+                                              processedData.noVotingPower + 
+                                              processedData.abstainVotingPower;
+                
+                // If percentages aren't provided, calculate them based on voting power
+                if (!data.yesPercentage && !data.noPercentage && !data.abstainPercentage) {
+                  if (processedData.totalVotingPower > 0) {
+                    processedData.yesPercentage = (processedData.yesVotingPower / processedData.totalVotingPower) * 100;
+                    processedData.noPercentage = (processedData.noVotingPower / processedData.totalVotingPower) * 100;
+                    processedData.abstainPercentage = (processedData.abstainVotingPower / processedData.totalVotingPower) * 100;
+                  }
+                }
+                
+                // Cache the result
+                const cacheKey = `dashboard-votes-${proposal.id}`;
+                blockchainDataCache.set(cacheKey, processedData);
+                
+                return {
+                  id: proposal.id,
+                  data: processedData
+                };
+              } catch (error) {
+                console.error(`Error fetching vote data for proposal ${proposal.id}:`, error);
+                return {
+                  id: proposal.id,
+                  data: null
+                };
+              }
+            })
+          );
+          
+          // Collect successful results from this batch
+          batchResults.forEach(result => {
+            if (result.status === 'fulfilled' && result.value && result.value.data) {
+              cachedData[result.value.id] = result.value.data;
+            }
+          });
+        }
+      }
+    }
     
-    setProposalVoteData(voteData);
-  }, [proposals, getProposalVoteTotals]);
+    // Update state with all collected vote data
+    setProposalVoteData(cachedData);
+  }, [proposals, getProposalVoteTotals, contracts.analyticsHelper]);
 
   // Initial load of vote data
   useEffect(() => {

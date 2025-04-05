@@ -1588,7 +1588,7 @@ const AnalyticsTab = () => {
             <div className="font-bold text-right dark:text-gray-200">{voterAnalytics.totalDelegates}</div>
             
             <div className="dark:text-gray-300">Active Voting Power:</div>
-            <div className="font-bold text-right dark:text-gray-200">{formatTokenAmount(voterAnalytics.activeDelegated)} JUST</div>
+            <div className="font-bold text-right dark:text-gray-200">{formatTokenAmount(voterAnalytics.activeDelegated)} JST</div>
           </div>
         </div>
         
@@ -1640,7 +1640,7 @@ const AnalyticsTab = () => {
           <h3 className="text-lg font-medium mb-2 dark:text-white">Token Supply</h3>
           <div className="grid grid-cols-2 gap-2">
             <div className="dark:text-gray-300">Total Supply:</div>
-            <div className="font-bold text-right dark:text-gray-200">{formatTokenAmount(tokenAnalytics.totalSupply)} JUST</div>
+            <div className="font-bold text-right dark:text-gray-200">{formatTokenAmount(tokenAnalytics.totalSupply)} JST</div>
             <div className="dark:text-gray-300">Active Holders:</div>
             <div className="font-bold text-right dark:text-gray-200">{tokenAnalytics.activeHolders}</div>
             <div className="dark:text-gray-300">Active Delegates:</div>
@@ -1652,7 +1652,7 @@ const AnalyticsTab = () => {
           <h3 className="text-lg font-medium mb-2 dark:text-white">Delegation Status</h3>
           <div className="grid grid-cols-2 gap-2">
             <div className="dark:text-gray-300">Total Delegated:</div>
-            <div className="font-bold text-right dark:text-gray-200">{formatTokenAmount(tokenAnalytics.totalDelegated)} JUST</div>
+            <div className="font-bold text-right dark:text-gray-200">{formatTokenAmount(tokenAnalytics.totalDelegated)} JST</div>
             <div className="dark:text-gray-300">Percentage of Supply:</div>
             <div className="font-bold text-right dark:text-gray-200">{formatPercentage(tokenAnalytics.percentageDelegated / 100)}</div>
           </div>
@@ -1709,7 +1709,7 @@ const AnalyticsTab = () => {
             <div className="dark:text-gray-300">Pending Transactions:</div>
             <div className="font-bold text-right dark:text-gray-200">{timelockAnalytics.pendingTransactions}</div>
             <div className="dark:text-gray-300">Executor Threshold:</div>
-            <div className="font-bold text-right dark:text-gray-200">{formatTokenAmount(timelockAnalytics.executorThreshold)} JUST</div>
+            <div className="font-bold text-right dark:text-gray-200">{formatTokenAmount(timelockAnalytics.executorThreshold)} JST</div>
           </div>
         </div>
         
@@ -1782,7 +1782,7 @@ const AnalyticsTab = () => {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
           <div className="bg-indigo-50 dark:bg-indigo-900 p-3 rounded-lg">
             <div className="text-sm text-indigo-700 dark:text-indigo-300 font-medium">Quorum</div>
-            <div className="text-lg font-bold dark:text-indigo-100">{govParams.formattedQuorum || '0 JUST'}</div>
+            <div className="text-lg font-bold dark:text-indigo-100">{govParams.formattedQuorum || '0 JST'}</div>
           </div>
           <div className="bg-indigo-50 dark:bg-indigo-900 p-3 rounded-lg">
             <div className="text-sm text-indigo-700 dark:text-indigo-300 font-medium">Voting Duration</div>
@@ -1790,11 +1790,11 @@ const AnalyticsTab = () => {
           </div>
           <div className="bg-indigo-50 dark:bg-indigo-900 p-3 rounded-lg">
             <div className="text-sm text-indigo-700 dark:text-indigo-300 font-medium">Proposal Threshold</div>
-            <div className="text-lg font-bold dark:text-indigo-100">{govParams.formattedThreshold || '0 JUST'}</div>
+            <div className="text-lg font-bold dark:text-indigo-100">{govParams.formattedThreshold || '0 JST'}</div>
           </div>
           <div className="bg-indigo-50 dark:bg-indigo-900 p-3 rounded-lg">
             <div className="text-sm text-indigo-700 dark:text-indigo-300 font-medium">Proposal Stake</div>
-            <div className="text-lg font-bold dark:text-indigo-100">{govParams.formattedStake || '0 JUST'}</div>
+            <div className="text-lg font-bold dark:text-indigo-100">{govParams.formattedStake || '0 JST'}</div>
           </div>
         </div>
         

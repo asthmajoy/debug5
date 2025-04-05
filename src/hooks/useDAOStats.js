@@ -14,6 +14,7 @@ export function useDAOStats() {
     delegationRate: 0,
     proposalSuccessRate: 0,
     isLoading: true,
+    isConnectedToContract: true,
     errorMessage: null
   });
 
