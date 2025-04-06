@@ -466,63 +466,40 @@ contract JustGovernanceUpgradeable is
     return proposalId;
 }
 
-function createSignalingProposal(string calldata description) 
+    function createSignalingProposal(string calldata description) 
     external 
     whenNotPaused 
     nonReentrant 
     returns (uint256) 
 {
-    bytes memory desc = bytes(description);
-    if (desc.length == 0) revert InvCD();
+    if (bytes(description).length == 0) revert InvCD();
     
-    // Simplified tag validation
-    uint256 tags;
-    for (uint256 i; i < desc.length; i++) {
-        bytes1 c = desc[i];
-        if (c == '<') {
-            if (tags > 0 || i + 1 >= desc.length) revert InvCD();
-            
-            // Compact tag check
-            bytes1 next = desc[i+1];
-            if (!(next == 'a' || next == 'b' || next == 'i' || next == 'p' || next == 'h')) 
-                revert InvCD();
-            
-            tags++;
-        }
-        else if (c == '>') {
-            if (tags == 0) revert InvCD();
-            tags--;
-        }
-    }
-    if (tags != 0) revert InvCD();
-    
-    // Threshold check
     if (justToken.balanceOf(msg.sender) < govParams.proposalCreationThreshold)
         revert InsBal(justToken.balanceOf(msg.sender), govParams.proposalCreationThreshold);
     
-    // Snapshot and proposal creation
     uint256 proposalId = _proposals.length;
+    
+    // Create snapshot before updating state
     uint256 snapshotId = justToken.createSnapshot();
     
-    ProposalData storage prop = _proposals.push();
-    prop.proposer = msg.sender;
-    prop.pType = ProposalType.Signaling;
-    prop.deadline = uint48(block.timestamp + govParams.votingDuration);
-    prop.createdAt = uint48(block.timestamp);
-    prop.stakedAmount = govParams.proposalStake;
-    prop.description = description;
-    prop.snapshotId = snapshotId;
+    ProposalData storage newProposal = _proposals.push();
+    newProposal.proposer = msg.sender;
+    newProposal.pType = ProposalType.Signaling;
+    newProposal.deadline = uint48(block.timestamp + govParams.votingDuration);
+    newProposal.createdAt = uint48(block.timestamp);
+    newProposal.stakedAmount = govParams.proposalStake;
+    newProposal.description = description;
+    newProposal.snapshotId = snapshotId;
     
-    // Stake transfer
+    // External call AFTER state changes
     if (!justToken.governanceTransfer(msg.sender, address(this), govParams.proposalStake))
         revert TxFail();
     
-    // Event emission
     emit ProposalEvent(
         proposalId, 
         STATUS_CREATED, 
         msg.sender, 
-        abi.encode(ProposalType.Signaling, snapshotId)
+        abi.encode(ProposalType.Signaling, newProposal.snapshotId)
     );
     
     return proposalId;

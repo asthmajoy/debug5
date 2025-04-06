@@ -459,18 +459,63 @@ contract JustTokenUpgradeable is
     _lockedTokens[msg.sender] = fullBalance;
     _delegatedToAddress[delegatee] += fullBalance;
     
-    // Reset visited flags again before propagation
-    for (uint i = 0; i < _allDelegates.length; i++) {
-        _visitedDelegation[_allDelegates[i]] = false;
-    }
+    // Here's the key change - use the comprehensive helper function
+    // instead of the original propagation logic
+    _handleFullDelegationPropagation(msg.sender, delegatee);
     
-    // Propagate changes after all state is updated
-    _propagateDelegationChange(delegatee, fullBalance, 0, 0);
     _addDelegatorOf(msg.sender, delegatee);
     
     // Emit events after all state changes
     emit DelegateChanged(msg.sender, currentDelegate, delegatee);
     emit TokensLocked(msg.sender, delegatee, fullBalance);
+}
+
+// Optional event to track delegation chain propagation for debugging
+event DelegationPropagated(address indexed from, address indexed to, uint256 amount, bool isTransitive);
+
+/**
+ * @notice Enhanced propagation function that handles both direct and transitive delegation
+ * @dev Combine this with the existing delegate function to fully handle all delegation cases
+ * @param delegator The address delegating tokens
+ * @param delegatee The address receiving the delegation
+ */
+function _handleFullDelegationPropagation(address delegator, address delegatee) internal {
+    // First, handle the delegator's own tokens
+    uint256 ownBalance = balanceOf(delegator);
+    
+    // Then get tokens that were delegated to the delegator by others
+    uint256 receivedFromOthers = _delegatedToAddress[delegator];
+    
+    // If the delegator has tokens locked for delegation, subtract those 
+    // from the received amount to avoid double counting
+    if (_lockedTokens[delegator] > 0) {
+        receivedFromOthers = _safeSub(receivedFromOthers, _lockedTokens[delegator]);
+    }
+    
+    // Reset visited flags before propagation
+    for (uint i = 0; i < _allDelegates.length; i++) {
+        _visitedDelegation[_allDelegates[i]] = false;
+    }
+
+    // 1. First propagate the delegator's own tokens
+    _propagateDelegationChange(delegatee, ownBalance, 0, 0);
+    
+    // Emit event for the direct delegation
+    emit DelegationPropagated(delegator, delegatee, ownBalance, false);
+    
+    // 2. Then, if there are tokens delegated to this delegator from others,
+    // propagate those separately to maintain the delegation chain
+    if (receivedFromOthers > 0) {
+        // Reset visited flags for the second propagation
+        for (uint i = 0; i < _allDelegates.length; i++) {
+            _visitedDelegation[_allDelegates[i]] = false;
+        }
+        
+        _propagateDelegationChange(delegatee, receivedFromOthers, 0, 0);
+        
+        // Emit event for the transitive delegation
+        emit DelegationPropagated(delegator, delegatee, receivedFromOthers, true);
+    }
 }
     /**
      * @notice Simplified cycle detection function for delegation
