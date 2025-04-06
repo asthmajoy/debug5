@@ -8,8 +8,41 @@ import { ChevronDown, ChevronUp, Copy, Check, AlertTriangle, Clock, Shield, Chev
 import TimelockInfoDisplay from './TimelockInfoDisplay';
 import ProposalRichTextEditor from './ProposalRichTextEditor';
 import { useDarkMode } from '../contexts/DarkModeContext';
-import { renderProposalContent } from '../utils/proposalRenderHelpers';
 
+const safeBigNumberFrom = (value) => {
+  if (!value) return ethers.BigNumber.from("0");
+  
+  try {
+    // First try direct conversion (for values already in wei)
+    return ethers.BigNumber.from(value);
+  } catch (error) {
+    try {
+      // If it fails and looks like a decimal, try to parse it as ether
+      if (typeof value === 'string' && value.includes('.')) {
+        return ethers.utils.parseEther(value);
+      }
+      // For other failures, log and return zero
+      console.warn(`Failed to convert ${value} to BigNumber:`, error);
+      return ethers.BigNumber.from("0");
+    } catch (innerError) {
+      console.error(`Failed to parse ${value} as ether:`, innerError);
+      return ethers.BigNumber.from("0");
+    }
+  }
+};
+
+// Function to safely check if a value represents a change (not zero)
+const hasValueChanged = (value) => {
+  if (!value) return false;
+  
+  try {
+    const valueBN = safeBigNumberFrom(value);
+    return !valueBN.isZero();
+  } catch (error) {
+    // If we can't convert to BigNumber, but have a string value, consider it changed
+    return typeof value === 'string' && value.trim() !== '0' && value.trim() !== '';
+  }
+};
 
 
 // Helper function to get human-readable proposal state label
@@ -1077,28 +1110,6 @@ const ProposalsTab = ({
         description = `${newProposal.title}\n\n${newProposal.description}`;
       }
       
-      
-      // Add parameter details to description for governance changes to ensure they can be parsed later
-      if (parseInt(newProposal.type) === PROPOSAL_TYPES.GOVERNANCE_CHANGE) {
-        const paramDetails = [];
-        
-        if (newProposal.newThreshold) {
-          paramDetails.push(`Threshold: ${newProposal.newThreshold}`);
-        }
-        if (newProposal.newQuorum) {
-          paramDetails.push(`Quorum: ${newProposal.newQuorum}`);
-        }
-        if (newProposal.newVotingDuration) {
-          paramDetails.push(`Duration: ${newProposal.newVotingDuration}`);
-        }
-        if (newProposal.newProposalStake) {
-          paramDetails.push(`Stake: ${newProposal.newProposalStake}`);
-        }
-        
-        if (paramDetails.length > 0) {
-          description += "\n\nParameters\n" + paramDetails.join("\n");
-        }
-      }
       
       // Convert values to proper format
       const amount = newProposal.amount ? ethers.utils.parseEther(newProposal.amount.toString()) : 0;
@@ -2250,124 +2261,119 @@ const ProposalsTab = ({
                           </div>
                         )}
                         
-                        {proposal.type === PROPOSAL_TYPES.GOVERNANCE_CHANGE && (
-                          <div className="mt-2 bg-gray-50 dark:bg-gray-700/50 p-4 rounded">
-                            {/* Display governance parameters with debug info */}
-                            <div className="dark:text-gray-300">
-                              {/* First try to extract parameters from description if standard fields are missing */}
-                              {proposal.type === PROPOSAL_TYPES.GOVERNANCE_CHANGE && (
-                                <div>
-                                  {/* Try to parse parameters from description */}
-                                  {(() => {
-                                    // Extract governance parameters from description if they're not in the data
-                                    const hasStandardParams = 
-                                      proposal.newThreshold || 
-                                      proposal.newQuorum || 
-                                      proposal.newVotingDuration || 
-                                      proposal.newProposalStake || 
-                                      proposal.newTimelockDelay;
-                                      
-                                    // If no standard params, check description
-                                    if (!hasStandardParams && proposal.description) {
-                                      // Look for parameter patterns in the description
-                                      const thresholdMatch = proposal.description.match(/threshold[:\s]+([0-9.]+)/i);
-                                      const quorumMatch = proposal.description.match(/quorum[:\s]+([0-9.]+)/i);
-                                      const durationMatch = proposal.description.match(/duration[:\s]+([0-9.]+)/i);
-                                      const stakeMatch = proposal.description.match(/stake[:\s]+([0-9.]+)/i);
-                                      
-                                      // If found any parameters, render them
-                                      if (thresholdMatch || quorumMatch || durationMatch || stakeMatch) {
-                                        return (
-                                          <>
-                                            {thresholdMatch && (
-                                              <p className="mb-2 flex items-center">
-                                                <span className="font-medium mr-2 dark:text-gray-300">New Proposal Threshold:</span> 
-                                                {thresholdMatch[1]} JUST
-                                              </p>
-                                            )}
-                                            
-                                            {quorumMatch && (
-                                              <p className="mb-2 flex items-center">
-                                                <span className="font-medium mr-2 dark:text-gray-300">New Quorum:</span> 
-                                                {quorumMatch[1]} JUST
-                                              </p>
-                                            )}
-                                            
-                                            {durationMatch && (
-                                              <p className="mb-2 flex items-center">
-                                                <span className="font-medium mr-2 dark:text-gray-300">New Voting Duration:</span> 
-                                                {durationMatch[1]} seconds
-                                              </p>
-                                            )}
-                                            
-                                            {stakeMatch && (
-                                              <p className="mb-2 flex items-center">
-                                                <span className="font-medium mr-2 dark:text-gray-300">New Proposal Stake:</span> 
-                                                {stakeMatch[1]} JUST
-                                              </p>
-                                            )}
-                                            
-                                            {!(thresholdMatch || quorumMatch || durationMatch || stakeMatch) && (
-                                              <p className="text-gray-500 dark:text-gray-400 italic">No parameter changes found in description</p>
-                                            )}
-                                          </>
-                                        );
-                                      }
-                                    }
-                                    
-                                    // If has standard params or couldn't extract from description
-                                    return (
-                                      <>
-                                        <p className="mb-2 flex items-center">
-                                          <span className="font-medium mr-2 dark:text-gray-300">New Proposal Threshold:</span> 
-                                          <span className="dark:text-gray-300">
-                                            {proposal.newThreshold && !ethers.BigNumber.from("0").eq(
-                                              ethers.BigNumber.from(proposal.newThreshold || "0")
-                                            )
-                                              ? formatBigNumber(proposal.newThreshold)
-                                              : "No Change"}
-                                          </span>
-                                        </p>
-                                        <p className="mb-2 flex items-center">
-                                          <span className="font-medium mr-2 dark:text-gray-300">New Quorum:</span> 
-                                          <span className="dark:text-gray-300">
-                                            {proposal.newQuorum && !ethers.BigNumber.from("0").eq(
-                                              ethers.BigNumber.from(proposal.newQuorum || "0")
-                                            )
-                                              ? formatBigNumber(proposal.newQuorum)
-                                              : "No Change"}
-                                          </span>
-                                        </p>
-                                        <p className="mb-2 flex items-center">
-                                          <span className="font-medium mr-2 dark:text-gray-300">New Voting Duration:</span> 
-                                          <span className="dark:text-gray-300">
-                                            {proposal.newVotingDuration && parseInt(proposal.newVotingDuration || "0") > 0
-                                              ? formatTime(proposal.newVotingDuration)
-                                              : "No Change"}
-                                          </span>
-                                        </p>
-                                        <p className="mb-2 flex items-center">
-                                          <span className="font-medium mr-2 dark:text-gray-300">New Proposal Stake:</span> 
-                                          <span className="dark:text-gray-300">
-                                            {proposal.newProposalStake && !ethers.BigNumber.from("0").eq(
-                                              ethers.BigNumber.from(proposal.newProposalStake || "0")
-                                            )
-                                              ? formatBigNumber(proposal.newProposalStake)
-                                              : proposal.newTimelockDelay && !ethers.BigNumber.from("0").eq(
-                                                  ethers.BigNumber.from(proposal.newTimelockDelay || "0")
-                                                )
-                                                ? formatBigNumber(proposal.newTimelockDelay) 
-                                                : "No Change"}
-                                          </span>
-                                        </p>
-                                      </>
-                                    );
-                                  })()}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        )}
+                     
+
+    {(() => {
+  // Only render for Governance Change proposals
+  if (parseInt(proposal.type) !== PROPOSAL_TYPES.GOVERNANCE_CHANGE) {
+    return null;
+  }
+
+  // Extract governance parameters from description if they're not in the data
+  const hasStandardParams = 
+    proposal.newThreshold || 
+    proposal.newQuorum || 
+    proposal.newVotingDuration || 
+    proposal.newProposalStake || 
+    proposal.newTimelockDelay;
+    
+  // If no standard params, check description
+  if (!hasStandardParams && proposal.description) {
+    // Look for parameter patterns in the description
+    const thresholdMatch = proposal.description.match(/threshold[:\s]+([0-9.]+)/i);
+    const quorumMatch = proposal.description.match(/quorum[:\s]+([0-9.]+)/i);
+    const durationMatch = proposal.description.match(/duration[:\s]+([0-9.]+)/i);
+    const stakeMatch = proposal.description.match(/stake[:\s]+([0-9.]+)/i);
+    
+    // If found any parameters, render them
+    if (thresholdMatch || quorumMatch || durationMatch || stakeMatch) {
+      return (
+        <div className="mt-2 bg-gray-50 dark:bg-gray-700/50 p-4 rounded">
+          <div className="dark:text-gray-300">
+            {thresholdMatch && (
+              <p className="mb-2 flex items-center">
+                <span className="font-medium mr-2 dark:text-gray-300">New Proposal Threshold:</span> 
+                {thresholdMatch[1]} JUST
+              </p>
+            )}
+            
+            {quorumMatch && (
+              <p className="mb-2 flex items-center">
+                <span className="font-medium mr-2 dark:text-gray-300">New Quorum:</span> 
+                {quorumMatch[1]} JUST
+              </p>
+            )}
+            
+            {durationMatch && (
+              <p className="mb-2 flex items-center">
+                <span className="font-medium mr-2 dark:text-gray-300">New Voting Duration:</span> 
+                {durationMatch[1]} seconds
+              </p>
+            )}
+            
+            {stakeMatch && (
+              <p className="mb-2 flex items-center">
+                <span className="font-medium mr-2 dark:text-gray-300">New Proposal Stake:</span> 
+                {stakeMatch[1]} JUST
+              </p>
+            )}
+          </div>
+        </div>
+      );
+    }
+  }
+  
+  // If has standard params
+  return (
+    <div className="mt-2 bg-gray-50 dark:bg-gray-700/50 p-4 rounded">
+      <div className="dark:text-gray-300">
+        <p className="mb-2 flex items-center">
+          <span className="font-medium mr-2 dark:text-gray-300">New Proposal Threshold:</span> 
+          <span className="dark:text-gray-300">
+            {hasValueChanged(proposal.newThreshold)
+              ? (typeof proposal.newThreshold === 'string' && proposal.newThreshold.includes('.'))
+                ? proposal.newThreshold + ' JUST'
+                : formatBigNumber(proposal.newThreshold) + ' JUST'
+              : "No Change"}
+          </span>
+        </p>
+        <p className="mb-2 flex items-center">
+          <span className="font-medium mr-2 dark:text-gray-300">New Quorum:</span> 
+          <span className="dark:text-gray-300">
+            {hasValueChanged(proposal.newQuorum)
+              ? (typeof proposal.newQuorum === 'string' && proposal.newQuorum.includes('.'))
+                ? proposal.newQuorum + ' JUST'
+                : formatBigNumber(proposal.newQuorum) + ' JUST'
+              : "No Change"}
+          </span>
+        </p>
+        <p className="mb-2 flex items-center">
+          <span className="font-medium mr-2 dark:text-gray-300">New Voting Duration:</span> 
+          <span className="dark:text-gray-300">
+            {proposal.newVotingDuration && parseInt(proposal.newVotingDuration || "0") > 0
+              ? formatTime(proposal.newVotingDuration)
+              : "No Change"}
+          </span>
+        </p>
+        <p className="mb-2 flex items-center">
+          <span className="font-medium mr-2 dark:text-gray-300">New Proposal Stake:</span> 
+          <span className="dark:text-gray-300">
+            {hasValueChanged(proposal.newProposalStake)
+              ? (typeof proposal.newProposalStake === 'string' && proposal.newProposalStake.includes('.'))
+                ? proposal.newProposalStake + ' JUST'
+                : formatBigNumber(proposal.newProposalStake) + ' JUST'
+              : hasValueChanged(proposal.newTimelockDelay)
+                ? (typeof proposal.newTimelockDelay === 'string' && proposal.newTimelockDelay.includes('.'))
+                  ? proposal.newTimelockDelay + ' JUST'
+                  : formatBigNumber(proposal.newTimelockDelay) + ' JUST'
+                : "No Change"}
+          </span>
+        </p>
+      </div>
+    </div>
+  );
+})()}
+  
                         
                         {/* Display Binding Community Vote details */}
                         {proposal.type === PROPOSAL_TYPES.SIGNALING && (

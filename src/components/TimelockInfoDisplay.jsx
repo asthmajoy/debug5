@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { ethers } from 'ethers';
 import { Clock, Shield, Check, Copy, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
 
@@ -64,15 +64,20 @@ const TimelockInfoDisplay = ({
   const [error, setError] = useState(null);
   const [retryCount, setRetryCount] = useState(0);
 
-  const copyToClipboard = (text) => {
+  // Always determine queued proposal status
+  const isQueuedProposal = proposal && proposal.stateLabel?.toLowerCase() === 'queued';
+
+  // Always create the copyToClipboard function
+  const copyToClipboard = useCallback((text) => {
     navigator.clipboard.writeText(text);
     setCopiedText(text);
     setTimeout(() => setCopiedText(null), 2000);
-  };
+  }, [setCopiedText]);
 
-  // Enhanced function to fetch timelock data specifically for this proposal
-  const fetchTimelockData = async () => {
-    if (!contracts.timelock || !proposal || proposal.stateLabel?.toLowerCase() !== 'queued') {
+  // Always create fetchTimelockData callback, even if it won't be used immediately
+  const fetchTimelockData = useCallback(async () => {
+    // Skip if conditions aren't met, but don't return early
+    if (!contracts.timelock || !proposal || !isQueuedProposal) {
       return;
     }
 
@@ -141,35 +146,33 @@ const TimelockInfoDisplay = ({
           txHash
         });
         
-        const newInfo = {
-          ...timelockInfo,
+        // Use functional update to prevent unnecessary re-renders
+        setTimelockInfo(prev => ({
+          ...prev,
           [proposal.id]: {
             level: threatLevel,
             label: getThreatLevelLabel(threatLevel),
             eta: etaTimestamp,
             txHash
           }
-        };
-        
-        setTimelockInfo(newInfo);
+        }));
       } else {
         // If no match found but we do have a timelockTxHash, try a direct query
         if (proposal.timelockTxHash && proposal.timelockTxHash !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
           try {
             const txDetails = await timelockContract.getTransaction(proposal.timelockTxHash);
             if (txDetails && txDetails.eta) {
-              // For direct lookups, we might not have threat level info
-              const newInfo = {
-                ...timelockInfo,
+              // Use functional update to prevent unnecessary re-renders
+              setTimelockInfo(prev => ({
+                ...prev,
                 [proposal.id]: {
                   level: 0, // Default to LOW when threat level unknown
                   label: "UNKNOWN",
                   eta: Number(txDetails.eta),
                   txHash: proposal.timelockTxHash
                 }
-              };
+              }));
               
-              setTimelockInfo(newInfo);
               console.log(`Found partial timelock info via direct query for proposal #${proposal.id}`);
             }
           } catch (error) {
@@ -188,21 +191,39 @@ const TimelockInfoDisplay = ({
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [
+    // Carefully select dependencies to prevent unnecessary re-renders
+    contracts.timelock, 
+    proposal?.id, 
+    proposal?.txHash, 
+    proposal?.target, 
+    proposal?.timelockTxHash, 
+    isQueuedProposal,
+    setTimelockInfo
+  ]);
 
-  // Fetch timelock data when the component mounts or proposal changes
+  // Always create memoized info, even for non-queued proposals
+  const info = useMemo(() => {
+    // Return null if not a queued proposal
+    if (!isQueuedProposal) return null;
+    
+    // Return the timelock info for this proposal
+    return timelockInfo[proposal.id];
+  }, [isQueuedProposal, timelockInfo, proposal?.id]);
+
+  // Always create useEffect, but internal logic checks isQueuedProposal
   useEffect(() => {
-    if (proposal && proposal.stateLabel?.toLowerCase() === 'queued') {
+    // Only fetch if it's a queued proposal
+    if (isQueuedProposal) {
       fetchTimelockData();
     }
-  }, [proposal, retryCount]);
+  }, [fetchTimelockData, retryCount, isQueuedProposal]);
 
-  if (!proposal || proposal.stateLabel?.toLowerCase() !== 'queued') {
+  // Render nothing if not a queued proposal
+  if (!isQueuedProposal) {
     return null;
   }
 
-  const info = timelockInfo[proposal.id];
-  
   return (
     <div className="mt-4 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
       <div className="bg-gray-50 dark:bg-gray-800 px-4 py-2 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
@@ -212,13 +233,14 @@ const TimelockInfoDisplay = ({
         ) : (
           <button 
             onClick={() => {
+              // Increment retry count to trigger refresh
               setRetryCount(prev => prev + 1);
             }}
             className="text-xs text-indigo-500 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 flex items-center"
             disabled={isLoading}
           >
             <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.001 0 01-15.357-2m15.357 2H15"></path>
             </svg>
             Refresh
           </button>
