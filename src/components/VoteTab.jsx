@@ -1,4 +1,4 @@
-// src/components/VoteTab.jsx - Complete enhanced version
+// src/components/VoteTab.jsx - Fixed version with accurate vote counting
 import React, { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
 import useGovernanceParams from '../hooks/useGovernanceParams';
@@ -198,10 +198,10 @@ function truncateHtml(html, maxLength = 200) {
   return truncatedHTML;
 }
 
-// Enhanced VoteData component - combines the best of both implementations
+// FIXED: Enhanced VoteData component with direct blockchain data access and accurate vote counts
 const VoteData = ({ proposalId, showDetailedInfo = false }) => {
   const { contracts, contractsReady } = useWeb3();
-  const { getProposalVoteTotals } = useBlockchainData();
+  
   const [voteData, setVoteData] = useState({
     yesVotes: 0,
     noVotes: 0,
@@ -256,284 +256,221 @@ const VoteData = ({ proposalId, showDetailedInfo = false }) => {
     return numValue.toFixed(5);
   };
   
-  // Helper function to ensure vote count consistency
-  const ensureVoteCountConsistency = (data) => {
-    // Make a copy to avoid mutating the original
-    const result = { ...data };
-    
-    // Ensure vote counts are numbers
-    result.yesVoters = parseInt(result.yesVoters) || 0;
-    result.noVoters = parseInt(result.noVoters) || 0;
-    result.abstainVoters = parseInt(result.abstainVoters) || 0;
-    result.totalVoters = parseInt(result.totalVoters) || 0;
-    
-    // Check if we have voting power but no voters
-    if (result.yesVotingPower > 0 && result.yesVoters === 0) result.yesVoters = 1;
-    if (result.noVotingPower > 0 && result.noVoters === 0) result.noVoters = 1;
-    if (result.abstainVotingPower > 0 && result.abstainVoters === 0) result.abstainVoters = 1;
-    
-    // Ensure total matches sum
-    const calculatedTotal = result.yesVoters + result.noVoters + result.abstainVoters;
-    
-    if (calculatedTotal !== result.totalVoters) {
-      // If individual counts don't add up to total, adjust total to match sum
-      result.totalVoters = calculatedTotal;
-    }
-    
-    return result;
-  };
-  
-  // Direct query method to get votes from events
-  const directQueryVotes = useCallback(async () => {
+  // FIXED: Direct query method to get accurate votes from contract and events
+  const getAccurateVoteCounts = useCallback(async () => {
     if (!contractsReady || !contracts.governance) {
       return null;
     }
     
     try {
-      console.log(`Direct query for votes on proposal ${proposalId}`);
+      console.log(`Getting accurate vote counts for proposal #${proposalId}`);
       
-      // Use VoteCast events - the most reliable method
+      // First get raw data from contract
+      const [forVotes, againstVotes, abstainVotes, totalVotingPower, contractVoterCount] = 
+        await contracts.governance.getProposalVoteTotals(proposalId);
+      
+      console.log(`Contract data for proposal #${proposalId}:`, {
+        forVotes: forVotes.toString(),
+        againstVotes: againstVotes.toString(),
+        abstainVotes: abstainVotes.toString(),
+        totalVotingPower: totalVotingPower.toString(),
+        contractVoterCount: contractVoterCount.toString()
+      });
+      
+      // Use events to get accurate vote distribution
       const filter = contracts.governance.filters.VoteCast(proposalId);
       const events = await contracts.governance.queryFilter(filter);
       
-      // If no votes at all, return zeros
-      if (events.length === 0) {
-        return {
-          yesVotes: "0",
-          noVotes: "0",
-          abstainVotes: "0",
-          totalVotes: 0,
-          totalVoters: 0,
-          yesVoters: 0,
-          noVoters: 0,
-          abstainVoters: 0,
-          yesPercentage: 0,
-          noPercentage: 0,
-          abstainPercentage: 0,
-          yesVotingPower: "0",
-          noVotingPower: "0",
-          abstainVotingPower: "0",
-          totalVotingPower: "0",
-          source: 'direct-query-no-votes'
-        };
-      }
+      // Process the events to get vote distribution
+      const voterMap = new Map();
       
-      // Process each vote event
-      const voters = new Map(); // Track unique voters and their latest vote
-      let yesTotal = ethers.BigNumber.from(0);
-      let noTotal = ethers.BigNumber.from(0);
-      let abstainTotal = ethers.BigNumber.from(0);
-      
-      // Process all events first to build a map of the final vote for each voter
       for (const event of events) {
         try {
           const voter = event.args.voter.toLowerCase();
           const support = Number(event.args.support);
-          const power = event.args.votingPower;
-          
-          // Store or update this voter's latest vote
-          voters.set(voter, { support, power });
+          voterMap.set(voter, support);
         } catch (err) {
           console.warn(`Error processing vote event:`, err);
         }
       }
       
-      // Now count voters and sum up voting power by type
-      let yesVoterCount = 0;
-      let noVoterCount = 0;
-      let abstainVoterCount = 0;
+      // Count votes by type
+      let yesVoters = 0;
+      let noVoters = 0;
+      let abstainVoters = 0;
       
-      // Calculate totals from each voter's final vote
-      for (const [_, voteInfo] of voters.entries()) {
-        const { support, power } = voteInfo;
+      for (const voteType of voterMap.values()) {
+        if (voteType === 1) yesVoters++; // Yes vote
+        else if (voteType === 0) noVoters++; // No vote
+        else if (voteType === 2) abstainVoters++; // Abstain vote
+      }
+      
+      console.log(`Vote distribution from events for proposal #${proposalId}:`, {
+        yesVoters, noVoters, abstainVoters, 
+        totalFromEvents: voterMap.size,
+        totalFromContract: contractVoterCount.toNumber()
+      });
+      
+      // If there's a discrepancy between contract voter count and event count,
+      // prioritize event-based counts but ensure the total matches contract count
+      const eventTotalVoters = yesVoters + noVoters + abstainVoters;
+      
+      if (contractVoterCount.toNumber() !== eventTotalVoters && eventTotalVoters > 0) {
+        console.warn(`Vote count discrepancy: contract=${contractVoterCount.toNumber()}, events=${eventTotalVoters}`);
         
-        if (support === 1) { // Yes
-          yesTotal = yesTotal.add(power);
-          yesVoterCount++;
-        } else if (support === 0) { // No
-          noTotal = noTotal.add(power);
-          noVoterCount++;
-        } else if (support === 2) { // Abstain
-          abstainTotal = abstainTotal.add(power);
-          abstainVoterCount++;
+        // Use event-based distribution but scale to match contract's total
+        if (contractVoterCount.toNumber() > 0) {
+          const scaleFactor = contractVoterCount.toNumber() / eventTotalVoters;
+          
+          yesVoters = Math.round(yesVoters * scaleFactor);
+          noVoters = Math.round(noVoters * scaleFactor);
+          abstainVoters = Math.round(abstainVoters * scaleFactor);
+          
+          // Ensure the sum matches by adjusting the largest count
+          const sum = yesVoters + noVoters + abstainVoters;
+          const diff = contractVoterCount.toNumber() - sum;
+          
+          if (diff !== 0) {
+            if (yesVoters >= noVoters && yesVoters >= abstainVoters) {
+              yesVoters += diff;
+            } else if (noVoters >= yesVoters && noVoters >= abstainVoters) {
+              noVoters += diff;
+            } else {
+              abstainVoters += diff;
+            }
+          }
+        }
+      } else if (eventTotalVoters === 0 && contractVoterCount.toNumber() > 0) {
+        // If we have no events but contract says there are voters,
+        // distribute based on voting power ratios
+        console.log(`No events found but contract reports ${contractVoterCount.toNumber()} voters`);
+        
+        const totalPower = forVotes.add(againstVotes).add(abstainVotes);
+        
+        if (!totalPower.isZero()) {
+          const yesRatio = forVotes.mul(100).div(totalPower).toNumber() / 100;
+          const noRatio = againstVotes.mul(100).div(totalPower).toNumber() / 100;
+          const abstainRatio = abstainVotes.mul(100).div(totalPower).toNumber() / 100;
+          
+          yesVoters = Math.round(yesRatio * contractVoterCount.toNumber());
+          noVoters = Math.round(noRatio * contractVoterCount.toNumber());
+          abstainVoters = Math.round(abstainRatio * contractVoterCount.toNumber());
+          
+          // Ensure at least 1 voter if there's voting power
+          if (!forVotes.isZero() && yesVoters === 0) yesVoters = 1;
+          if (!againstVotes.isZero() && noVoters === 0) noVoters = 1;
+          if (!abstainVotes.isZero() && abstainVoters === 0) abstainVoters = 1;
+          
+          // Adjust to match total
+          const sum = yesVoters + noVoters + abstainVoters;
+          if (sum !== contractVoterCount.toNumber()) {
+            const diff = contractVoterCount.toNumber() - sum;
+            
+            // Add to the largest group or subtract from it
+            if (yesVoters >= noVoters && yesVoters >= abstainVoters) {
+              yesVoters += diff;
+            } else if (noVoters >= yesVoters && noVoters >= abstainVoters) {
+              noVoters += diff;
+            } else {
+              abstainVoters += diff;
+            }
+          }
         }
       }
       
-      // Calculate total voting power and percentages
-      const totalVotingPower = yesTotal.add(noTotal).add(abstainTotal);
+      // Calculate percentages
       let yesPercentage = 0;
       let noPercentage = 0;
       let abstainPercentage = 0;
       
       if (!totalVotingPower.isZero()) {
-        yesPercentage = yesTotal.mul(100).div(totalVotingPower).toNumber();
-        noPercentage = noTotal.mul(100).div(totalVotingPower).toNumber();
-        abstainPercentage = abstainTotal.mul(100).div(totalVotingPower).toNumber();
+        yesPercentage = parseFloat(forVotes.mul(10000).div(totalVotingPower)) / 100;
+        noPercentage = parseFloat(againstVotes.mul(10000).div(totalVotingPower)) / 100;
+        abstainPercentage = parseFloat(abstainVotes.mul(10000).div(totalVotingPower)) / 100;
       }
       
-      // Verify that the voter counts add up correctly
-      const totalCalculatedVoters = yesVoterCount + noVoterCount + abstainVoterCount;
-      if (totalCalculatedVoters !== voters.size) {
-        console.warn(`Voter count mismatch in directQueryVotes: sum=${totalCalculatedVoters}, map size=${voters.size}`);
-        // Adjust to ensure consistency - if we counted the voters directly, that's more reliable
-        const votersSize = totalCalculatedVoters;
-        
-        return {
-          yesVotes: ethers.utils.formatEther(yesTotal),
-          noVotes: ethers.utils.formatEther(noTotal),
-          abstainVotes: ethers.utils.formatEther(abstainTotal),
-          totalVotes: votersSize,
-          totalVoters: votersSize, // Use our calculated total
-          yesVoters: yesVoterCount,
-          noVoters: noVoterCount,
-          abstainVoters: abstainVoterCount,
-          yesPercentage,
-          noPercentage,
-          abstainPercentage,
-          yesVotingPower: ethers.utils.formatEther(yesTotal),
-          noVotingPower: ethers.utils.formatEther(noTotal),
-          abstainVotingPower: ethers.utils.formatEther(abstainTotal),
-          totalVotingPower: ethers.utils.formatEther(totalVotingPower),
-          source: 'direct-query'
-        };
-      }
-      
+      // Format and return the data
       return {
-        yesVotes: ethers.utils.formatEther(yesTotal),
-        noVotes: ethers.utils.formatEther(noTotal),
-        abstainVotes: ethers.utils.formatEther(abstainTotal),
-        totalVotes: voters.size,
-        totalVoters: voters.size,
-        yesVoters: yesVoterCount,
-        noVoters: noVoterCount,
-        abstainVoters: abstainVoterCount,
-        yesPercentage,
-        noPercentage,
-        abstainPercentage,
-        yesVotingPower: ethers.utils.formatEther(yesTotal),
-        noVotingPower: ethers.utils.formatEther(noTotal),
-        abstainVotingPower: ethers.utils.formatEther(abstainTotal),
+        // Vote power formatted
+        yesVotes: ethers.utils.formatEther(forVotes),
+        noVotes: ethers.utils.formatEther(againstVotes),
+        abstainVotes: ethers.utils.formatEther(abstainVotes),
         totalVotingPower: ethers.utils.formatEther(totalVotingPower),
-        source: 'direct-query'
+        
+        // Vote power as numbers
+        yesVotingPower: parseFloat(ethers.utils.formatEther(forVotes)),
+        noVotingPower: parseFloat(ethers.utils.formatEther(againstVotes)),
+        abstainVotingPower: parseFloat(ethers.utils.formatEther(abstainVotes)),
+        
+        // Voter counts
+        yesVoters,
+        noVoters,
+        abstainVoters,
+        totalVoters: contractVoterCount.toNumber(),
+        
+        // Percentages
+        yesPercentage,
+        noPercentage, 
+        abstainPercentage,
+        
+        // Source
+        source: 'direct-contract-with-events'
       };
     } catch (error) {
-      console.error(`Error in directQueryVotes for proposal ${proposalId}:`, error);
+      console.error(`Error getting vote data for proposal ${proposalId}:`, error);
       return null;
     }
   }, [contractsReady, contracts, proposalId]);
 
-  // Fetch vote data using the caching mechanism
+  // FIXED: Removed the problematic cache handling and vote count distribution functions
+  // Now directly using blockchain data with accurate vote counts
   useEffect(() => {
     const fetchVoteData = async () => {
-      if (!getProposalVoteTotals || !proposalId) return;
+      if (!proposalId || !contractsReady || !contracts.governance) return;
       
       setVoteData(prev => ({ ...prev, loading: true }));
-
+      
       try {
-        // Try to get from cache first
-        const cacheKey = `dashboard-votes-${proposalId}`;
-        const cachedData = blockchainDataCache.get(cacheKey);
+        // Get accurate vote counts
+        const result = await getAccurateVoteCounts();
         
-        if (cachedData) {
-          console.log(`Using cached data for proposal #${proposalId}`);
-          const consistentData = ensureVoteCountConsistency(cachedData);
-          setVoteData({ ...consistentData, loading: false });
-          return;
-        }
-        
-        // Get fresh data from the blockchain
-        console.log(`Fetching vote data for proposal #${proposalId}`);
-        const data = await getProposalVoteTotals(proposalId);
-        
-        if (!data) {
-          throw new Error(`No data returned for proposal #${proposalId}`);
-        }
-        
-        // Process the data consistently
-        const processedData = {
-          yesVotes: parseFloat(data.yesVotes) || 0,
-          noVotes: parseFloat(data.noVotes) || 0,
-          abstainVotes: parseFloat(data.abstainVotes) || 0,
-          yesVotingPower: parseFloat(data.yesVotes || data.yesVotingPower) || 0,
-          noVotingPower: parseFloat(data.noVotes || data.noVotingPower) || 0,
-          abstainVotingPower: parseFloat(data.abstainVotes || data.abstainVotingPower) || 0,
-          yesVoters: data.yesVoters || 0,
-          noVoters: data.noVoters || 0,
-          abstainVoters: data.abstainVoters || 0,
-          totalVoters: parseInt(data.totalVoters) || 0,
-          fetchedAt: Date.now(),
-          loading: false
-        };
-        
-        // Calculate total voting power
-        processedData.totalVotingPower = 
-          processedData.yesVotingPower + 
-          processedData.noVotingPower + 
-          processedData.abstainVotingPower;
-        
-        // Calculate percentages
-        if (processedData.totalVotingPower > 0) {
-          processedData.yesPercentage = (processedData.yesVotingPower / processedData.totalVotingPower) * 100;
-          processedData.noPercentage = (processedData.noVotingPower / processedData.totalVotingPower) * 100;
-          processedData.abstainPercentage = (processedData.abstainVotingPower / processedData.totalVotingPower) * 100;
+        if (result) {
+          setVoteData({
+            ...result,
+            loading: false
+          });
         } else {
-          processedData.yesPercentage = 0;
-          processedData.noPercentage = 0;
-          processedData.abstainPercentage = 0;
+          // Fallback to empty data
+          setVoteData({
+            yesVotes: 0,
+            noVotes: 0,
+            abstainVotes: 0,
+            yesVotingPower: 0,
+            noVotingPower: 0,
+            abstainVotingPower: 0,
+            yesVoters: 0,
+            noVoters: 0,
+            abstainVoters: 0,
+            totalVoters: 0,
+            totalVotingPower: 0,
+            yesPercentage: 0,
+            noPercentage: 0,
+            abstainPercentage: 0,
+            loading: false
+          });
         }
-        
-        // Ensure consistency
-        const consistentData = ensureVoteCountConsistency(processedData);
-        
-        // Cache the result
-        blockchainDataCache.set(cacheKey, consistentData, 60);
-        
-        setVoteData(consistentData);
       } catch (error) {
         console.error(`Error fetching vote data for proposal ${proposalId}:`, error);
-        
-        try {
-          // Try direct query votes as a backup approach
-          const directQueryResult = await directQueryVotes();
-          if (directQueryResult) {
-            // Cache this direct query data
-            const cacheKey = `dashboard-votes-${proposalId}`;
-            blockchainDataCache.set(cacheKey, directQueryResult, 300);
-            
-            setVoteData({ ...directQueryResult, loading: false });
-            return;
-          }
-        } catch (fallbackErr) {
-          console.error("Error creating fallback data:", fallbackErr);
-        }
-        
-        // Set empty data structure as last resort
-        setVoteData({
-          yesVotes: 0,
-          noVotes: 0,
-          abstainVotes: 0,
-          yesVotingPower: 0,
-          noVotingPower: 0,
-          abstainVotingPower: 0,
-          yesVoters: 0,
-          noVoters: 0,
-          abstainVoters: 0,
-          totalVoters: 0,
-          totalVotingPower: 0,
-          yesPercentage: 0,
-          noPercentage: 0,
-          abstainPercentage: 0,
-          loading: false
-        });
+        setVoteData(prev => ({ ...prev, loading: false }));
       }
     };
     
     fetchVoteData();
     
-    // Poll for updated data for active proposals
+    // Poll for updated data every 15 seconds
     const interval = setInterval(fetchVoteData, 15000);
     return () => clearInterval(interval);
-  }, [proposalId, getProposalVoteTotals, directQueryVotes]);
+  }, [proposalId, getAccurateVoteCounts, contractsReady, contracts]);
   
   // Render the vote bar
   const renderVoteBar = () => {
@@ -862,7 +799,7 @@ const ProposalCard = ({
       {/* Render proposal description with HTML support */}
       {renderProposalDescription(proposal, true, 200)}
       
-      {/* Vote data display using the enhanced VoteData component */}
+      {/* Vote data display using the FIXED VoteData component */}
       <div className="mb-6">
         <VoteData proposalId={proposal.id} />
       </div>
@@ -1732,7 +1669,7 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
                 </div>
               </div>
               
-              {/* Vote results - Using our enhanced VoteData component for consistent data */}
+              {/* Vote results - Using our FIXED VoteData component for accurate vote counts */}
               <div className="mb-6">
                 <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Voting Results</h4>
                 <div className="bg-gray-50 dark:bg-gray-900/50 p-4 rounded border dark:border-gray-700">

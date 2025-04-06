@@ -1,41 +1,23 @@
-// src/components/VoteData.jsx
+// src/components/VoteData.jsx - Using the shared utility function
 import React, { useState, useEffect, useCallback } from 'react';
 import { useBlockchainData } from '../contexts/BlockchainDataContext';
 import { useWeb3 } from '../contexts/Web3Context';
 import Loader from './Loader';
 import { PROPOSAL_STATES } from '../utils/constants';
+import { getAccurateVoteCounts } from '../utils/getAccurateVoteCounts';
 import { ethers } from 'ethers';
 
 /**
  * VoteData component - Fetches and displays blockchain vote data 
- * with automatic refresh for active proposals
+ * using direct contract calls and accurate event-based vote counting
  */
 const VoteData = ({ proposalId, showDetailedInfo = false }) => {
-  const { getProposalVoteTotals } = useBlockchainData();
   const { contracts, contractsReady } = useWeb3();
   
   const [voteData, setVoteData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [proposalState, setProposalState] = useState(null);
-
-  // Format numbers with appropriate decimals
-  const formatNumber = (value, decimals = 2) => {
-    if (value === undefined || value === null) return '0';
-    
-    const numValue = typeof value === 'string' ? parseFloat(value) : value;
-    if (isNaN(numValue)) return '0';
-    
-    // For whole numbers, don't show decimals
-    if (Math.abs(numValue - Math.round(numValue)) < 0.00001) {
-      return numValue.toLocaleString(undefined, { maximumFractionDigits: 0 });
-    }
-    
-    return numValue.toLocaleString(undefined, { 
-      minimumFractionDigits: 0,
-      maximumFractionDigits: decimals
-    });
-  };
 
   // Format token values for display
   const formatTokenAmount = (value) => {
@@ -69,7 +51,7 @@ const VoteData = ({ proposalId, showDetailedInfo = false }) => {
     }
   }, [contractsReady, contracts, proposalId]);
 
-  // Fetch vote data directly from the governance contract
+  // Fetch vote data using the utility function for consistent results
   const fetchVoteData = useCallback(async () => {
     if (!proposalId || !contractsReady || !contracts.governance) return;
     
@@ -77,127 +59,28 @@ const VoteData = ({ proposalId, showDetailedInfo = false }) => {
     setError(null);
     
     try {
-      console.log(`Directly calling contract getProposalVoteTotals for proposal #${proposalId}`);
+      console.log(`Fetching vote data for proposal #${proposalId}`);
       
-      // Fetch proposal state first to determine if it's active
+      // Get the state
       const state = await fetchProposalState();
       
-      // DIRECTLY call the contract's getProposalVoteTotals function
-      const [forVotes, againstVotes, abstainVotes, totalVotingPower, voterCount] = 
-        await contracts.governance.getProposalVoteTotals(proposalId);
+      // Use the shared utility function to get accurate vote counts
+      const voteResult = await getAccurateVoteCounts(contracts.governance, proposalId);
       
-      console.log(`Raw contract data for proposal #${proposalId}:`, {
-        forVotes: forVotes.toString(),
-        againstVotes: againstVotes.toString(),
-        abstainVotes: abstainVotes.toString(),
-        totalVotingPower: totalVotingPower.toString(),
-        voterCount: voterCount.toString()
-      });
+      // Add state to the result
+      voteResult.isActive = state === PROPOSAL_STATES.ACTIVE;
+      voteResult.state = state;
+      voteResult.fetchedAt = Date.now();
       
-      // Convert BigNumber values to formatted strings
-      const formattedData = {
-        yesVotes: ethers.utils.formatEther(forVotes),
-        noVotes: ethers.utils.formatEther(againstVotes),
-        abstainVotes: ethers.utils.formatEther(abstainVotes),
-        totalVotingPower: ethers.utils.formatEther(totalVotingPower),
-        totalVoters: voterCount.toNumber(),
-        source: 'direct-contract-call'
-      };
-      
-      // Process the data to ensure consistent format
-      // Process the data to ensure consistent format
-      const processedData = {
-        ...formattedData,
-        // Ensure we have numeric values for percentages
-        yesVotingPower: parseFloat(formattedData.yesVotes),
-        noVotingPower: parseFloat(formattedData.noVotes),
-        abstainVotingPower: parseFloat(formattedData.abstainVotes),
-      };
-      
-      // Calculate total voting power in case it's needed
-      const totalVotingPowerNum = parseFloat(formattedData.totalVotingPower);
-      processedData.totalVotingPower = totalVotingPowerNum;
-      // Calculate voter counts based on percentages if needed
-      // First estimated approach using voter percentages
-      if (processedData.totalVoters > 0) {
-        // Use BigNumber calculations for more accuracy
-        if (!forVotes.isZero() || !againstVotes.isZero() || !abstainVotes.isZero()) {
-          // Calculate voter distribution proportionally to voting power
-          const totalPower = forVotes.add(againstVotes).add(abstainVotes);
-          
-          if (!totalPower.isZero()) {
-            const yesRatio = forVotes.mul(100).div(totalPower);
-            const noRatio = againstVotes.mul(100).div(totalPower);
-            const abstainRatio = totalPower.sub(forVotes).sub(againstVotes).mul(100).div(totalPower);
-            
-            // Calculate estimated voter counts based on voting power distribution
-            processedData.yesVoters = Math.max(
-              forVotes.gt(0) ? 1 : 0, 
-              Math.round((yesRatio.toNumber() / 100) * processedData.totalVoters)
-            );
-            
-            processedData.noVoters = Math.max(
-              againstVotes.gt(0) ? 1 : 0,
-              Math.round((noRatio.toNumber() / 100) * processedData.totalVoters)
-            );
-            
-            processedData.abstainVoters = Math.max(
-              abstainVotes.gt(0) ? 1 : 0,
-              Math.round((abstainRatio.toNumber() / 100) * processedData.totalVoters)
-            );
-            
-            // Ensure total adds up
-            const calculatedTotal = processedData.yesVoters + processedData.noVoters + processedData.abstainVoters;
-            if (calculatedTotal !== processedData.totalVoters) {
-              // Adjust largest group to ensure total matches
-              const diff = processedData.totalVoters - calculatedTotal;
-              if (processedData.yesVoters >= processedData.noVoters && processedData.yesVoters >= processedData.abstainVoters) {
-                processedData.yesVoters += diff;
-              } else if (processedData.noVoters >= processedData.yesVoters && processedData.noVoters >= processedData.abstainVoters) {
-                processedData.noVoters += diff;
-              } else {
-                processedData.abstainVoters += diff;
-              }
-            }
-          }
-        } else {
-          // No votes cast yet
-          processedData.yesVoters = 0;
-          processedData.noVoters = 0;
-          processedData.abstainVoters = 0;
-        }
-      } else {
-        // Default to at least 1 voter per vote type with power
-        processedData.yesVoters = parseFloat(processedData.yesVotes) > 0 ? 1 : 0;
-        processedData.noVoters = parseFloat(processedData.noVotes) > 0 ? 1 : 0;
-        processedData.abstainVoters = parseFloat(processedData.abstainVotes) > 0 ? 1 : 0;
-        processedData.totalVoters = processedData.yesVoters + processedData.noVoters + processedData.abstainVoters;
-      }
-      
-      // Calculate percentages for display
-      if (totalVotingPowerNum > 0) {
-        processedData.yesPercentage = (processedData.yesVotingPower / totalVotingPowerNum) * 100;
-        processedData.noPercentage = (processedData.noVotingPower / totalVotingPowerNum) * 100;
-        processedData.abstainPercentage = (processedData.abstainVotingPower / totalVotingPowerNum) * 100;
-      } else {
-        processedData.yesPercentage = 0;
-        processedData.noPercentage = 0;
-        processedData.abstainPercentage = 0;
-      }
-      
-      // Add metadata
-      processedData.isActive = state === PROPOSAL_STATES.ACTIVE;
-      processedData.state = state;
-      processedData.fetchedAt = Date.now();
-      
-      setVoteData(processedData);
+      console.log(`Final vote data for proposal #${proposalId}:`, voteResult);
+      setVoteData(voteResult);
     } catch (err) {
       console.error(`Error fetching vote data for proposal ${proposalId}:`, err);
       setError(`Failed to load vote data: ${err.message}`);
     } finally {
       setLoading(false);
     }
-  }, [getProposalVoteTotals, proposalId, fetchProposalState]);
+  }, [proposalId, fetchProposalState, contracts, contractsReady]);
 
   // Initial data fetch
   useEffect(() => {

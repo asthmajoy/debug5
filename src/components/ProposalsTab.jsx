@@ -719,111 +719,105 @@ const ProposalsTab = ({
   }, [contracts, processedProposals]);
 
   // CHANGE 4: Update the checkTimelockForQueuedProposals to prevent excessive re-renders
-  useEffect(() => {
-    // Only run if we have proposals and contracts
-    if (!processedProposals?.length || !contracts?.timelock) return;
+  // REPLACE the checkTimelockForQueuedProposals implementation with:
+useEffect(() => {
+  // Only run if we have proposals and contracts
+  if (!processedProposals?.length || !contracts?.timelock) return;
+  
+  // Use a ref to track active fetches to prevent duplicate work
+  const activeProposalChecks = new Set();
+  let isComponentMounted = true;
+  
+  const checkTimelockForQueuedProposals = async () => {
+    console.log("Checking timelock status for queued proposals...");
     
-    // Use a ref to track active fetches to prevent duplicate work
-    const activeProposalChecks = new Set();
-    let isComponentMounted = true;
+    // Avoid modifying state directly - create a copy
+    const updatedProposals = [...processedProposals];
+    let hasUpdates = false;
     
-    const checkTimelockForQueuedProposals = async () => {
-      console.log("Checking timelock status for queued proposals...");
+    // Process only queued proposals that we haven't checked recently
+    const queuedProposals = updatedProposals.filter(p => 
+      (Number(p.state) === PROPOSAL_STATES.QUEUED || 
+       p.stateLabel?.toLowerCase() === 'queued') && 
+      !activeProposalChecks.has(p.id) &&
+      (!p.lastTimelockCheck || Date.now() - p.lastTimelockCheck > 60000) // 60 seconds instead of 30
+    );
+    
+    if (queuedProposals.length === 0) {
+      return;
+    }
+    
+    // Process in smaller batches (1 instead of 2) to reduce load
+    const batchSize = 1;
+    for (let i = 0; i < queuedProposals.length; i += batchSize) {
+      if (!isComponentMounted) break;
       
-      // Avoid modifying state directly
-      const updatedProposals = [...processedProposals];
-      let hasUpdates = false;
+      const batch = queuedProposals.slice(i, i + batchSize);
       
-      // Process only queued proposals that we haven't checked recently
-      const queuedProposals = updatedProposals.filter(p => 
-        (Number(p.state) === PROPOSAL_STATES.QUEUED || 
-         p.stateLabel?.toLowerCase() === 'queued') && 
-        !activeProposalChecks.has(p.id) &&
-        (!p.lastTimelockCheck || Date.now() - p.lastTimelockCheck > 60000) // 60 seconds instead of 30
-      );
-      
-      if (queuedProposals.length === 0) {
-        return;
-      }
-      
-      console.log(`Found ${queuedProposals.length} queued proposals to check`);
-      
-      // Process in smaller batches (1 instead of 2) to reduce load
-      const batchSize = 1;
-      for (let i = 0; i < queuedProposals.length; i += batchSize) {
-        if (!isComponentMounted) break;
+      // Process proposals serially instead of in parallel to reduce memory usage
+      for (const proposal of batch) {
+        const proposalId = proposal.id;
+        activeProposalChecks.add(proposalId);
         
-        const batch = queuedProposals.slice(i, i + batchSize);
-        
-        // Process proposals serially instead of in parallel to reduce memory usage
-        for (const proposal of batch) {
-          const proposalId = proposal.id;
-          activeProposalChecks.add(proposalId);
+        try {
+          const timelockStatus = await checkTimelockStatus(proposalId);
           
-          try {
-            // Use the centralized function to check timelock status
-            const timelockStatus = await checkTimelockStatus(proposalId);
-            
-            if (timelockStatus) {
-              console.log(`Found timelock status for proposal #${proposalId}:`, timelockStatus);
+          if (timelockStatus) {
+            // Find the proposal index in our array
+            const index = updatedProposals.findIndex(p => Number(p.id) === Number(proposalId));
+            if (index !== -1) {
+              // Update the proposal with timelock information
+              updatedProposals[index] = {
+                ...updatedProposals[index],
+                timelockStatus: timelockStatus.status,
+                timelockEta: timelockStatus.eta,
+                isInTimelock: timelockStatus.isInTimelock,
+                timelockRemaining: timelockStatus.remainingTime,
+                timelockTxHash: timelockStatus.txHash || updatedProposals[index].timelockTxHash,
+                readyForExecution: timelockStatus.readyForExecution,
+                lastTimelockCheck: Date.now(),
+                timelockThreatLevel: timelockStatus.threatLevel ?? updatedProposals[index].timelockThreatLevel,
+                displayStateLabel: timelockStatus.executed ? 'Executed' :
+                                timelockStatus.canceled ? 'Canceled' :
+                                timelockStatus.readyForExecution ? 'Ready For Execution' :
+                                timelockStatus.isInTimelock ? 'In Timelock' : updatedProposals[index].stateLabel
+              };
               
-              // Find the proposal index in our array
-              const index = updatedProposals.findIndex(p => Number(p.id) === Number(proposalId));
-              if (index !== -1) {
-                // Update the proposal with timelock information
-                updatedProposals[index] = {
-                  ...updatedProposals[index],
-                  timelockStatus: timelockStatus.status,
-                  timelockEta: timelockStatus.eta,
-                  isInTimelock: timelockStatus.isInTimelock,
-                  timelockRemaining: timelockStatus.remainingTime,
-                  timelockTxHash: timelockStatus.txHash || updatedProposals[index].timelockTxHash,
-                  readyForExecution: timelockStatus.readyForExecution,
-                  lastTimelockCheck: Date.now(),
-                  // Keep the original threat level information to prevent overrides
-                  timelockThreatLevel: timelockStatus.threatLevel ?? updatedProposals[index].timelockThreatLevel,
-                  // Set a displayStateLabel that correctly shows timelock status
-                  displayStateLabel: timelockStatus.executed ? 'Executed' :
-                                  timelockStatus.canceled ? 'Canceled' :
-                                  timelockStatus.readyForExecution ? 'Ready For Execution' :
-                                  timelockStatus.isInTimelock ? 'In Timelock' : updatedProposals[index].stateLabel
-                };
-                
-                hasUpdates = true;
-              }
+              hasUpdates = true;
             }
-          } catch (err) {
-            console.warn(`Error processing proposal #${proposalId}:`, err);
-          } finally {
-            activeProposalChecks.delete(proposalId);
           }
-        }
-        
-        // Larger delay between batches to reduce CPU usage
-        if (i + batchSize < queuedProposals.length) {
-          await new Promise(resolve => setTimeout(resolve, 500));
+        } catch (err) {
+          console.warn(`Error processing proposal #${proposalId}:`, err);
+        } finally {
+          activeProposalChecks.delete(proposalId);
         }
       }
       
-      // Only update state if there were changes and component is still mounted
-      if (hasUpdates && isComponentMounted) {
-        setProcessedProposals(updatedProposals);
+      // Larger delay between batches
+      if (i + batchSize < queuedProposals.length) {
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
-    };
+    }
     
-    // Run the check
-    checkTimelockForQueuedProposals();
-    
-    // Set up an interval with less frequent updates (60s instead of 30s)
-    const intervalId = setInterval(checkTimelockForQueuedProposals, 60000);
-    
-    // Clean up the interval when the component unmounts
-    return () => {
-      isComponentMounted = false;
-      clearInterval(intervalId);
-      activeProposalChecks.clear();
-    };
-  }, [processedProposals, contracts?.timelock]);
+    // Only update state if there were changes and component is still mounted
+    if (hasUpdates && isComponentMounted) {
+      setProcessedProposals(updatedProposals);
+    }
+  };
+  
+  // Run the check
+  checkTimelockForQueuedProposals();
+  
+  // Set up an interval with less frequent updates (60s instead of 30s)
+  const intervalId = setInterval(checkTimelockForQueuedProposals, 60000);
+  
+  // Clean up the interval when the component unmounts
+  return () => {
+    isComponentMounted = false;
+    clearInterval(intervalId);
+    activeProposalChecks.clear();
+  };
+}, [processedProposals, contracts?.timelock]);
 
 
 // Fix #5: Add memory leak prevention - add this to ProposalsTab

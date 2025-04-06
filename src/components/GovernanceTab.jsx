@@ -36,7 +36,6 @@ const GovernanceTab = ({ contracts, account }) => {
   // State for token parameters
   const [tokenParams, setTokenParams] = useState({
     maxTokenSupply: ''
-
   });
 
   // State for security settings
@@ -56,6 +55,7 @@ const GovernanceTab = ({ contracts, account }) => {
   const [currentSection, setCurrentSection] = useState('governance');
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [activeUpdates, setActiveUpdates] = useState({});
+  const [latestSnapshotId, setLatestSnapshotId] = useState('');
 
   // Fetch current parameters when component mounts or when refreshed
   useEffect(() => {
@@ -89,7 +89,6 @@ const GovernanceTab = ({ contracts, account }) => {
 
       // Fetch token parameters
       const maxSupply = await contracts.justToken.maxTokenSupply();
-  
       
       setTokenParams({
         maxTokenSupply: ethers.utils.formatEther(maxSupply)
@@ -103,6 +102,67 @@ const GovernanceTab = ({ contracts, account }) => {
       setTxStatus(`Error: ${error.message}`);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Handler for creating a snapshot
+  const handleCreateSnapshot = async () => {
+    if (!contracts.justToken) return;
+    
+    setActiveUpdates(prev => ({ ...prev, createSnapshot: true }));
+    setLoading(true);
+    setTxStatus('Creating snapshot...');
+    
+    try {
+      // Call the createSnapshot function on the JustToken contract
+      const tx = await contracts.justToken.createSnapshot();
+      
+      setTxStatus('Transaction submitted. Waiting for confirmation...');
+      const receipt = await tx.wait();
+      
+      // Check if the transaction was successful
+      if (receipt.status === 1) {
+        // Try to find the snapshot ID from the transaction events
+        let snapshotId;
+        try {
+          const snapshotEvent = receipt.logs.find(log => {
+            try {
+              const parsedLog = contracts.justToken.interface.parseLog(log);
+              return parsedLog && parsedLog.name === "SnapshotCreated";
+            } catch (e) {
+              return false;
+            }
+          });
+          
+          if (snapshotEvent) {
+            const parsedEvent = contracts.justToken.interface.parseLog(snapshotEvent);
+            snapshotId = parsedEvent.args.snapshotId.toString();
+            setLatestSnapshotId(snapshotId);
+            setTxStatus(`Snapshot created successfully! Snapshot ID: ${snapshotId}`);
+          } else {
+            setTxStatus('Snapshot created successfully!');
+          }
+        } catch (e) {
+          setTxStatus('Snapshot created successfully!');
+        }
+        
+        // Refresh the parameters
+        setRefreshTrigger(prev => prev + 1);
+      } else {
+        setTxStatus('Transaction failed');
+      }
+    } catch (error) {
+      console.error("Error creating snapshot:", error);
+      setTxStatus(`Error: ${error.message}`);
+    } finally {
+      setLoading(false);
+      // Clear active update after a delay
+      setTimeout(() => {
+        setActiveUpdates(prev => ({ ...prev, createSnapshot: false }));
+        if (!txStatus.includes('Error')) {
+          setTxStatus('');
+        }
+      }, 5000);
     }
   };
 
@@ -491,6 +551,53 @@ const GovernanceTab = ({ contracts, account }) => {
     );
   };
 
+  // Helper function to render the createSnapshot button
+  const renderCreateSnapshotButton = () => {
+    const isCreatingSnapshot = activeUpdates.createSnapshot;
+    
+    return (
+      <div className={`mb-6 p-4 rounded-lg shadow-sm border transition-shadow duration-200 hover:shadow-md ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-100'}`}>
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between">
+          <div className="flex-1 mb-3 md:mb-0 md:mr-4">
+            <label className={`block text-sm font-semibold ${isDarkMode ? 'text-gray-200' : 'text-gray-700'}`}>Create Token Snapshot</label>
+            <p className={`mt-1 text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+              Create a snapshot of token balances for governance voting purposes. 
+              {latestSnapshotId && ` Last snapshot ID: ${latestSnapshotId}`}
+            </p>
+          </div>
+          <div className="flex items-center">
+            <button
+              type="button"
+              onClick={handleCreateSnapshot}
+              disabled={loading || isCreatingSnapshot}
+              className={`inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white 
+                ${isCreatingSnapshot ? 'bg-green-600 animate-pulse' : 'bg-indigo-600 hover:bg-indigo-700'} 
+                focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors duration-200
+                ${isDarkMode ? 'focus:ring-offset-gray-800' : ''}`}
+            >
+              {isCreatingSnapshot ? (
+                <>
+                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Creating Snapshot...
+                </>
+              ) : (
+                <>
+                  <svg className="-ml-1 mr-2 h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                  Create Snapshot
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // Helper function to render read-only parameter
   const renderReadOnlyParam = (label, value, description = null) => (
     <div className={`mb-6 p-4 rounded-lg shadow-sm border ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-100'}`}>
@@ -715,6 +822,13 @@ const GovernanceTab = ({ contracts, account }) => {
                 loading,
                 "Maximum total supply of tokens that can exist"
               )}
+              
+              <SectionHeader 
+                title="Token Snapshots" 
+                description="Create and manage token snapshots for governance voting"
+              />
+              
+              {renderCreateSnapshotButton()}
               
               <SectionHeader 
                 title="Emergency Functions" 
