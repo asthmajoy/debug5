@@ -5,7 +5,7 @@ import { formatRelativeTime, formatBigNumber, formatAddress, formatTime } from '
 import { addressesEqual, diagnoseMismatchedAddresses } from '../utils/addressUtils';
 import Loader from './Loader';
 import { ChevronDown, ChevronUp, Copy, Check, AlertTriangle, Clock, Shield, ChevronLeft, ChevronRight } from 'lucide-react';
-import TimelockInfoDisplay from './TimelockInfoDisplay';
+import TimelockInfoDisplay, { getThreatLevelLabel, getThreatLevelColor } from './TimelockInfoDisplay';
 import ProposalRichTextEditor from './ProposalRichTextEditor';
 import { useDarkMode } from '../contexts/DarkModeContext';
 
@@ -166,18 +166,6 @@ function getProposalTypeLabel(type) {
   return typeLabels[type] || "Unknown";
 }
 
-// Helper function to get human-readable threat level label
-function getThreatLevelLabel(level) {
-  const threatLevelLabels = {
-    0: "LOW",
-    1: "MEDIUM",
-    2: "HIGH", 
-    3: "CRITICAL"
-  };
-  
-  return threatLevelLabels[level] || "Unknown";
-}
-
 // Helper function for status colors
 function getStatusColor(status) {
   switch (status) {
@@ -258,6 +246,54 @@ const ProposalsTab = ({
   // NEW: Add state for processed proposals to solve HTML rendering inconsistency
   const [processedProposals, setProcessedProposals] = useState([]);
 
+  // CHANGE 5: Add memory leak prevention
+  // Add this useEffect near the top of your component
+  useEffect(() => {
+    // Return a cleanup function that will run when component unmounts
+    return () => {
+      // Clear any pending operations
+      const timeoutIds = [];
+      // Find all timeouts
+      for (let i = setTimeout(function() {}, 0); i > 0; i--) {
+        clearTimeout(i);
+        timeoutIds.push(i);
+      }
+      
+      console.log(`Cleaned up ${timeoutIds.length} timeouts`);
+      
+      // Clear any intervals
+      const intervalIds = [];
+      // Find all intervals
+      for (let i = setInterval(function() {}, 100000); i > 0; i--) {
+        clearInterval(i);
+        intervalIds.push(i);
+      }
+      
+      console.log(`Cleaned up ${intervalIds.length} intervals`);
+      
+      // Reset any component state
+      setQueuedTxs({});
+      setTransactionError('');
+      setExpandedProposalId(null);
+      
+      // Also clear sessionStorage items older than 1 day
+      const now = Date.now();
+      const oneDayAgo = now - 86400000; // 24 hours in milliseconds
+      
+      Object.keys(sessionStorage).forEach(key => {
+        if (key.startsWith('searched-events-')) {
+          // Try to parse timestamp from storage
+          const timestamp = parseInt(sessionStorage.getItem(key), 10);
+          if (isNaN(timestamp) || timestamp < oneDayAgo) {
+            sessionStorage.removeItem(key);
+          }
+        }
+      });
+      
+      console.log('Memory cleanup completed in ProposalsTab');
+    };
+  }, []);
+
   // Process proposals to extract HTML content properly
   useEffect(() => {
     if (proposals && proposals.length > 0) {
@@ -284,7 +320,7 @@ const ProposalsTab = ({
     }
   }, [proposals]);
 
-  // New function to check timelock status for a proposal
+  // CHANGE 3: Updated checkTimelockStatus function to maintain threat level consistency
   const checkTimelockStatus = async (proposalId) => {
     if (!contracts?.timelock) return null;
     
@@ -303,11 +339,15 @@ const ProposalsTab = ({
       
       // Step 1: Try to find the timelock transaction hash
       let timelockTxHash = null;
+      let threatLevel = null;
       
       // First check if the proposal already has a timelockTxHash
       if (existingProposal.timelockTxHash) {
         timelockTxHash = existingProposal.timelockTxHash;
-        console.log(`Using existing timelockTxHash: ${timelockTxHash}`);
+        // If we have a stored threat level, use it to maintain consistency
+        threatLevel = existingProposal.timelockThreatLevel !== undefined ? 
+                    existingProposal.timelockThreatLevel : null;
+        console.log(`Using existing timelockTxHash: ${timelockTxHash}, threatLevel: ${threatLevel}`);
       }
       
       // If no hash found and we have a target address, search timelock events
@@ -334,7 +374,10 @@ const ProposalsTab = ({
                 
                 if (eventTarget === proposalTarget) {
                   timelockTxHash = event.args.txHash;
-                  console.log(`Found matching timelock event by target: ${timelockTxHash}`);
+                  // Preserve the threat level from the event if available
+                  threatLevel = event.args.threatLevel !== undefined ? 
+                            Number(event.args.threatLevel) : threatLevel;
+                  console.log(`Found matching timelock event by target: ${timelockTxHash}, threatLevel: ${threatLevel}`);
                   break;
                 }
               }
@@ -367,6 +410,32 @@ const ProposalsTab = ({
         return null;
       }
       
+      // If we still don't have a threat level, use the stored one or deduce from proposal type
+      if (threatLevel === null) {
+        // First check if we have it stored in timelockInfo
+        if (timelockInfo[proposalId]?.level !== undefined) {
+          threatLevel = timelockInfo[proposalId].level;
+        } 
+        // Otherwise deduce from proposal type
+        else {
+          // Get numeric proposal type
+          const type = Number(existingProposal.type);
+          
+          // Try to deduce threat level from proposal type
+          if (type === PROPOSAL_TYPES.TOKEN_MINT || 
+              type === PROPOSAL_TYPES.TOKEN_BURN || 
+              type === PROPOSAL_TYPES.GOVERNANCE_CHANGE) {
+            threatLevel = 2; // HIGH
+          } else if (type === PROPOSAL_TYPES.WITHDRAWAL || 
+                    type === PROPOSAL_TYPES.TOKEN_TRANSFER || 
+                    type === PROPOSAL_TYPES.EXTERNAL_ERC20_TRANSFER) {
+            threatLevel = 1; // MEDIUM
+          } else {
+            threatLevel = 0; // LOW
+          }
+        }
+      }
+      
       // Step 3: Determine actual timelock status
       const currentTimestamp = Math.floor(Date.now() / 1000);
       const etaTimestamp = Number(txDetails.eta);
@@ -395,7 +464,8 @@ const ProposalsTab = ({
         canceled: isCanceled,
         remainingTime: Math.max(0, etaTimestamp - currentTimestamp),
         isInTimelock: !isExecuted && !isCanceled,
-        readyForExecution: !isExecuted && !isCanceled && currentTimestamp >= etaTimestamp
+        readyForExecution: !isExecuted && !isCanceled && currentTimestamp >= etaTimestamp,
+        threatLevel: threatLevel // Make sure we always return the threat level
       };
     } catch (error) {
       console.error(`Error checking timelock status for proposal #${proposalId}:`, error);
@@ -450,7 +520,8 @@ const ProposalsTab = ({
                         isInTimelock: timelockStatus.isInTimelock,
                         timelockRemaining: timelockStatus.remainingTime,
                         timelockTxHash: timelockStatus.txHash,
-                        readyForExecution: timelockStatus.readyForExecution
+                        readyForExecution: timelockStatus.readyForExecution,
+                        timelockThreatLevel: timelockStatus.threatLevel // Store the threat level
                       };
                     }
                     return p;
@@ -647,64 +718,152 @@ const ProposalsTab = ({
     }
   }, [contracts, processedProposals]);
 
-  // New effect for checking timelock status for queued proposals
+  // CHANGE 4: Update the checkTimelockForQueuedProposals to prevent excessive re-renders
   useEffect(() => {
     // Only run if we have proposals and contracts
     if (!processedProposals?.length || !contracts?.timelock) return;
     
+    // Use a ref to track active fetches to prevent duplicate work
+    const activeProposalChecks = new Set();
+    let isComponentMounted = true;
+    
     const checkTimelockForQueuedProposals = async () => {
       console.log("Checking timelock status for queued proposals...");
       
-      // Create a copy of processed proposals to update
+      // Avoid modifying state directly
       const updatedProposals = [...processedProposals];
       let hasUpdates = false;
       
-      // Process each proposal that's in QUEUED state
-      for (let i = 0; i < updatedProposals.length; i++) {
-        const proposal = updatedProposals[i];
-        try {
-          // Only check proposals in QUEUED state
-          if (Number(proposal.state) === PROPOSAL_STATES.QUEUED || 
-              proposal.stateLabel?.toLowerCase() === 'queued') {
-            
-            console.log(`Checking timelock for proposal #${proposal.id}...`);
-            const timelockStatus = await checkTimelockStatus(proposal.id);
+      // Process only queued proposals that we haven't checked recently
+      const queuedProposals = updatedProposals.filter(p => 
+        (Number(p.state) === PROPOSAL_STATES.QUEUED || 
+         p.stateLabel?.toLowerCase() === 'queued') && 
+        !activeProposalChecks.has(p.id) &&
+        (!p.lastTimelockCheck || Date.now() - p.lastTimelockCheck > 60000) // 60 seconds instead of 30
+      );
+      
+      if (queuedProposals.length === 0) {
+        return;
+      }
+      
+      console.log(`Found ${queuedProposals.length} queued proposals to check`);
+      
+      // Process in smaller batches (1 instead of 2) to reduce load
+      const batchSize = 1;
+      for (let i = 0; i < queuedProposals.length; i += batchSize) {
+        if (!isComponentMounted) break;
+        
+        const batch = queuedProposals.slice(i, i + batchSize);
+        
+        // Process proposals serially instead of in parallel to reduce memory usage
+        for (const proposal of batch) {
+          const proposalId = proposal.id;
+          activeProposalChecks.add(proposalId);
+          
+          try {
+            // Use the centralized function to check timelock status
+            const timelockStatus = await checkTimelockStatus(proposalId);
             
             if (timelockStatus) {
-              console.log(`Found timelock status for proposal #${proposal.id}:`, timelockStatus);
+              console.log(`Found timelock status for proposal #${proposalId}:`, timelockStatus);
               
-              // Update the proposal object with timelock information
-              updatedProposals[i] = {
-                ...proposal,
-                timelockStatus: timelockStatus.status,
-                timelockEta: timelockStatus.eta,
-                isInTimelock: timelockStatus.isInTimelock,
-                timelockRemaining: timelockStatus.remainingTime,
-                readyForExecution: timelockStatus.readyForExecution,
-                // Set a displayStateLabel that correctly shows timelock status
-                displayStateLabel: timelockStatus.executed ? 'Executed' :
+              // Find the proposal index in our array
+              const index = updatedProposals.findIndex(p => Number(p.id) === Number(proposalId));
+              if (index !== -1) {
+                // Update the proposal with timelock information
+                updatedProposals[index] = {
+                  ...updatedProposals[index],
+                  timelockStatus: timelockStatus.status,
+                  timelockEta: timelockStatus.eta,
+                  isInTimelock: timelockStatus.isInTimelock,
+                  timelockRemaining: timelockStatus.remainingTime,
+                  timelockTxHash: timelockStatus.txHash || updatedProposals[index].timelockTxHash,
+                  readyForExecution: timelockStatus.readyForExecution,
+                  lastTimelockCheck: Date.now(),
+                  // Keep the original threat level information to prevent overrides
+                  timelockThreatLevel: timelockStatus.threatLevel ?? updatedProposals[index].timelockThreatLevel,
+                  // Set a displayStateLabel that correctly shows timelock status
+                  displayStateLabel: timelockStatus.executed ? 'Executed' :
                                   timelockStatus.canceled ? 'Canceled' :
                                   timelockStatus.readyForExecution ? 'Ready For Execution' :
-                                  timelockStatus.isInTimelock ? 'In Timelock' : proposal.stateLabel
-              };
-              
-              hasUpdates = true;
+                                  timelockStatus.isInTimelock ? 'In Timelock' : updatedProposals[index].stateLabel
+                };
+                
+                hasUpdates = true;
+              }
             }
+          } catch (err) {
+            console.warn(`Error processing proposal #${proposalId}:`, err);
+          } finally {
+            activeProposalChecks.delete(proposalId);
           }
-        } catch (err) {
-          console.warn(`Error processing proposal #${proposal.id}:`, err);
+        }
+        
+        // Larger delay between batches to reduce CPU usage
+        if (i + batchSize < queuedProposals.length) {
+          await new Promise(resolve => setTimeout(resolve, 500));
         }
       }
       
-      // Only update state if there were changes
-      if (hasUpdates) {
+      // Only update state if there were changes and component is still mounted
+      if (hasUpdates && isComponentMounted) {
         setProcessedProposals(updatedProposals);
       }
     };
     
+    // Run the check
     checkTimelockForQueuedProposals();
+    
+    // Set up an interval with less frequent updates (60s instead of 30s)
+    const intervalId = setInterval(checkTimelockForQueuedProposals, 60000);
+    
+    // Clean up the interval when the component unmounts
+    return () => {
+      isComponentMounted = false;
+      clearInterval(intervalId);
+      activeProposalChecks.clear();
+    };
   }, [processedProposals, contracts?.timelock]);
-  
+
+
+// Fix #5: Add memory leak prevention - add this to ProposalsTab
+// This ensures we properly clean up any subscriptions
+
+// Add this useEffect near the top of your component
+useEffect(() => {
+  // Return a cleanup function that will run when component unmounts
+  return () => {
+    // Clear any in-flight transactions
+    setQueuedTxs({});
+    
+    // Reset error states
+    setTransactionError('');
+    
+    // Reset expanded proposals
+    setExpandedProposalId(null);
+    
+    // Clear creation status
+    setCreationStatus({
+      status: null,
+      message: ''
+    });
+    
+    // Make sure any timeouts are cleared
+    const timeoutIds = Object.values(window).filter(value => 
+      typeof value === 'number' && 
+      String(value).length > 6 // likely a timeout ID
+    );
+    
+    for (const id of timeoutIds) {
+      clearTimeout(id);
+    }
+    
+    // Log memory cleanup
+    console.log('Cleaning up memory in ProposalsTab');
+  };
+}, []);
+
+
   // Watch queued transactions
   useEffect(() => {
     const checkQueuedTxs = async () => {
@@ -2060,8 +2219,7 @@ const ProposalsTab = ({
               switch (type) {
                 case 'all':
                   buttonColors = 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/50 dark:text-indigo-200';
-                  break;
-                case 'active':
+                  break;case 'active':
                   buttonColors = 'bg-yellow-200 text-yellow-800 dark:bg-yellow-900/50 dark:text-yellow-200';
                   break;
                 case 'queued':
@@ -2189,27 +2347,7 @@ const ProposalsTab = ({
                     <p className="font-small dark:text-white">{formatAddress(proposal.proposer)}</p>
                   </div>
                 </div>
-                
-                {/* Timelock indicator for proposals in timelock */}
-                {proposal.isInTimelock && (
-                  <div className="mt-2 mb-4 bg-blue-50 dark:bg-blue-900/20 p-2 rounded-md border border-blue-200 dark:border-blue-700/50">
-                    <div className="flex items-center text-sm">
-                      <Clock className="h-4 w-4 text-blue-500 mr-2" />
-                      {proposal.readyForExecution ? (
-                        <span className="text-green-600 dark:text-green-400 font-medium">
-                          Timelock period complete - Ready for execution
-                        </span>
-                      ) : (
-                        <span className="text-blue-600 dark:text-blue-400">
-                          In timelock: {formatRelativeTime(proposal.timelockEta * 1000)} 
-                          <span className="text-xs ml-1">
-                            ({new Date(proposal.timelockEta * 1000).toLocaleString()})
-                          </span>
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                )}
+               
                 <div className="border-t pt-4 mb-4">
   {expandedProposalId === proposal.id ? (
     <div>

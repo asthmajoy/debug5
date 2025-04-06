@@ -2,8 +2,8 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { ethers } from 'ethers';
 import { Clock, Shield, Check, Copy, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
 
-// Helper function to get human-readable threat level label
-function getThreatLevelLabel(level) {
+// Export these utility functions so they can be imported by other components
+export function getThreatLevelLabel(level) {
   const threatLevelLabels = {
     0: "LOW",
     1: "MEDIUM",
@@ -14,8 +14,7 @@ function getThreatLevelLabel(level) {
   return threatLevelLabels[level] || "Unknown";
 }
 
-// Helper function for threat level colors
-function getThreatLevelColor(level) {
+export function getThreatLevelColor(level) {
   switch (Number(level)) {
     case 0: // LOW
       return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400';
@@ -30,8 +29,7 @@ function getThreatLevelColor(level) {
   }
 }
 
-// Helper function to format time remaining
-function formatTimeRemaining(etaTimestamp) {
+export function formatTimeRemaining(etaTimestamp) {
   if (!etaTimestamp) return null;
   
   const now = Math.floor(Date.now() / 1000); // Current time in seconds
@@ -52,6 +50,7 @@ function formatTimeRemaining(etaTimestamp) {
   }
 }
 
+// IMPROVED VERSION with better memoization and fewer re-renders
 const TimelockInfoDisplay = ({ 
   proposal, 
   contracts, 
@@ -63,127 +62,170 @@ const TimelockInfoDisplay = ({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [retryCount, setRetryCount] = useState(0);
+  const [lastFetchTime, setLastFetchTime] = useState(0);
+  
+  // Cache key generation
+  const cacheKey = useMemo(() => {
+    return `timelock-${proposal?.id}-${proposal?.timelockTxHash || "notx"}`;
+  }, [proposal?.id, proposal?.timelockTxHash]);
 
-  // Always determine queued proposal status
-  const isQueuedProposal = proposal && proposal.stateLabel?.toLowerCase() === 'queued';
+  // Determine if this is a queued proposal - important for preventing unnecessary renders
+  const isQueuedProposal = useMemo(() => {
+    return proposal && 
+           (proposal.stateLabel?.toLowerCase() === 'queued' || 
+            proposal.displayStateLabel?.toLowerCase()?.includes('timelock'));
+  }, [proposal?.stateLabel, proposal?.displayStateLabel]);
 
-  // Always create the copyToClipboard function
+  // Copy function with useCallback to prevent recreation
   const copyToClipboard = useCallback((text) => {
     navigator.clipboard.writeText(text);
     setCopiedText(text);
     setTimeout(() => setCopiedText(null), 2000);
   }, [setCopiedText]);
 
-  // Always create fetchTimelockData callback, even if it won't be used immediately
+  // Important: More efficient fetch timelock data with debouncing and caching
   const fetchTimelockData = useCallback(async () => {
-    // Skip if conditions aren't met, but don't return early
+    // Skip if conditions aren't met
     if (!contracts.timelock || !proposal || !isQueuedProposal) {
+      return;
+    }
+
+    // Only fetch if not already loading and enough time has passed since last fetch
+    const now = Date.now();
+    if (isLoading || (now - lastFetchTime < 10000 && retryCount === 0)) { // 10s instead of 5s
       return;
     }
 
     setIsLoading(true);
     setError(null);
+    setLastFetchTime(now);
 
     try {
+      // First check if we already have cached data that's fresh enough
+      if (timelockInfo[proposal.id]?.lastUpdated && 
+          now - timelockInfo[proposal.id].lastUpdated < 30000 && // 30 second cache
+          retryCount === 0) {
+        // Use cached data
+        console.log(`Using cached timelock data for proposal #${proposal.id}`);
+        setIsLoading(false);
+        return;
+      }
+
       const provider = new ethers.providers.Web3Provider(window.ethereum);
       const timelockContract = contracts.timelock.connect(provider);
       
-      // Get current block number for filtering
-      const currentBlock = await provider.getBlockNumber();
-      // Look back approximately 2 weeks worth of blocks
-      const startBlock = Math.max(0, currentBlock - 100000);
+      // Attempt to get transaction directly using a known txHash
+      let txDetails = null;
+      let etaTimestamp = null;
+      let txHash = null;
       
-      // Search for TransactionQueued events
-      const filter = timelockContract.filters.TransactionQueued();
+      // Preserve existing threat level if possible to maintain consistency
+      // This is key to preventing the flicker between threat levels
+      let threatLevel = timelockInfo[proposal.id]?.level ?? 0;
       
-      console.log(`Fetching timelock events from block ${startBlock} to ${currentBlock} for proposal #${proposal.id}`);
-      
-      const events = await timelockContract.queryFilter(filter, startBlock);
-      console.log(`Found ${events.length} TransactionQueued events`);
-      
-      // Try to match by txHash first, then by target address
-      let matchingEvent = null;
-      
-      if (proposal.txHash) {
-        matchingEvent = events.find(event => event.args.txHash === proposal.txHash);
-        console.log(`Matching by txHash: ${proposal.txHash}`, matchingEvent ? "Found match" : "No match");
-      }
-      
-      // If no match by txHash, try matching by target address
-      if (!matchingEvent && proposal.target) {
-        matchingEvent = events.find(event => {
-          const eventTarget = event.args.target?.toLowerCase();
-          const proposalTarget = proposal.target?.toLowerCase();
-          return eventTarget === proposalTarget;
-        });
-        console.log(`Matching by target address: ${proposal.target}`, matchingEvent ? "Found match" : "No match");
-      }
-      
-      // If still no match, try to match by description
-      if (!matchingEvent && proposal.timelockTxHash) {
-        // Try direct lookup using the proposal's stored txHash
+      // Attempt 1: Use the proposal's stored timelockTxHash
+      if (proposal.timelockTxHash && proposal.timelockTxHash !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
         try {
-          const txDetails = await timelockContract.getTransaction(proposal.timelockTxHash);
-          if (txDetails && txDetails.target) {
-            console.log(`Found transaction details using proposal.timelockTxHash: ${proposal.timelockTxHash}`);
+          txDetails = await timelockContract.getTransaction(proposal.timelockTxHash);
+          if (txDetails && txDetails.eta) {
+            etaTimestamp = Number(txDetails.eta);
+            txHash = proposal.timelockTxHash;
             
-            // Now look for the event that corresponds to this transaction
-            matchingEvent = events.find(event => event.args.txHash === proposal.timelockTxHash);
+            // Keep the existing threat level for consistency
+            if (proposal.timelockThreatLevel !== undefined) {
+              threatLevel = Number(proposal.timelockThreatLevel);
+            }
+            
+            console.log(`Found timelock details via direct lookup for proposal #${proposal.id} - eta: ${etaTimestamp}, threatLevel: ${threatLevel}`);
           }
-        } catch (error) {
-          console.warn(`Error fetching transaction with hash ${proposal.timelockTxHash}:`, error);
+        } catch (err) {
+          console.warn(`Direct lookup for txHash ${proposal.timelockTxHash} failed:`, err.message);
+        }
+      }
+
+      // Attempt 2: Only if needed - find the transaction in events
+      if (!etaTimestamp) {
+        // Limit looking for events to once per session to reduce RPC calls
+        if (sessionStorage.getItem(`searched-events-${proposal.id}`)) {
+          console.log(`Already searched events for proposal #${proposal.id} this session`);
+        } else {
+          // Get current block number for filtering
+          const currentBlock = await provider.getBlockNumber();
+          // Look back approximately 1 week worth of blocks
+          const startBlock = Math.max(0, currentBlock - 50000);
+          
+          // Search for TransactionQueued events
+          const filter = timelockContract.filters.TransactionQueued();
+          
+          console.log(`Searching for timelock events from block ${startBlock} to ${currentBlock}`);
+          
+          const events = await timelockContract.queryFilter(filter, startBlock);
+          console.log(`Found ${events.length} TransactionQueued events`);
+          
+          // Try multiple matching strategies
+          let matchingEvent = null;
+          
+          // Try by target address first (most reliable)
+          if (proposal.target) {
+            const proposalTarget = proposal.target.toLowerCase();
+            matchingEvent = events.find(event => {
+              try {
+                const eventTarget = event.args.target?.toLowerCase();
+                return eventTarget === proposalTarget;
+              } catch (e) {
+                return false;
+              }
+            });
+            
+            if (matchingEvent) {
+              console.log(`Found matching event by target address: ${proposal.target}`);
+            }
+          }
+          
+          // If we found a match, extract the data
+          if (matchingEvent) {
+            try {
+              // When we find an event, use its threat level
+              threatLevel = Number(matchingEvent.args.threatLevel || 0);
+              etaTimestamp = matchingEvent.args.eta ? Number(matchingEvent.args.eta) : null;
+              txHash = matchingEvent.args.txHash;
+              
+              // Remember that we found this via event search
+              sessionStorage.setItem(`searched-events-${proposal.id}`, 'true');
+            } catch (e) {
+              console.warn("Error extracting data from matching event:", e);
+            }
+          }
         }
       }
       
-      if (matchingEvent) {
-        const threatLevel = Number(matchingEvent.args.threatLevel || 0);
-        const etaTimestamp = matchingEvent.args.eta ? Number(matchingEvent.args.eta) : null;
-        const txHash = matchingEvent.args.txHash;
-        
-        console.log(`Found timelock info for proposal #${proposal.id}:`, {
-          threatLevel,
-          eta: etaTimestamp,
-          txHash
-        });
-        
-        // Use functional update to prevent unnecessary re-renders
-        setTimelockInfo(prev => ({
-          ...prev,
-          [proposal.id]: {
-            level: threatLevel,
-            label: getThreatLevelLabel(threatLevel),
-            eta: etaTimestamp,
-            txHash
-          }
-        }));
-      } else {
-        // If no match found but we do have a timelockTxHash, try a direct query
-        if (proposal.timelockTxHash && proposal.timelockTxHash !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
-          try {
-            const txDetails = await timelockContract.getTransaction(proposal.timelockTxHash);
-            if (txDetails && txDetails.eta) {
-              // Use functional update to prevent unnecessary re-renders
-              setTimelockInfo(prev => ({
-                ...prev,
-                [proposal.id]: {
-                  level: 0, // Default to LOW when threat level unknown
-                  label: "UNKNOWN",
-                  eta: Number(txDetails.eta),
-                  txHash: proposal.timelockTxHash
-                }
-              }));
-              
-              console.log(`Found partial timelock info via direct query for proposal #${proposal.id}`);
+      // If we found timelock data, update the state
+      if (etaTimestamp) {
+        // IMPORTANT: Only update if we have new data or the threat level has changed
+        // This is key to preventing flickering
+        const existingInfo = timelockInfo[proposal.id];
+        const shouldUpdate = !existingInfo || 
+                            existingInfo.eta !== etaTimestamp ||
+                            existingInfo.level !== threatLevel ||
+                            retryCount > 0;
+                            
+        if (shouldUpdate) {
+          setTimelockInfo(prev => ({
+            ...prev,
+            [proposal.id]: {
+              level: threatLevel,
+              label: getThreatLevelLabel(threatLevel),
+              eta: etaTimestamp,
+              txHash,
+              lastUpdated: Date.now()
             }
-          } catch (error) {
-            console.warn(`Error in direct transaction lookup:`, error);
-            setError("Failed to fetch timelock data: " + error.message);
-          }
+          }));
         } else {
-          console.warn(`No matching timelock event found for proposal #${proposal.id}`);
-          // Only set error if we couldn't find data through any method
-          setError("No timelock data found for this proposal");
+          console.log(`No changes detected for proposal #${proposal.id}, skipping update`);
         }
+      } else {
+        console.warn(`No timelock data found for proposal #${proposal.id}`);
+        setError("No timelock data found");
       }
     } catch (error) {
       console.error("Error fetching timelock information:", error);
@@ -192,31 +234,63 @@ const TimelockInfoDisplay = ({
       setIsLoading(false);
     }
   }, [
-    // Carefully select dependencies to prevent unnecessary re-renders
     contracts.timelock, 
     proposal?.id, 
-    proposal?.txHash, 
     proposal?.target, 
-    proposal?.timelockTxHash, 
+    proposal?.timelockTxHash,
+    proposal?.timelockThreatLevel,
     isQueuedProposal,
+    isLoading,
+    lastFetchTime,
+    retryCount,
+    timelockInfo,
     setTimelockInfo
   ]);
 
-  // Always create memoized info, even for non-queued proposals
+  // Get cached timelock info with stability - prefer cached data if available
   const info = useMemo(() => {
-    // Return null if not a queued proposal
     if (!isQueuedProposal) return null;
     
-    // Return the timelock info for this proposal
-    return timelockInfo[proposal.id];
+    if (timelockInfo[proposal.id]) {
+      // Add ready status calculation based on most current timestamp
+      // but avoid re-rendering due to time by doing this in the UI render
+      return timelockInfo[proposal.id];
+    }
+    
+    return null;
   }, [isQueuedProposal, timelockInfo, proposal?.id]);
 
-  // Always create useEffect, but internal logic checks isQueuedProposal
+  // Memoized ready state to prevent re-renders due to time changes
+  const isReadyToExecute = useMemo(() => {
+    if (!info?.eta) return false;
+    return Math.floor(Date.now() / 1000) >= info.eta;
+  }, [info?.eta]);
+
+  // Fetch data on initial render or when retry is triggered with debouncing
   useEffect(() => {
-    // Only fetch if it's a queued proposal
+    let isMounted = true;
+    let timeoutId = null;
+    
+    // Create a debounced fetch function to prevent rapid consecutive calls
+    const debouncedFetch = () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      
+      timeoutId = setTimeout(() => {
+        if (isMounted && isQueuedProposal) {
+          fetchTimelockData();
+        }
+      }, retryCount > 0 ? 100 : 500); // Shorter delay for manual refresh
+    };
+    
     if (isQueuedProposal) {
-      fetchTimelockData();
+      debouncedFetch();
     }
+    
+    // Cleanup function
+    return () => {
+      isMounted = false;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
   }, [fetchTimelockData, retryCount, isQueuedProposal]);
 
   // Render nothing if not a queued proposal
@@ -233,10 +307,22 @@ const TimelockInfoDisplay = ({
         ) : (
           <button 
             onClick={() => {
-              // Increment retry count to trigger refresh
+              // Use a debounce mechanism for the refresh button
+              if (isLoading) return; // Prevent clicks while loading
+              
+              // Prevent multiple rapid clicks
+              if (window.lastTimelockRefreshClick && 
+                  Date.now() - window.lastTimelockRefreshClick < 1000) {
+                console.log('Refresh clicked too quickly, ignoring');
+                return;
+              }
+              
+              window.lastTimelockRefreshClick = Date.now();
               setRetryCount(prev => prev + 1);
             }}
-            className="text-xs text-indigo-500 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 flex items-center"
+            className={`text-xs text-indigo-500 dark:text-indigo-400 hover:text-indigo-700 
+                      dark:hover:text-indigo-300 flex items-center transition-all duration-200 
+                      ${isLoading ? 'opacity-50 cursor-not-allowed' : 'opacity-100 cursor-pointer'}`}
             disabled={isLoading}
           >
             <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
@@ -271,12 +357,12 @@ const TimelockInfoDisplay = ({
             <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Status</p>
             <span className={`inline-block text-xs px-2 py-1 rounded flex items-center ${
               !info?.eta ? 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-400' :
-              Math.floor(Date.now() / 1000) >= info.eta ? 
+              isReadyToExecute ? 
                 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' : 
                 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
             }`}>
               {!info?.eta ? 'Unknown' :
-               Math.floor(Date.now() / 1000) >= info.eta ? (
+               isReadyToExecute ? (
                 <>
                   <Check className="w-3 h-3 mr-1" />
                   Ready to Execute
@@ -342,4 +428,4 @@ const TimelockInfoDisplay = ({
   );
 };
 
-export default TimelockInfoDisplay;
+export default React.memo(TimelockInfoDisplay);
