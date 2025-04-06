@@ -187,30 +187,30 @@ const JustDAOContent = () => {
     if (isNaN(numValue)) return '0';
     
     // Determine decimal places based on window width and value size
-    let decimals = 5; // Maximum decimals for full screen
-    
+    let decimals = 8; // Maximum decimals for full screen
+  
     if (windowWidth < 640) {
       // Small screen (1/4 window)
-      decimals = 2;
+      decimals = 4;
     } else if (windowWidth < 960) {
       // Medium screen (1/2 window)
-      decimals = 3; 
+      decimals = 6; 
     } else {
       // Full screen
       if (numValue >= 10000) {
-        decimals = 2;
-      } else if (numValue >= 1000) {
-        decimals = 3;
-      } else if (numValue >= 100) {
         decimals = 4;
-      } else {
+      } else if (numValue >= 1000) {
         decimals = 5;
+      } else if (numValue >= 100) {
+        decimals = 6;
+      } else {
+        decimals = 8;
       }
     }
     
     // For very small values, always show some precision
     if (numValue > 0 && numValue < 0.01) {
-      decimals = Math.max(decimals, 4);
+      decimals = Math.max(decimals, 6);
     }
     
     // Format the number with appropriate decimals

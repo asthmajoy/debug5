@@ -1,90 +1,135 @@
-// src/utils/blockchainDataCache.js
-const blockchainDataCache = {
-  data: new Map(),
-  
+class BlockchainDataCache {
+  constructor(maxSize = 100, ttl = 60000) {
+    this.cache = new Map();
+    this.maxSize = maxSize;
+    this.ttl = ttl; // Default TTL in milliseconds (1 minute)
+    this.stats = {
+      hits: 0,
+      misses: 0,
+      size: 0,
+      evictions: 0
+    };
+  }
+
   /**
-   * Set data in cache with TTL and category for better management
+   * Set a value in the cache with optional TTL
    * @param {string} key - Cache key
-   * @param {any} value - Value to cache
-   * @param {number} ttlSeconds - Time to live in seconds (default: 300)
-   * @param {string} category - Category for grouped invalidation (default: 'general')
+   * @param {any} value - Value to store
+   * @param {number} [customTtl] - Custom TTL in milliseconds
    */
-  set(key, value, ttlSeconds = 300, category = 'general') {
-    console.log(`Cache set: ${key} (category: ${category}, TTL: ${ttlSeconds}s)`);
-    this.data.set(key, {
+  set(key, value, customTtl) {
+    // Check if we need to evict items
+    if (this.cache.size >= this.maxSize) {
+      this._evictOldest();
+    }
+
+    const ttl = customTtl || this.ttl;
+    const expires = Date.now() + ttl;
+    
+    // Save value with metadata
+    this.cache.set(key, {
       value,
-      expires: Date.now() + (ttlSeconds * 1000),
-      category
+      expires,
+      created: Date.now(),
+      lastAccessed: Date.now()
     });
-  },
-  
+    
+    this.stats.size = this.cache.size;
+  }
+
   /**
-   * Get data from cache with expiration check
+   * Get a value from the cache
    * @param {string} key - Cache key
-   * @returns {any|null} Cached value or null if not found/expired
+   * @returns {any} Cached value or null if not found or expired
    */
   get(key) {
-    const entry = this.data.get(key);
-    if (!entry) return null;
+    const item = this.cache.get(key);
     
-    if (Date.now() > entry.expires) {
-      this.data.delete(key);
-      console.log(`Cache expired: ${key}`);
+    // Return null if item doesn't exist
+    if (!item) {
+      this.stats.misses++;
       return null;
     }
     
-    console.log(`Cache hit: ${key}`);
-    return entry.value;
-  },
-  
-  /**
-   * Invalidate all entries in a specific category
-   * @param {string} category - Category to invalidate
-   * @returns {number} Count of invalidated entries
-   */
-  invalidateCategory(category) {
-    let count = 0;
-    for (const [key, entry] of this.data.entries()) {
-      if (entry.category === category) {
-        this.data.delete(key);
-        count++;
-      }
+    // Check if item has expired
+    if (item.expires < Date.now()) {
+      this.cache.delete(key);
+      this.stats.size = this.cache.size;
+      this.stats.misses++;
+      return null;
     }
-    console.log(`Invalidated ${count} entries in category: ${category}`);
-    return count;
-  },
-  
+    
+    // Update last accessed time
+    item.lastAccessed = Date.now();
+    this.stats.hits++;
+    
+    return item.value;
+  }
+
   /**
-   * Clear all cache entries
-   * @returns {number} Count of cleared entries
+   * Delete an item from the cache
+   * @param {string} key - Cache key
+   */
+  delete(key) {
+    this.cache.delete(key);
+    this.stats.size = this.cache.size;
+  }
+
+  /**
+   * Clear all items from the cache
    */
   clear() {
-    const count = this.data.size;
-    this.data.clear();
-    console.log(`Cleared all cache (${count} entries)`);
-    return count;
-  },
-  
+    this.cache.clear();
+    this.stats.size = 0;
+    this.stats.evictions = 0;
+  }
+
   /**
-   * Get information about the current cache state
+   * Get cache statistics
    * @returns {Object} Cache statistics
    */
   getStats() {
-    const categories = {};
-    let totalSize = 0;
+    return { ...this.stats };
+  }
+
+  /**
+   * Evict the oldest item from the cache
+   * @private
+   */
+  _evictOldest() {
+    // Find oldest accessed item
+    let oldestKey = null;
+    let oldestAccessed = Infinity;
     
-    for (const [key, entry] of this.data.entries()) {
-      const category = entry.category || 'general';
-      if (!categories[category]) {
-        categories[category] = { count: 0, keys: [] };
+    for (const [key, item] of this.cache.entries()) {
+      if (item.lastAccessed < oldestAccessed) {
+        oldestAccessed = item.lastAccessed;
+        oldestKey = key;
       }
-      categories[category].count++;
-      categories[category].keys.push(key);
-      totalSize++;
     }
     
-    return { totalSize, categories };
+    if (oldestKey) {
+      this.cache.delete(oldestKey);
+      this.stats.evictions++;
+    }
   }
-};
+  
+  /**
+   * Refresh an item's TTL in the cache
+   * @param {string} key - Cache key
+   * @param {number} [customTtl] - Custom TTL in milliseconds
+   */
+  refresh(key, customTtl) {
+    const item = this.cache.get(key);
+    
+    if (item) {
+      const ttl = customTtl || this.ttl;
+      item.expires = Date.now() + ttl;
+      item.lastAccessed = Date.now();
+    }
+  }
+}
 
+// Export a singleton instance with reasonable defaults
+const blockchainDataCache = new BlockchainDataCache(200, 30000); // 200 items, 30 second TTL
 export default blockchainDataCache;

@@ -50,7 +50,7 @@ export function formatTimeRemaining(etaTimestamp) {
   }
 }
 
-// IMPROVED VERSION with better memoization and fewer re-renders
+// FIXED VERSION with better memory management and reliability
 const TimelockInfoDisplay = ({ 
   proposal, 
   contracts, 
@@ -64,17 +64,23 @@ const TimelockInfoDisplay = ({
   const [retryCount, setRetryCount] = useState(0);
   const [lastFetchTime, setLastFetchTime] = useState(0);
   
-  // Cache key generation
+  // Cache key generation - simplified and stable
   const cacheKey = useMemo(() => {
-    return `timelock-${proposal?.id}-${proposal?.timelockTxHash || "notx"}`;
-  }, [proposal?.id, proposal?.timelockTxHash]);
+    return `timelock-${proposal?.id || 0}`;
+  }, [proposal?.id]);
 
-  // Determine if this is a queued proposal - important for preventing unnecessary renders
+  // Determine if this is a queued proposal - more robust check
   const isQueuedProposal = useMemo(() => {
-    return proposal && 
-           (proposal.stateLabel?.toLowerCase() === 'queued' || 
-            proposal.displayStateLabel?.toLowerCase()?.includes('timelock'));
-  }, [proposal?.stateLabel, proposal?.displayStateLabel]);
+    if (!proposal) return false;
+    
+    // Multiple ways to check for queued status
+    const isStateQueued = proposal.stateLabel?.toLowerCase() === 'queued';
+    const hasTimelockDisplay = proposal.displayStateLabel?.toLowerCase()?.includes('timelock');
+    const hasTimelockTxHash = !!proposal.timelockTxHash && 
+      proposal.timelockTxHash !== '0x0000000000000000000000000000000000000000000000000000000000000000';
+    
+    return isStateQueued || hasTimelockDisplay || hasTimelockTxHash;
+  }, [proposal]);
 
   // Copy function with useCallback to prevent recreation
   const copyToClipboard = useCallback((text) => {
@@ -83,16 +89,16 @@ const TimelockInfoDisplay = ({
     setTimeout(() => setCopiedText(null), 2000);
   }, [setCopiedText]);
 
-  // Important: More efficient fetch timelock data with debouncing and caching
+  // FIXED: More efficient fetch timelock data with better error handling
   const fetchTimelockData = useCallback(async () => {
     // Skip if conditions aren't met
-    if (!contracts.timelock || !proposal || !isQueuedProposal) {
+    if (!contracts?.timelock || !proposal?.id || !isQueuedProposal) {
       return;
     }
 
-    // Only fetch if not already loading and enough time has passed since last fetch
+    // Prevent multiple simultaneous fetches and rate limiting
     const now = Date.now();
-    if (isLoading || (now - lastFetchTime < 10000 && retryCount === 0)) { // 10s instead of 5s
+    if (isLoading || (now - lastFetchTime < 5000 && retryCount === 0)) {
       return;
     }
 
@@ -102,8 +108,9 @@ const TimelockInfoDisplay = ({
 
     try {
       // First check if we already have cached data that's fresh enough
-      if (timelockInfo[proposal.id]?.lastUpdated && 
-          now - timelockInfo[proposal.id].lastUpdated < 30000 && // 30 second cache
+      const cachedInfo = timelockInfo[proposal.id];
+      if (cachedInfo?.lastUpdated && 
+          now - cachedInfo.lastUpdated < 20000 && // Reduced cache time to 20 seconds
           retryCount === 0) {
         // Use cached data
         console.log(`Using cached timelock data for proposal #${proposal.id}`);
@@ -114,102 +121,158 @@ const TimelockInfoDisplay = ({
       const provider = new ethers.providers.Web3Provider(window.ethereum);
       const timelockContract = contracts.timelock.connect(provider);
       
-      // Attempt to get transaction directly using a known txHash
+      // IMPROVED: More reliable approach to get transaction details
       let txDetails = null;
       let etaTimestamp = null;
       let txHash = null;
       
-      // Preserve existing threat level if possible to maintain consistency
-      // This is key to preventing the flicker between threat levels
-      let threatLevel = timelockInfo[proposal.id]?.level ?? 0;
+      // FIXED: Keep existing threat level to prevent UI flicker
+      const existingLevel = cachedInfo?.level ?? 0;
+      let threatLevel = existingLevel;
       
       // Attempt 1: Use the proposal's stored timelockTxHash
       if (proposal.timelockTxHash && proposal.timelockTxHash !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
         try {
-          txDetails = await timelockContract.getTransaction(proposal.timelockTxHash);
-          if (txDetails && txDetails.eta) {
-            etaTimestamp = Number(txDetails.eta);
-            txHash = proposal.timelockTxHash;
-            
-            // Keep the existing threat level for consistency
-            if (proposal.timelockThreatLevel !== undefined) {
-              threatLevel = Number(proposal.timelockThreatLevel);
+          // First try to check if it's queued to save gas on full retrieval
+          const isQueued = await timelockContract.queuedTransactions(proposal.timelockTxHash);
+          
+          if (isQueued) {
+            // Only get full details if it's actually queued
+            txDetails = await timelockContract.getTransaction(proposal.timelockTxHash);
+            if (txDetails && txDetails.eta) {
+              etaTimestamp = Number(txDetails.eta);
+              txHash = proposal.timelockTxHash;
+              
+              // FIXED: Keep existing or use proposal's threat level for consistency
+              if (proposal.timelockThreatLevel !== undefined) {
+                threatLevel = Number(proposal.timelockThreatLevel);
+              }
+              
+              console.log(`Found timelock details via direct lookup for proposal #${proposal.id} - eta: ${etaTimestamp}, threatLevel: ${threatLevel}`);
             }
-            
-            console.log(`Found timelock details via direct lookup for proposal #${proposal.id} - eta: ${etaTimestamp}, threatLevel: ${threatLevel}`);
+          } else {
+            console.log(`Proposal #${proposal.id} has timelockTxHash but it's not queued anymore`);
           }
         } catch (err) {
           console.warn(`Direct lookup for txHash ${proposal.timelockTxHash} failed:`, err.message);
         }
       }
 
-      // Attempt 2: Only if needed - find the transaction in events
-      if (!etaTimestamp) {
-        // Limit looking for events to once per session to reduce RPC calls
-        if (sessionStorage.getItem(`searched-events-${proposal.id}`)) {
-          console.log(`Already searched events for proposal #${proposal.id} this session`);
-        } else {
-          // Get current block number for filtering
+      // Attempt 2: Try finding by target (if proposal has target) - more reliable than event searching
+      if (!etaTimestamp && proposal.target) {
+        try {
+          console.log(`Searching for timelock transaction by target ${proposal.target} for proposal #${proposal.id}`);
+          
+          // Get queue events within a reasonable block range
           const currentBlock = await provider.getBlockNumber();
-          // Look back approximately 1 week worth of blocks
-          const startBlock = Math.max(0, currentBlock - 50000);
+          const lookbackBlocks = 100000; // Look back ~2 weeks (assuming ~12 sec blocks)
+          const fromBlock = Math.max(0, currentBlock - lookbackBlocks);
           
-          // Search for TransactionQueued events
+          // Search for TransactionQueued events with this target
           const filter = timelockContract.filters.TransactionQueued();
+          const events = await timelockContract.queryFilter(filter, fromBlock, currentBlock);
           
-          console.log(`Searching for timelock events from block ${startBlock} to ${currentBlock}`);
+          console.log(`Found ${events.length} TransactionQueued events to check`);
           
-          const events = await timelockContract.queryFilter(filter, startBlock);
-          console.log(`Found ${events.length} TransactionQueued events`);
-          
-          // Try multiple matching strategies
-          let matchingEvent = null;
-          
-          // Try by target address first (most reliable)
-          if (proposal.target) {
-            const proposalTarget = proposal.target.toLowerCase();
-            matchingEvent = events.find(event => {
-              try {
-                const eventTarget = event.args.target?.toLowerCase();
-                return eventTarget === proposalTarget;
-              } catch (e) {
-                return false;
-              }
-            });
-            
-            if (matchingEvent) {
-              console.log(`Found matching event by target address: ${proposal.target}`);
-            }
-          }
-          
-          // If we found a match, extract the data
-          if (matchingEvent) {
+          // Check each event for matching target
+          let matchFound = false;
+          for (const event of events) {
             try {
-              // When we find an event, use its threat level
-              threatLevel = Number(matchingEvent.args.threatLevel || 0);
-              etaTimestamp = matchingEvent.args.eta ? Number(matchingEvent.args.eta) : null;
-              txHash = matchingEvent.args.txHash;
+              if (matchFound) break;
               
-              // Remember that we found this via event search
-              sessionStorage.setItem(`searched-events-${proposal.id}`, 'true');
+              // Extract target from event
+              const eventTarget = event.args.target?.toLowerCase();
+              const proposalTarget = proposal.target.toLowerCase();
+              
+              if (eventTarget === proposalTarget) {
+                // Found matching event by target
+                console.log(`Found matching transaction for proposal #${proposal.id} by target address`);
+                
+                const eventTxHash = event.args.txHash;
+                // Verify it's still queued
+                const isStillQueued = await timelockContract.queuedTransactions(eventTxHash);
+                
+                if (isStillQueued) {
+                  threatLevel = Number(event.args.threatLevel || existingLevel);
+                  etaTimestamp = Number(event.args.eta || 0);
+                  txHash = eventTxHash;
+                  matchFound = true;
+                }
+              }
             } catch (e) {
-              console.warn("Error extracting data from matching event:", e);
+              console.warn("Error processing event in search by target:", e);
             }
           }
+        } catch (e) {
+          console.warn("Error searching by target:", e);
+        }
+      }
+
+      // Attempt 3: If all else fails and we have a proposal ID, try to get from proposal events
+      if (!etaTimestamp && proposal.id) {
+        try {
+          console.log(`Last resort: searching governance events for proposal #${proposal.id}`);
+          
+          // Skip event search if we've already searched in this session
+          if (!sessionStorage.getItem(`searched-events-${proposal.id}`)) {
+            // Look for queue events in governance contract
+            const queueFilter = contracts.governance.filters.ProposalEvent(proposal.id, 2); // 2 = queue event
+            const queueEvents = await contracts.governance.queryFilter(queueFilter);
+            
+            for (const event of queueEvents) {
+              try {
+                // Try to extract txHash from event data
+                const data = event.args.data;
+                if (data && data !== '0x') {
+                  try {
+                    const decoded = ethers.utils.defaultAbiCoder.decode(['bytes32'], data);
+                    const eventTxHash = decoded[0];
+                    
+                    // Verify txHash is valid and queued
+                    if (eventTxHash && eventTxHash !== '0x0000000000000000000000000000000000000000000000000000000000000000') {
+                      const isQueued = await timelockContract.queuedTransactions(eventTxHash);
+                      
+                      if (isQueued) {
+                        console.log(`Found txHash ${eventTxHash} from governance events for proposal #${proposal.id}`);
+                        txDetails = await timelockContract.getTransaction(eventTxHash);
+                        
+                        if (txDetails && txDetails.eta) {
+                          etaTimestamp = Number(txDetails.eta);
+                          txHash = eventTxHash;
+                          
+                          // Use a default threat level
+                          threatLevel = existingLevel;
+                        }
+                      }
+                    }
+                  } catch (e) {
+                    console.warn("Error decoding event data:", e);
+                  }
+                }
+              } catch (e) {
+                console.warn("Error processing queue event:", e);
+              }
+            }
+            
+            // Mark that we've searched events for this proposal
+            sessionStorage.setItem(`searched-events-${proposal.id}`, 'true');
+          }
+        } catch (e) {
+          console.warn("Error searching governance events:", e);
         }
       }
       
-      // If we found timelock data, update the state
+      // If we found timelock data, update the state - but ONLY if we have new/different data
       if (etaTimestamp) {
-        // IMPORTANT: Only update if we have new data or the threat level has changed
-        // This is key to preventing flickering
-        const existingInfo = timelockInfo[proposal.id];
-        const shouldUpdate = !existingInfo || 
-                            existingInfo.eta !== etaTimestamp ||
-                            existingInfo.level !== threatLevel ||
-                            retryCount > 0;
-                            
-        if (shouldUpdate) {
+        // Check if we have meaningfully different data before updating state
+        const isDifferent = !cachedInfo || 
+                           cachedInfo.eta !== etaTimestamp || 
+                           cachedInfo.level !== threatLevel ||
+                           cachedInfo.txHash !== txHash ||
+                           retryCount > 0;
+        
+        if (isDifferent) {
+          console.log(`Updating timelock info for proposal #${proposal.id} with new data`);
           setTimelockInfo(prev => ({
             ...prev,
             [proposal.id]: {
@@ -221,43 +284,52 @@ const TimelockInfoDisplay = ({
             }
           }));
         } else {
-          console.log(`No changes detected for proposal #${proposal.id}, skipping update`);
+          console.log(`No significant changes for proposal #${proposal.id}, skipping update`);
         }
-      } else {
-        console.warn(`No timelock data found for proposal #${proposal.id}`);
-        setError("No timelock data found");
+      } else if (!cachedInfo) {
+        // If we found absolutely nothing but we have a timelockTxHash, create minimal entry
+        // This helps prevent constant retries for proposals that can't be found
+        if (proposal.timelockTxHash) {
+          setTimelockInfo(prev => ({
+            ...prev,
+            [proposal.id]: {
+              level: 0,
+              label: 'Unknown',
+              eta: null,
+              txHash: proposal.timelockTxHash,
+              lastUpdated: Date.now()
+            }
+          }));
+        } else {
+          console.warn(`No timelock data found for proposal #${proposal.id}`);
+          setError("No timelock data found");
+        }
       }
     } catch (error) {
       console.error("Error fetching timelock information:", error);
-      setError("Failed to fetch timelock data: " + error.message);
+      setError("Failed to fetch timelock data");
     } finally {
       setIsLoading(false);
     }
   }, [
-    contracts.timelock, 
-    proposal?.id, 
-    proposal?.target, 
-    proposal?.timelockTxHash,
+    contracts?.timelock, 
+    proposal?.id,
+    proposal?.target,
+    proposal?.timelockTxHash, 
     proposal?.timelockThreatLevel,
     isQueuedProposal,
     isLoading,
     lastFetchTime,
     retryCount,
     timelockInfo,
-    setTimelockInfo
+    setTimelockInfo,
+    contracts?.governance
   ]);
 
-  // Get cached timelock info with stability - prefer cached data if available
+  // Get cached timelock info with stability
   const info = useMemo(() => {
-    if (!isQueuedProposal) return null;
-    
-    if (timelockInfo[proposal.id]) {
-      // Add ready status calculation based on most current timestamp
-      // but avoid re-rendering due to time by doing this in the UI render
-      return timelockInfo[proposal.id];
-    }
-    
-    return null;
+    if (!isQueuedProposal || !proposal?.id) return null;
+    return timelockInfo[proposal.id] || null;
   }, [isQueuedProposal, timelockInfo, proposal?.id]);
 
   // Memoized ready state to prevent re-renders due to time changes
@@ -266,12 +338,12 @@ const TimelockInfoDisplay = ({
     return Math.floor(Date.now() / 1000) >= info.eta;
   }, [info?.eta]);
 
-  // Fetch data on initial render or when retry is triggered with debouncing
+  // FIXED: Better fetch scheduling with proper cleanup
   useEffect(() => {
     let isMounted = true;
     let timeoutId = null;
     
-    // Create a debounced fetch function to prevent rapid consecutive calls
+    // Debounced fetch with single timeout
     const debouncedFetch = () => {
       if (timeoutId) clearTimeout(timeoutId);
       
@@ -279,10 +351,10 @@ const TimelockInfoDisplay = ({
         if (isMounted && isQueuedProposal) {
           fetchTimelockData();
         }
-      }, retryCount > 0 ? 100 : 500); // Shorter delay for manual refresh
+      }, retryCount > 0 ? 100 : 300); // Slightly faster initial load
     };
     
-    if (isQueuedProposal) {
+    if (isQueuedProposal && proposal?.id) {
       debouncedFetch();
     }
     
@@ -291,7 +363,7 @@ const TimelockInfoDisplay = ({
       isMounted = false;
       if (timeoutId) clearTimeout(timeoutId);
     };
-  }, [fetchTimelockData, retryCount, isQueuedProposal]);
+  }, [fetchTimelockData, retryCount, isQueuedProposal, proposal?.id]);
 
   // Render nothing if not a queued proposal
   if (!isQueuedProposal) {
@@ -302,35 +374,7 @@ const TimelockInfoDisplay = ({
     <div className="mt-4 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
       <div className="bg-gray-50 dark:bg-gray-800 px-4 py-2 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
         <h5 className="font-medium text-gray-700 dark:text-gray-300">Timelock Information</h5>
-        {isLoading ? (
-          <div className="h-5 w-5 border-2 border-indigo-500 dark:border-indigo-400 border-t-transparent rounded-full animate-spin"></div>
-        ) : (
-          <button 
-            onClick={() => {
-              // Use a debounce mechanism for the refresh button
-              if (isLoading) return; // Prevent clicks while loading
-              
-              // Prevent multiple rapid clicks
-              if (window.lastTimelockRefreshClick && 
-                  Date.now() - window.lastTimelockRefreshClick < 1000) {
-                console.log('Refresh clicked too quickly, ignoring');
-                return;
-              }
-              
-              window.lastTimelockRefreshClick = Date.now();
-              setRetryCount(prev => prev + 1);
-            }}
-            className={`text-xs text-indigo-500 dark:text-indigo-400 hover:text-indigo-700 
-                      dark:hover:text-indigo-300 flex items-center transition-all duration-200 
-                      ${isLoading ? 'opacity-50 cursor-not-allowed' : 'opacity-100 cursor-pointer'}`}
-            disabled={isLoading}
-          >
-            <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.001 0 01-15.357-2m15.357 2H15"></path>
-            </svg>
-            Refresh
-          </button>
-        )}
+        
       </div>
       
       <div className="p-4 space-y-3 dark:bg-gray-800">
@@ -386,37 +430,19 @@ const TimelockInfoDisplay = ({
           </p>
         </div>
         
-        {info?.txHash && (
+        {(info?.txHash || proposal?.timelockTxHash) && (
           <div className="pt-2 border-t border-gray-100 dark:border-gray-700">
             <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Transaction Hash</p>
             <div className="flex items-center">
               <span className="text-sm font-mono truncate dark:text-gray-300">
-                {info.txHash.substring(0, 10) + '...' + info.txHash.substring(info.txHash.length - 8)}
+                {(info?.txHash || proposal?.timelockTxHash).substring(0, 10) + '...' + 
+                 (info?.txHash || proposal?.timelockTxHash).substring((info?.txHash || proposal?.timelockTxHash).length - 8)}
               </span>
               <button 
-                onClick={() => copyToClipboard(info.txHash)} 
+                onClick={() => copyToClipboard(info?.txHash || proposal?.timelockTxHash)} 
                 className="ml-2 text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400"
               >
-                {copiedText === info.txHash 
-                  ? <Check className="w-4 h-4 text-green-500 dark:text-green-400" /> 
-                  : <Copy className="w-4 h-4" />}
-              </button>
-            </div>
-          </div>
-        )}
-        
-        {proposal.timelockTxHash && !info?.txHash && (
-          <div className="pt-2 border-t border-gray-100 dark:border-gray-700">
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Transaction Hash (From Proposal)</p>
-            <div className="flex items-center">
-              <span className="text-sm font-mono truncate dark:text-gray-300">
-                {proposal.timelockTxHash.substring(0, 10) + '...' + proposal.timelockTxHash.substring(proposal.timelockTxHash.length - 8)}
-              </span>
-              <button 
-                onClick={() => copyToClipboard(proposal.timelockTxHash)} 
-                className="ml-2 text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400"
-              >
-                {copiedText === proposal.timelockTxHash 
+                {copiedText === (info?.txHash || proposal?.timelockTxHash) 
                   ? <Check className="w-4 h-4 text-green-500 dark:text-green-400" /> 
                   : <Copy className="w-4 h-4" />}
               </button>

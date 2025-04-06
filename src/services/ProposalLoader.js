@@ -4,6 +4,7 @@ import { PROPOSAL_STATES, PROPOSAL_TYPES } from '../utils/constants';
 
 /**
  * Loads all proposals directly from blockchain contract using multiple approaches
+ * with enhanced timelock support
  * @param {object} contracts - Web3 contract instances
  * @returns {array} Array of proposal objects with full metadata
  */
@@ -30,15 +31,16 @@ export async function loadProposalsFromBlockchain(contracts) {
     
     // Step 2: Load all proposals
     const proposals = [];
+    const failedProposalIds = []; // Track IDs that failed to load for retry
     
-    // Load in batches to avoid overwhelming the RPC
-    const batchSize = 5;
+    // Load in smaller batches to avoid overwhelming the RPC
+    const batchSize = 3;
     
     for (let i = 0; i <= maxProposalId; i += batchSize) {
       const batchPromises = [];
       
       for (let j = i; j < Math.min(i + batchSize, maxProposalId + 1); j++) {
-        batchPromises.push(loadProposalDetails(j, governance, provider));
+        batchPromises.push(loadProposalDetails(j, governance, provider, contracts));
       }
       
       const batchResults = await Promise.allSettled(batchPromises);
@@ -46,12 +48,43 @@ export async function loadProposalsFromBlockchain(contracts) {
       for (const result of batchResults) {
         if (result.status === 'fulfilled' && result.value) {
           proposals.push(result.value);
+        } else if (result.status === 'rejected') {
+          console.warn(`Failed to load proposal from batch: ${result.reason}`);
+          // Don't track specific IDs here since we don't know which one failed
         }
       }
       
       // Short delay between batches
-      if (i + batchSize <= maxProposalId) {
-        await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    
+    // Step 3: Now specifically retry loading any timelock proposals that might have been missed
+    // by checking the timelock contract events directly
+    if (contracts.timelock) {
+      const additionalProposals = await loadProposalsFromTimelock(contracts.timelock, governance, provider, proposals);
+      
+      if (additionalProposals.length > 0) {
+        console.log(`Found ${additionalProposals.length} additional proposals from timelock contract`);
+        proposals.push(...additionalProposals);
+      }
+    }
+    
+    // Step 4: If we had any failed proposals, try to load them one by one with more aggressive retry
+    if (failedProposalIds.length > 0) {
+      console.log(`Retrying ${failedProposalIds.length} failed proposals...`);
+      
+      for (const id of failedProposalIds) {
+        try {
+          const proposal = await loadProposalDetails(id, governance, provider, contracts, true);
+          if (proposal) {
+            proposals.push(proposal);
+          }
+        } catch (err) {
+          console.error(`Failed to load proposal ${id} even with retry:`, err);
+        }
+        
+        // More substantial delay between retries
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
     }
     
@@ -67,13 +100,156 @@ export async function loadProposalsFromBlockchain(contracts) {
 }
 
 /**
+ * Helper function to look for additional proposals by examining timelock events
+ */
+async function loadProposalsFromTimelock(timelock, governance, provider, existingProposals) {
+  try {
+    console.log("Searching for additional proposals in timelock...");
+    const additionalProposals = [];
+    
+    // Get all TransactionQueued events from the timelock
+    const currentBlock = await provider.getBlockNumber();
+    const startBlock = Math.max(0, currentBlock - 100000); // Look back ~2 weeks
+    
+    const queuedEvents = await timelock.queryFilter(
+      timelock.filters.TransactionQueued(),
+      startBlock
+    );
+    
+    console.log(`Found ${queuedEvents.length} TransactionQueued events in timelock`);
+    
+    // Get all existing proposal IDs for comparison
+    const existingIds = new Set(existingProposals.map(p => Number(p.id)));
+    
+    // We'll try to match timelock transactions with governance proposals
+    // by examining the targets and timestamps
+    for (const event of queuedEvents) {
+      try {
+        if (!event.args || !event.args.target) continue;
+        
+        const target = event.args.target;
+        const txHash = event.args.txHash;
+        const etaTimestamp = event.args.eta ? Number(event.args.eta) : null;
+        const threatLevel = event.args.threatLevel ? Number(event.args.threatLevel) : 0;
+        
+        // Check if this transaction might be from a proposal we're missing
+        let matchingProposal = null;
+        let proposalId = null;
+        
+        // First try to get proposal ID directly from event data if available
+        if (event.args.data && event.args.data !== '0x') {
+          try {
+            // Some timelock implementations store proposal ID in the data
+            const decoded = ethers.utils.defaultAbiCoder.decode(['uint256'], event.args.data);
+            proposalId = decoded[0].toNumber();
+          } catch (e) {
+            // Data is in a different format, continue to other methods
+          }
+        }
+        
+        // If we found a potential proposal ID, check if we already have it
+        if (proposalId !== null) {
+          if (existingIds.has(proposalId)) {
+            // Already have this proposal, no need to load it again
+            continue;
+          }
+          
+          // Try to load this proposal directly
+          try {
+            matchingProposal = await loadProposalDetails(proposalId, governance, provider);
+            
+            // If we successfully loaded it, add the timelock hash and other info
+            if (matchingProposal) {
+              matchingProposal.timelockTxHash = txHash;
+              matchingProposal.timelockEta = etaTimestamp;
+              matchingProposal.timelockThreatLevel = threatLevel;
+              matchingProposal.isInTimelock = true;
+              matchingProposal.displayStateLabel = "In Timelock";
+              additionalProposals.push(matchingProposal);
+              continue;
+            }
+          } catch (loadErr) {
+            console.warn(`Failed to load proposal ${proposalId} from ID in timelock event:`, loadErr);
+            // Continue to other methods
+          }
+        }
+        
+        // If we didn't find a match, look through ProposalCreated events with matching targets
+        const creationEvents = await governance.queryFilter(governance.filters.ProposalEvent());
+        
+        for (const creationEvent of creationEvents) {
+          try {
+            // Extract the proposal information from the event
+            if (creationEvent.args && creationEvent.args.eventType === 0) { // Creation event
+              const proposalId = creationEvent.args.proposalId.toNumber();
+              
+              // Skip if we already have this proposal
+              if (existingIds.has(proposalId)) continue;
+              
+              // Try to get the proposal details to check if target matches
+              try {
+                const proposal = await governance.proposals(proposalId);
+                
+                // Check if this proposal's target matches our timelock event
+                if (proposal.target && proposal.target.toLowerCase() === target.toLowerCase()) {
+                  // Found a match! Load the full proposal
+                  matchingProposal = await loadProposalDetails(proposalId, governance, provider);
+                  
+                  if (matchingProposal) {
+                    // Add timelock information
+                    matchingProposal.timelockTxHash = txHash;
+                    matchingProposal.timelockEta = etaTimestamp;
+                    matchingProposal.timelockThreatLevel = threatLevel;
+                    matchingProposal.isInTimelock = true;
+                    matchingProposal.displayStateLabel = "In Timelock";
+                    additionalProposals.push(matchingProposal);
+                    break;
+                  }
+                }
+              } catch (e) {
+                // Couldn't get proposal details, try next event
+                continue;
+              }
+            }
+          } catch (eventErr) {
+            // Problem processing this event, skip it
+            continue;
+          }
+        }
+      } catch (err) {
+        console.warn("Error processing timelock event:", err);
+      }
+    }
+    
+    return additionalProposals;
+  } catch (error) {
+    console.error("Error loading proposals from timelock:", error);
+    return [];
+  }
+}
+
+/**
  * Finds the maximum valid proposal ID by querying the contract
  */
 async function findMaxProposalId(governance) {
   try {
     console.log("Finding max proposal ID...");
     
-    // First try using events for efficiency
+    // First try using the count method if available
+    try {
+      if (typeof governance.getProposalCount === 'function') {
+        const count = await governance.getProposalCount();
+        const maxId = count.toNumber() - 1;
+        if (maxId >= 0) {
+          console.log(`Found max proposal ID ${maxId} using getProposalCount`);
+          return maxId;
+        }
+      }
+    } catch (err) {
+      console.warn("getProposalCount not available or failed:", err);
+    }
+    
+    // Next try using events for efficiency
     try {
       // Get ProposalEvent events
       const filter = governance.filters.ProposalEvent();
@@ -83,8 +259,8 @@ async function findMaxProposalId(governance) {
       
       // Find the highest proposal ID in events
       for (const event of events) {
-        if (event.args && event.args[0]) {
-          const id = Number(event.args[0].toString());
+        if (event.args && event.args.proposalId) {
+          const id = Number(event.args.proposalId.toString());
           if (id > maxId) maxId = id;
         }
       }
@@ -139,9 +315,9 @@ async function findMaxProposalId(governance) {
 }
 
 /**
- * Loads full details for a specific proposal ID
+ * Loads full details for a specific proposal ID with enhanced timelock support
  */
-async function loadProposalDetails(proposalId, governance, provider) {
+async function loadProposalDetails(proposalId, governance, provider, contracts = {}, aggressive = false) {
   try {
     console.log(`Loading proposal #${proposalId} details...`);
     
@@ -237,8 +413,9 @@ async function loadProposalDetails(proposalId, governance, provider) {
     if (!proposal.description) {
       try {
         // Try different methods to access proposal data
+        // Many governance contracts have a proposals mapping
         const proposalData = await governance.proposals(proposalId).catch(() => null) || 
-                            await governance._proposals(proposalId).catch(() => null);
+                           await governance._proposals(proposalId).catch(() => null);
                             
         if (proposalData && proposalData.description) {
           proposal.description = proposalData.description;
@@ -303,22 +480,87 @@ async function loadProposalDetails(proposalId, governance, provider) {
       proposal.stakeRefunded = false;
     }
     
-    // Get timelock tx hash for queued proposals
-    if (proposal.state === PROPOSAL_STATES.QUEUED && events.queue) {
-      try {
-        const queueEvent = events.queue;
-        const data = queueEvent.args.data;
-        
-        if (data && data !== '0x') {
-          try {
-            const decoded = ethers.utils.defaultAbiCoder.decode(['bytes32'], data);
-            proposal.timelockTxHash = decoded[0];
-          } catch (e) {
-            console.warn(`Couldn't decode queue event data for proposal #${proposalId}:`, e);
+    // Enhanced timelock status retrieval
+    // First check if this proposal is in QUEUED state
+    if (proposal.state === PROPOSAL_STATES.QUEUED) {
+      // Get timelock tx hash from events
+      if (events.queue) {
+        try {
+          const queueEvent = events.queue;
+          const data = queueEvent.args.data;
+          
+          if (data && data !== '0x') {
+            try {
+              const decoded = ethers.utils.defaultAbiCoder.decode(['bytes32'], data);
+              proposal.timelockTxHash = decoded[0];
+            } catch (e) {
+              console.warn(`Couldn't decode queue event data for proposal #${proposalId}:`, e);
+            }
           }
+        } catch (queueErr) {
+          console.warn(`Error getting timelock tx hash for proposal #${proposalId}:`, queueErr);
         }
-      } catch (queueErr) {
-        console.warn(`Error getting timelock tx hash for proposal #${proposalId}:`, queueErr);
+      }
+      
+      // If we still don't have a timelock hash, try alternative approaches
+      if (!proposal.timelockTxHash && contracts.timelock) {
+        try {
+          // Try to find the timelock transaction through timelock events
+          const timelock = contracts.timelock;
+          const currentBlock = await provider.getBlockNumber();
+          const startBlock = Math.max(0, currentBlock - 100000); // Look back further
+          
+          // Get all TransactionQueued events
+          const timelockEvents = await timelock.queryFilter(
+            timelock.filters.TransactionQueued(),
+            startBlock
+          );
+          
+          // Try to match by target address
+          if (proposal.target) {
+            const proposalTarget = proposal.target.toLowerCase();
+            
+            for (const event of timelockEvents) {
+              try {
+                if (event.args && event.args.target) {
+                  const eventTarget = event.args.target.toLowerCase();
+                  
+                  if (eventTarget === proposalTarget) {
+                    proposal.timelockTxHash = event.args.txHash;
+                    
+                    // Also get threat level and ETA
+                    if (event.args.threatLevel !== undefined) {
+                      proposal.timelockThreatLevel = Number(event.args.threatLevel);
+                    }
+                    
+                    if (event.args.eta) {
+                      proposal.timelockEta = Number(event.args.eta);
+                      
+                      // Calculate if it's ready for execution
+                      const currentTimestamp = Math.floor(Date.now() / 1000);
+                      proposal.readyForExecution = currentTimestamp >= proposal.timelockEta;
+                      
+                      // Update the display state label
+                      if (proposal.readyForExecution) {
+                        proposal.displayStateLabel = "Ready For Execution";
+                      } else {
+                        proposal.displayStateLabel = "In Timelock";
+                      }
+                      
+                      proposal.isInTimelock = true;
+                    }
+                    
+                    break;
+                  }
+                }
+              } catch (eventErr) {
+                console.warn(`Error processing timelock event:`, eventErr);
+              }
+            }
+          }
+        } catch (timelockErr) {
+          console.warn(`Error searching timelock events for proposal #${proposalId}:`, timelockErr);
+        }
       }
     }
     

@@ -2517,7 +2517,7 @@ useEffect(() => {
                         {proposal.type === PROPOSAL_TYPES.SIGNALING && (
                           <div className="mt-2 bg-gray-50 dark:bg-gray-700/50 p-4 rounded">
                             <p className="text-sm text-gray-600 dark:text-gray-400">
-                              <span className="font-medium">Binding Community Vote</span> - This proposal represents a formal decision by the community that, while not executing code directly, establishes official consensus on governance matters.
+                              <span className="font-medium">Binding Community Vote</span> - This proposal represents a formal decision that, while not executing code directly, establishes official consensus on governance matters.
                             </p>
                             <div className="mt-2 flex items-center text-sm">
                               <Shield className="h-4 w-4 text-indigo-500 mr-2" />
