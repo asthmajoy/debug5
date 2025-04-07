@@ -459,7 +459,6 @@ contract JustTokenUpgradeable is
     _lockedTokens[msg.sender] = fullBalance;
     _delegatedToAddress[delegatee] += fullBalance;
     
-    // Here's the key change - use the comprehensive helper function
     // instead of the original propagation logic
     _handleFullDelegationPropagation(msg.sender, delegatee);
     
