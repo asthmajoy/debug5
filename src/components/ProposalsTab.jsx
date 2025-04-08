@@ -438,26 +438,26 @@ const ProposalsTab = ({
       
       // Step 3: Determine actual timelock status
       const currentTimestamp = Math.floor(Date.now() / 1000);
-      const etaTimestamp = Number(txDetails.eta);
-      const isExecuted = txDetails.executed || false;
-      const isCanceled = txDetails.canceled || false;
-      
-      // Calculate actual status
-      let timelockStatus;
-      if (isExecuted) {
-        timelockStatus = 'executed';
-      } else if (isCanceled) {
-        timelockStatus = 'canceled';
-      } else if (currentTimestamp < etaTimestamp) {
-        timelockStatus = 'queued';
-        const remainingTime = etaTimestamp - currentTimestamp;
-        console.log(`Proposal #${proposalId} is in timelock. ${remainingTime} seconds remaining.`);
-      } else {
-        timelockStatus = 'ready';
-      }
-      
-      return {
-        status: timelockStatus,
+  const etaTimestamp = Number(txDetails.eta);
+  const isExecuted = txDetails.executed || false;
+  const isCanceled = txDetails.canceled || false;
+  
+  // Calculate actual status
+  let timelockStatus;
+  if (isExecuted) {
+    timelockStatus = 'executed';
+  } else if (isCanceled) {
+    timelockStatus = 'canceled';
+  } else if (currentTimestamp < etaTimestamp) {
+    timelockStatus = 'queued';
+    const remainingTime = etaTimestamp - currentTimestamp;
+    console.log(`Proposal #${proposalId} is in timelock. ${remainingTime} seconds remaining.`);
+  } else {
+    timelockStatus = 'ready';
+  }
+  
+  return {
+    status: timelockStatus,
         txHash: timelockTxHash,
         eta: etaTimestamp,
         executed: isExecuted,
@@ -465,7 +465,8 @@ const ProposalsTab = ({
         remainingTime: Math.max(0, etaTimestamp - currentTimestamp),
         isInTimelock: !isExecuted && !isCanceled,
         readyForExecution: !isExecuted && !isCanceled && currentTimestamp >= etaTimestamp,
-        threatLevel: threatLevel // Make sure we always return the threat level
+        threatLevel: threatLevel,
+        // Make sure we always return the threat level
       };
     } catch (error) {
       console.error(`Error checking timelock status for proposal #${proposalId}:`, error);
@@ -512,16 +513,16 @@ const ProposalsTab = ({
                         ...p,
                         state: newState,
                         stateLabel: getProposalStateLabel(newState),
-                        displayStateLabel: timelockStatus.status === 'queued' ? 'In Timelock' : 
-                                        timelockStatus.status === 'ready' ? 'Ready For Execution' : 
+                        displayStateLabel: timelockStatus.readyForExecution ? 'Ready For Execution' : 
+                                        timelockStatus.status === 'queued' ? 'In Timelock' : 
                                         getProposalStateLabel(newState),
                         timelockStatus: timelockStatus.status,
                         timelockEta: timelockStatus.eta,
                         isInTimelock: timelockStatus.isInTimelock,
                         timelockRemaining: timelockStatus.remainingTime,
                         timelockTxHash: timelockStatus.txHash,
-                        readyForExecution: timelockStatus.readyForExecution,
-                        timelockThreatLevel: timelockStatus.threatLevel // Store the threat level
+                        readyForExecution: timelockStatus.readyForExecution, // Explicitly set this
+                        timelockThreatLevel: timelockStatus.threatLevel
                       };
                     }
                     return p;
@@ -720,104 +721,54 @@ const ProposalsTab = ({
 
   // CHANGE 4: Update the checkTimelockForQueuedProposals to prevent excessive re-renders
   // REPLACE the checkTimelockForQueuedProposals implementation with:
-useEffect(() => {
-  // Only run if we have proposals and contracts
-  if (!processedProposals?.length || !contracts?.timelock) return;
-  
-  // Use a ref to track active fetches to prevent duplicate work
-  const activeProposalChecks = new Set();
-  let isComponentMounted = true;
-  
-  const checkTimelockForQueuedProposals = async () => {
-    console.log("Checking timelock status for queued proposals...");
+  useEffect(() => {
+    if (!processedProposals?.length || !contracts?.timelock) return;
     
-    // Avoid modifying state directly - create a copy
-    const updatedProposals = [...processedProposals];
-    let hasUpdates = false;
-    
-    // Process only queued proposals that we haven't checked recently
-    const queuedProposals = updatedProposals.filter(p => 
-      (Number(p.state) === PROPOSAL_STATES.QUEUED || 
-       p.stateLabel?.toLowerCase() === 'queued') && 
-      !activeProposalChecks.has(p.id) &&
-      (!p.lastTimelockCheck || Date.now() - p.lastTimelockCheck > 60000) // 60 seconds instead of 30
-    );
-    
-    if (queuedProposals.length === 0) {
-      return;
-    }
-    
-    // Process in smaller batches (1 instead of 2) to reduce load
-    const batchSize = 1;
-    for (let i = 0; i < queuedProposals.length; i += batchSize) {
-      if (!isComponentMounted) break;
+    const checkTimelockForQueuedProposals = async () => {
+      console.log('🔄 Checking Timelock for Queued Proposals');
       
-      const batch = queuedProposals.slice(i, i + batchSize);
+      const queuedProposals = processedProposals.filter(p => 
+        p.stateLabel?.toLowerCase() === 'queued' && 
+        (!p.lastTimelockCheck || Date.now() - p.lastTimelockCheck > 60000)
+      );
       
-      // Process proposals serially instead of in parallel to reduce memory usage
-      for (const proposal of batch) {
-        const proposalId = proposal.id;
-        activeProposalChecks.add(proposalId);
-        
+      console.log(`🔍 Found ${queuedProposals.length} queued proposals to check`);
+      
+      for (const proposal of queuedProposals) {
         try {
-          const timelockStatus = await checkTimelockStatus(proposalId);
+          const timelockStatus = await checkTimelockStatus(proposal.id);
           
           if (timelockStatus) {
-            // Find the proposal index in our array
-            const index = updatedProposals.findIndex(p => Number(p.id) === Number(proposalId));
-            if (index !== -1) {
-              // Update the proposal with timelock information
-              updatedProposals[index] = {
-                ...updatedProposals[index],
-                timelockStatus: timelockStatus.status,
-                timelockEta: timelockStatus.eta,
-                isInTimelock: timelockStatus.isInTimelock,
-                timelockRemaining: timelockStatus.remainingTime,
-                timelockTxHash: timelockStatus.txHash || updatedProposals[index].timelockTxHash,
-                readyForExecution: timelockStatus.readyForExecution,
-                lastTimelockCheck: Date.now(),
-                timelockThreatLevel: timelockStatus.threatLevel ?? updatedProposals[index].timelockThreatLevel,
-                displayStateLabel: timelockStatus.executed ? 'Executed' :
-                                timelockStatus.canceled ? 'Canceled' :
-                                timelockStatus.readyForExecution ? 'Ready For Execution' :
-                                timelockStatus.isInTimelock ? 'In Timelock' : updatedProposals[index].stateLabel
-              };
-              
-              hasUpdates = true;
-            }
+            console.log(`🔄 Updating proposal #${proposal.id} status:`, {
+              currentStatus: proposal.timelockStatus,
+              newStatus: timelockStatus.status,
+              readyForExecution: timelockStatus.readyForExecution
+            });
+            
+            setProcessedProposals(prev => 
+              prev.map(p => 
+                p.id === proposal.id 
+                  ? {
+                      ...p,
+                      timelockStatus: timelockStatus.status,
+                      readyForExecution: timelockStatus.readyForExecution,
+                      lastTimelockCheck: Date.now()
+                    }
+                  : p
+              )
+            );
           }
-        } catch (err) {
-          console.warn(`Error processing proposal #${proposalId}:`, err);
-        } finally {
-          activeProposalChecks.delete(proposalId);
+        } catch (error) {
+          console.error(`❌ Error processing proposal #${proposal.id}:`, error);
         }
       }
-      
-      // Larger delay between batches
-      if (i + batchSize < queuedProposals.length) {
-        await new Promise(resolve => setTimeout(resolve, 500));
-      }
-    }
+    };
     
-    // Only update state if there were changes and component is still mounted
-    if (hasUpdates && isComponentMounted) {
-      setProcessedProposals(updatedProposals);
-    }
-  };
-  
-  // Run the check
-  checkTimelockForQueuedProposals();
-  
-  // Set up an interval with less frequent updates (60s instead of 30s)
-  const intervalId = setInterval(checkTimelockForQueuedProposals, 60000);
-  
-  // Clean up the interval when the component unmounts
-  return () => {
-    isComponentMounted = false;
-    clearInterval(intervalId);
-    activeProposalChecks.clear();
-  };
-}, [processedProposals, contracts?.timelock]);
+    checkTimelockForQueuedProposals();
+    const intervalId = setInterval(checkTimelockForQueuedProposals, 60000);
+    
+    return () => clearInterval(intervalId);
+  }, [processedProposals, contracts?.timelock]);
 
 
 // Fix #5: Add memory leak prevention - add this to ProposalsTab
@@ -2584,15 +2535,13 @@ useEffect(() => {
                   )}
                   
                   {/* Show Execute button only for QUEUED proposals that haven't been executed yet */}
-                  {(proposal.state === PROPOSAL_STATES.QUEUED || proposal.readyForExecution) && !proposal.isExecuted && (
+                  {proposal.timelockStatus === 'ready' && !proposal.isExecuted && (
                     <button 
-                      className={`bg-purple-500 dark:bg-purple-600 hover:bg-purple-600 dark:hover:bg-purple-500 text-white px-3 py-1 rounded-md text-sm shadow-sm hover:shadow-md dark:shadow-purple-700/30 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-purple-500 dark:focus:ring-purple-400 focus:ring-opacity-50 disabled:opacity-60 disabled:cursor-not-allowed ${
-                        proposal.readyForExecution ? 'animate-pulse' : ''
-                      }`}
+                      className="bg-purple-500 dark:bg-purple-600 hover:bg-purple-600 dark:hover:bg-purple-500 text-white px-3 py-1 rounded-md text-sm shadow-sm hover:shadow-md dark:shadow-purple-700/30 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-purple-500 dark:focus:ring-purple-400 focus:ring-opacity-50 disabled:opacity-60 disabled:cursor-not-allowed animate-pulse-slow"
                       onClick={() => handleProposalAction(executeProposal, proposal.id, 'executing')}
                       disabled={loading}
                     >
-                      {proposal.readyForExecution ? 'Execute (Ready)' : 'Execute'}
+                      Execute
                     </button>
                   )}
                   

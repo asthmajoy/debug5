@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useWeb3 } from '../contexts/Web3Context';
 import { useAuth } from '../contexts/AuthContext';
 import { useBlockchainData } from '../contexts/BlockchainDataContext';
@@ -8,6 +8,8 @@ import { PROPOSAL_STATES } from '../utils/constants';
 import { ethers } from 'ethers';
 import { DarkModeProvider, useDarkMode } from '../contexts/DarkModeContext';
 import DarkModeToggle from './DarkModeToggle';
+import _ from 'lodash'; // Add this import at the top of your file
+
 
 // Import components
 import HomePage from './HomePage';
@@ -67,6 +69,9 @@ const JustDAOContent = () => {
     isAnalytics: false,
     isGovernance: false, // Added governance role
   });
+  
+  // State to track the effective voting power from the contract
+  const [transitiveVotingPower, setTransitiveVotingPower] = useState(null);
   
   // Web3 context for blockchain connection
   const { account, isConnected, connectWallet, disconnectWallet, contracts } = useWeb3();
@@ -179,6 +184,8 @@ const JustDAOContent = () => {
   const proposalsHook = useProposals();
   const votingHook = useVoting();
   
+  
+  
   // Format numbers based on window width
   const formatTokenBasedOnWidth = (value) => {
     if (!value) return '0';
@@ -267,8 +274,8 @@ const JustDAOContent = () => {
     }, 0).toString();
   };
 
-  // Calculate proper voting power without double counting (based on DelegationTab logic)
-  const calculateVotingPower = () => {
+  // Calculate direct voting power without double counting (based on DelegationTab logic)
+  const calculateDirectVotingPower = () => {
     // Check if user is self-delegated
     const selfDelegated = isSelfDelegated(account, userData.delegate);
     
@@ -321,6 +328,13 @@ const JustDAOContent = () => {
       delegation.fetchDelegationInfo();
     }
     
+    // Also refresh transitive voting power
+    if (delegation && delegation.getEffectiveVotingPower && account) {
+      delegation.getEffectiveVotingPower(account)
+        .then(power => setTransitiveVotingPower(power))
+        .catch(err => console.error("Error refreshing transitive voting power:", err));
+    }
+    
     // Reset animation after a delay
     setTimeout(() => setIsRefreshing(false), 1000);
     
@@ -330,11 +344,30 @@ const JustDAOContent = () => {
   // Handle tab-specific refresh button click
   const handleRefresh = () => {
     refreshData();
+    
+    // Also refresh transitive voting power
+    if (delegation && delegation.getEffectiveVotingPower && account) {
+      delegation.getEffectiveVotingPower(account)
+        .then(power => setTransitiveVotingPower(power))
+        .catch(err => console.error("Error refreshing transitive voting power:", err));
+    }
   };
 
-  // Get the correct voting power using the improved calculation
+  // Get the correct voting power using the improved transitive calculation method
   const getCorrectVotingPower = () => {
-    // Check delegation status first
+    // First priority: Try to use the fetched transitive voting power if available
+    if (transitiveVotingPower !== null) {
+      console.log("Using transitive voting power from contract:", transitiveVotingPower);
+      return transitiveVotingPower;
+    }
+    
+    // Second priority: Try to use the delegationInfo.effectiveVotingPower if it exists
+    if (delegation?.delegationInfo?.effectiveVotingPower) {
+      console.log("Using effective voting power from delegationInfo:", delegation.delegationInfo.effectiveVotingPower);
+      return delegation.delegationInfo.effectiveVotingPower;
+    }
+    
+    // Check delegation status
     const selfDelegated = isSelfDelegated(account, userData.delegate);
     
     // If user has explicitly delegated to someone else, they have zero voting power
@@ -342,12 +375,12 @@ const JustDAOContent = () => {
       return "0"; // User has delegated voting power away
     }
     
-    // Use the new calculation that avoids double counting
-    const calculatedVotingPower = calculateVotingPower();
+    // Use the direct calculation as a fallback
+    const calculatedVotingPower = calculateDirectVotingPower();
     
-    // Only use fallback logic if we couldn't calculate properly AND user is self-delegated
+    // Only use fallback data from context if we couldn't calculate properly
     if (!calculatedVotingPower || parseFloat(calculatedVotingPower) === 0) {
-      // Original fallback logic, only used when self-delegated
+      // Use the context values if available and user is self-delegated
       if (userData.onChainVotingPower && parseFloat(userData.onChainVotingPower) > 0) {
         return userData.onChainVotingPower;
       }
@@ -356,7 +389,10 @@ const JustDAOContent = () => {
     
     return calculatedVotingPower;
   };
-
+  useEffect(() => {
+    console.log("Effect triggered", { isConnected, account, contracts: contracts.justToken, delegation });
+    // ...
+  }, [isConnected, account, contracts.justToken, delegation]);
   // Get label for Voting Power based on window width
   const getVotingPowerLabel = () => {
     if (windowWidth < 640) {
@@ -648,7 +684,7 @@ const JustDAOContent = () => {
               ...userData,
               address: account,
               balance: formatTokenAmount(userData.balance),
-              // Use the same helper function for consistency
+              // Pass transitive voting power to DelegationTab
               votingPower: formatTokenAmount(getCorrectVotingPower())
             }}
             delegation={{
@@ -657,7 +693,9 @@ const JustDAOContent = () => {
                 currentDelegate: userData.delegate,
                 lockedTokens: userData.lockedTokens,
                 delegatedToYou: userData.delegatedToYou,
-                delegators: userData.delegators || []
+                delegators: userData.delegators || [],
+                // Pass the effective voting power to the delegationInfo
+                effectiveVotingPower: transitiveVotingPower
               },
               loading: dataLoading
             }}
@@ -775,6 +813,24 @@ const JustDAOContent = () => {
       </footer>
     </div>
   );
+};
+const fetchWithTimeout = async (promise, ms = 5000) => {
+  let timeoutId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error('Timeout')), ms);
+  });
+
+  try {
+    const result = await Promise.race([
+      promise,
+      timeoutPromise
+    ]);
+    clearTimeout(timeoutId);
+    return result;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    throw error;
+  }
 };
 
 // Wrapping the main component with DarkModeProvider

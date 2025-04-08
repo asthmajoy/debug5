@@ -98,12 +98,14 @@ export function useVoting() {
       if (contracts.justToken) {
         try {
           const currentSnapshot = await contracts.justToken.getCurrentSnapshotId();
-          logDebug(`Using current snapshot ID as fallback: ${currentSnapshot}`);
-          
-          // Cache the result with a shorter TTL since it's a fallback
-          blockchainDataCache.set(cacheKey, currentSnapshot, 86400); // 1 day
-          
-          return currentSnapshot;
+          if (currentSnapshot !== undefined && currentSnapshot !== null) {
+            logDebug(`Using current snapshot ID as fallback: ${currentSnapshot}`);
+            
+            // Cache the result with a shorter TTL since it's a fallback
+            blockchainDataCache.set(cacheKey, currentSnapshot, 86400); // 1 day
+            
+            return currentSnapshot;
+          }
         } catch (tokenErr) {
           console.error("Error getting current snapshot from token contract:", tokenErr);
         }
@@ -133,7 +135,7 @@ export function useVoting() {
       // Try direct method first
       try {
         const voterInfo = await contracts.governance.proposalVoterInfo(proposalId, account);
-        const hasVoted = !voterInfo.isZero();
+        const hasVoted = voterInfo && !voterInfo.isZero();
         
         // Cache the result
         blockchainDataCache.set(cacheKey, hasVoted, 86400 * 7); // 7 days
@@ -163,13 +165,13 @@ export function useVoting() {
     
     try {
       // Try to get from cache first
-      const cacheKey = `votingPower-${account}-${snapshotId}`;
+      const cacheKey = `votingPower-${account}-${snapshotId || "current"}`;
       const cachedPower = blockchainDataCache.get(cacheKey);
       if (cachedPower !== null) {
         return cachedPower;
       }
       
-      logDebug(`Getting voting power for account ${account} at snapshot ${snapshotId}`);
+      logDebug(`Getting voting power for account ${account} at snapshot ${snapshotId || "current"}`);
       
       // If no snapshot ID is provided, get the current one
       let actualSnapshotId = snapshotId;
@@ -177,6 +179,10 @@ export function useVoting() {
       if (!actualSnapshotId) {
         try {
           actualSnapshotId = await contracts.justToken.getCurrentSnapshotId();
+          if (actualSnapshotId === undefined || actualSnapshotId === null) {
+            console.warn("Got undefined or null snapshot ID");
+            return "0";
+          }
           logDebug(`Using current snapshot ID: ${actualSnapshotId}`);
         } catch (snapshotErr) {
           console.error("Error getting current snapshot ID:", snapshotErr);
@@ -184,9 +190,22 @@ export function useVoting() {
         }
       }
       
+      // Ensure we have a valid snapshot ID before proceeding
+      if (!actualSnapshotId || actualSnapshotId === undefined || actualSnapshotId === null) {
+        console.warn("No valid snapshot ID available for voting power calculation");
+        return "0";
+      }
+      
       // Try getEffectiveVotingPower method first (most accurate)
       try {
-        const votingPower = await contracts.justToken.getEffectiveVotingPower(account, actualSnapshotId);
+        // Make sure we have a valid BigNumber for snapshot ID
+        const safeSnapshotId = ethers.BigNumber.from(actualSnapshotId.toString());
+        const votingPower = await contracts.justToken.getEffectiveVotingPower(account, safeSnapshotId);
+        
+        if (votingPower === undefined || votingPower === null) {
+          throw new Error("Received undefined or null voting power");
+        }
+        
         const formattedPower = ethers.utils.formatEther(votingPower);
         
         logDebug(`Voting power at snapshot ${actualSnapshotId}: ${formattedPower}`);
@@ -200,7 +219,14 @@ export function useVoting() {
         
         // Fallback: try to get balance at snapshot
         try {
-          const balance = await contracts.justToken.balanceOfAt(account, actualSnapshotId);
+          // Make sure we have a valid BigNumber for snapshot ID
+          const safeSnapshotId = ethers.BigNumber.from(actualSnapshotId.toString());
+          const balance = await contracts.justToken.balanceOfAt(account, safeSnapshotId);
+          
+          if (balance === undefined || balance === null) {
+            throw new Error("Received undefined or null balance");
+          }
+          
           const formattedBalance = ethers.utils.formatEther(balance);
           
           logDebug(`Fallback - balance at snapshot ${actualSnapshotId}: ${formattedBalance}`);
@@ -245,7 +271,7 @@ export function useVoting() {
         return { hasVoted: false, votingPower: "0", voteType: null };
       }
       
-      if (voterInfo.isZero()) {
+      if (!voterInfo || voterInfo.isZero()) {
         const result = { hasVoted: false, votingPower: "0", voteType: null };
         blockchainDataCache.set(cacheKey, result, 86400); // 1 day
         return result;
@@ -301,8 +327,14 @@ export function useVoting() {
       
       // Directly call the contract method to get voting power values
       // This should work for all proposal states
-      const [forVotes, againstVotes, abstainVotes, totalVotingPower, voterCount] = 
-        await contracts.governance.getProposalVoteTotals(proposalId);
+      const voteTotals = await contracts.governance.getProposalVoteTotals(proposalId);
+      
+      // Ensure we have the expected array structure
+      if (!voteTotals || voteTotals.length < 5) {
+        throw new Error("Invalid response from getProposalVoteTotals");
+      }
+      
+      const [forVotes, againstVotes, abstainVotes, totalVotingPower, voterCount] = voteTotals;
       
       // Convert BigNumber values to formatted strings (representing JST tokens)
       const result = {
@@ -392,6 +424,13 @@ export function useVoting() {
       for (const event of events) {
         try {
           const { voter, support, votingPower } = event.args;
+          
+          // Skip processing if any required field is missing
+          if (!voter || support === undefined || !votingPower) {
+            console.warn('Skipping vote event with missing data');
+            continue;
+          }
+          
           const voterAddress = voter.toLowerCase();
           const powerValue = ethers.utils.formatEther(votingPower);
           
@@ -411,8 +450,11 @@ export function useVoting() {
       
       for (const [, voteData] of voterVotes.entries()) {
         const { type, power } = voteData;
-        votesByType[type]++;
-        votingPowerByType[type] += parseFloat(power);
+        // Check if type is a valid vote type (0, 1, or 2)
+        if (type === 0 || type === 1 || type === 2) {
+          votesByType[type]++;
+          votingPowerByType[type] += parseFloat(power);
+        }
       }
       
       // Calculate totals
@@ -652,124 +694,136 @@ export function useVoting() {
     contextGetVoteTotals, 
     getIndexedVoteData
   ]);
-
-  // Cast a vote using blockchain and handle state changes
-  const castVote = async (proposalId, voteType) => {
-    if (!validateGovernanceContract()) {
-      throw new Error("Governance contract not available or initialized");
+// Cast a vote using blockchain and handle state changes
+const castVote = async (proposalId, voteType) => {
+  if (!validateGovernanceContract()) {
+    throw new Error("Governance contract not available or initialized");
+  }
+  
+  if (!isConnected) {
+    throw new Error("Not connected to blockchain");
+  }
+  
+  try {
+    setVoting({ 
+      loading: true,
+      processing: true,
+      error: null, 
+      success: false,
+      lastVotedProposalId: null
+    });
+    
+    logDebug(`Casting vote on proposal #${proposalId} with vote type ${voteType}`);
+    
+    // Validate vote type
+    if (![VOTE_TYPES.AGAINST, VOTE_TYPES.FOR, VOTE_TYPES.ABSTAIN].includes(Number(voteType))) {
+      throw new Error("Invalid vote type. Must be 0 (Against), 1 (For), or 2 (Abstain)");
     }
     
-    if (!isConnected) {
-      throw new Error("Not connected to blockchain");
+    // Check if the user has already voted on the blockchain
+    const hasAlreadyVoted = await hasVoted(proposalId);
+    if (hasAlreadyVoted) {
+      throw new Error("You have already voted on this proposal");
     }
     
-    try {
-      setVoting({ 
-        loading: true,
-        processing: true,
-        error: null, 
-        success: false,
-        lastVotedProposalId: null
-      });
-      
-      logDebug(`Casting vote on proposal #${proposalId} with vote type ${voteType}`);
-      
-      // Validate vote type
-      if (![VOTE_TYPES.AGAINST, VOTE_TYPES.FOR, VOTE_TYPES.ABSTAIN].includes(Number(voteType))) {
-        throw new Error("Invalid vote type. Must be 0 (Against), 1 (For), or 2 (Abstain)");
-      }
-      
-      // Check if the user has already voted on the blockchain
-      const hasAlreadyVoted = await hasVoted(proposalId);
-      if (hasAlreadyVoted) {
-        throw new Error("You have already voted on this proposal");
-      }
-      
-      // Check if the proposal is active
-      const proposalState = await contracts.governance.getProposalState(proposalId);
-      if (proposalState !== 0) { // 0 = Active
-        throw new Error("Proposal is not active. Cannot vote on inactive proposals.");
-      }
-      
-      // Get the snapshot ID
-      const snapshotId = await getProposalSnapshotId(proposalId);
-      
-      // Check if the user has any voting power
-      const votingPower = await contracts.justToken.getEffectiveVotingPower(account, snapshotId);
-      const votingPowerFormatted = ethers.utils.formatEther(votingPower);
-      
-      if (votingPower.isZero()) {
-        throw new Error("You don't have any voting power for this proposal. You may need to delegate to yourself or acquire tokens before the snapshot.");
-      }
-      
-      logDebug(`Casting vote with ${votingPowerFormatted} voting power`);
-      
-      // Cast the vote with proper gas limit to prevent issues
-      const gasLimit = await contracts.governance.estimateGas.castVote(proposalId, voteType)
-        .catch(() => ethers.BigNumber.from(300000)); // Fallback gas limit
-      
-      const tx = await contracts.governance.castVote(proposalId, voteType, {
-        gasLimit: gasLimit.mul(120).div(100) // Add 20% buffer
-      });
-      
-      // Wait for transaction to be confirmed
-      const receipt = await tx.wait();
-      logDebug("Vote transaction confirmed:", receipt.transactionHash);
-      
-      // Clear cache entries related to this proposal and user's votes
-      blockchainDataCache.delete(`hasVoted-${account}-${proposalId}`);
-      blockchainDataCache.delete(`voteDetails-${account}-${proposalId}`);
-      blockchainDataCache.delete(`voteTotals-${proposalId}`);
-      blockchainDataCache.delete(`dashboard-votes-${proposalId}`);
-      blockchainDataCache.delete(`indexedVotes-${proposalId}`);
-      
-      // Refresh blockchain data to update state
-      refreshData();
-      
-      // Wait briefly to allow the blockchain to update
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      setVoting({ 
-        loading: false,
-        processing: false, 
-        error: null, 
-        success: true,
-        lastVotedProposalId: proposalId
-      });
-      
-      return {
-        success: true,
-        votingPower: votingPowerFormatted,
-        voteType,
-        transactionHash: receipt.transactionHash
-      };
-    } catch (err) {
-      console.error("Error casting vote:", err);
-      const errorMessage = err.reason || err.message || "Unknown error";
-      
-      setVoting({ 
-        loading: false,
-        processing: false,
-        error: errorMessage, 
-        success: false,
-        lastVotedProposalId: null
-      });
-      
-      throw err;
+    // Check if the proposal is active
+    const proposalState = await contracts.governance.getProposalState(proposalId);
+    if (proposalState !== 0) { // 0 = Active
+      throw new Error("Proposal is not active. Cannot vote on inactive proposals.");
     }
-  };
+    
+    // Get the snapshot ID
+    const snapshotId = await getProposalSnapshotId(proposalId);
+    
+    // Safety check for snapshot ID
+    if (snapshotId === undefined || snapshotId === null) {
+      throw new Error("Failed to get a valid snapshot ID for this proposal");
+    }
+    
+    // Make sure we have a valid BigNumber for snapshot ID
+    const safeSnapshotId = ethers.BigNumber.from(snapshotId.toString());
+    
+    // Check if the user has any voting power
+    const votingPower = await contracts.justToken.getEffectiveVotingPower(account, safeSnapshotId);
+    
+    if (!votingPower) {
+      throw new Error("Failed to retrieve voting power");
+    }
+    
+    const votingPowerFormatted = ethers.utils.formatEther(votingPower);
+    
+    if (votingPower.isZero()) {
+      throw new Error("You don't have any voting power for this proposal. You may need to delegate to yourself or acquire tokens before the snapshot.");
+    }
+    
+    logDebug(`Casting vote with ${votingPowerFormatted} voting power`);
+    
+    // Cast the vote with proper gas limit to prevent issues
+    const gasLimit = await contracts.governance.estimateGas.castVote(proposalId, voteType)
+      .catch(() => ethers.BigNumber.from(300000)); // Fallback gas limit
+    
+    const tx = await contracts.governance.castVote(proposalId, voteType, {
+      gasLimit: gasLimit.mul(120).div(100) // Add 20% buffer
+    });
+    
+    // Wait for transaction to be confirmed
+    const receipt = await tx.wait();
+    logDebug("Vote transaction confirmed:", receipt.transactionHash);
+    
+    // Clear cache entries related to this proposal and user's votes
+    blockchainDataCache.delete(`hasVoted-${account}-${proposalId}`);
+    blockchainDataCache.delete(`voteDetails-${account}-${proposalId}`);
+    blockchainDataCache.delete(`voteTotals-${proposalId}`);
+    blockchainDataCache.delete(`dashboard-votes-${proposalId}`);
+    blockchainDataCache.delete(`indexedVotes-${proposalId}`);
+    
+    // Refresh blockchain data to update state
+    refreshData();
+    
+    // Wait briefly to allow the blockchain to update
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    setVoting({ 
+      loading: false,
+      processing: false, 
+      error: null, 
+      success: true,
+      lastVotedProposalId: proposalId
+    });
+    
+    return {
+      success: true,
+      votingPower: votingPowerFormatted,
+      voteType,
+      transactionHash: receipt.transactionHash
+    };
+  } catch (err) {
+    console.error("Error casting vote:", err);
+    const errorMessage = err.reason || err.message || "Unknown error";
+    
+    setVoting({ 
+      loading: false,
+      processing: false,
+      error: errorMessage, 
+      success: false,
+      lastVotedProposalId: null
+    });
+    
+    throw err;
+  }
+};
 
-  return {
-    castVote,
-    hasVoted,
-    getVotingPower,
-    getVoteDetails,
-    getProposalVoteTotals,
-    getProposalVoteTotalsFromContract, // Expose direct method for debugging
-    getIndexedVoteData,
-    voting,
-    contractReady: validateGovernanceContract()
-  };
+return {
+  castVote,
+  hasVoted,
+  getVotingPower,
+  getVoteDetails,
+  getProposalVoteTotals,
+  getProposalVoteTotalsFromContract, // Expose direct method for debugging
+  getIndexedVoteData,
+  voting,
+  contractReady: validateGovernanceContract()
+};
 }
 
 // Also export as default for components using default import

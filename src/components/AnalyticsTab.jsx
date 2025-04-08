@@ -443,7 +443,7 @@ const AnalyticsTab = () => {
           // Get proposal votes for turnout calculation
           let proposalVotes = null;
           try {
-            proposalVotes = await contracts.governance.getProposalVotes(id);
+            proposalVotes = await contracts.governance.getProposalVoteTotals(id);
           } catch (votesErr) {
             console.warn(`Could not get votes for proposal ${id}:`, votesErr.message);
           }

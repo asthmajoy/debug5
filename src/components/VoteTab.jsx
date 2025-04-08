@@ -1,5 +1,5 @@
-// src/components/VoteTab.jsx - Fixed version with accurate vote counting
-import React, { useState, useEffect, useCallback } from 'react';
+// src/components/VoteTab.jsx - Fixed version with memory leak resolution
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { ethers } from 'ethers';
 import useGovernanceParams from '../hooks/useGovernanceParams';
 import { PROPOSAL_TYPES } from '../utils/constants';
@@ -17,22 +17,57 @@ const ModalVoteStatus = ({ proposalId, hasUserVoted, getUserVoteType, getVoteTyp
   const [userHasVoted, setUserHasVoted] = useState(false);
   const [userVoteType, setUserVoteType] = useState(null);
   const [checkingVote, setCheckingVote] = useState(true);
+
+  const threatLevelTimerRef = useRef(null);
+  const mountedRef = useRef(true);
+  const votingPowersLoadingRef = useRef(false);
+  const previousProposalsRef = useRef([]);
+  const loadTimeoutRef = useRef(null);
   
   useEffect(() => {
+    let isMounted = true;
     const checkUserVote = async () => {
       try {
+        if (!isMounted) return;
         setCheckingVote(true);
+        
+        // Try to get from cache first
+        const cacheKey = `vote-check-${account}-${proposalId}`;
+        const cachedResult = blockchainDataCache.get(cacheKey);
+        
+        if (cachedResult) {
+          setUserHasVoted(cachedResult.hasVoted);
+          if (cachedResult.hasVoted) {
+            setUserVoteType(cachedResult.voteType);
+          }
+          setCheckingVote(false);
+          return;
+        }
+        
+        // Not in cache, need to check
         const hasVoted = await hasUserVoted(proposalId);
+        if (!isMounted) return;
+        
         setUserHasVoted(hasVoted);
         
         if (hasVoted) {
           const voteType = await getUserVoteType(proposalId);
+          if (!isMounted) return;
           setUserVoteType(voteType);
+          
+          // Cache the result for future use
+          blockchainDataCache.set(
+            cacheKey, 
+            { hasVoted, voteType }, 
+            3600 // Cache for 1 hour
+          );
         }
       } catch (err) {
         console.error(`Error checking modal vote for proposal ${proposalId}:`, err);
       } finally {
-        setCheckingVote(false);
+        if (isMounted) {
+          setCheckingVote(false);
+        }
       }
     };
     
@@ -41,6 +76,10 @@ const ModalVoteStatus = ({ proposalId, hasUserVoted, getUserVoteType, getVoteTyp
     } else {
       setCheckingVote(false);
     }
+    
+    return () => {
+      isMounted = false;
+    };
   }, [proposalId, isConnected, account, hasUserVoted, getUserVoteType]);
 
   if (checkingVote) {
@@ -116,7 +155,7 @@ function parseProposalDescription(rawDescription) {
 function truncateHtml(html, maxLength = 200) {
   if (!html) return '';
   
-  // Create a temporary div to parse the HTML
+  // Use a simpler truncation method for performance
   const tempDiv = document.createElement('div');
   tempDiv.innerHTML = html;
   
@@ -128,80 +167,59 @@ function truncateHtml(html, maxLength = 200) {
     return html;
   }
   
-  // We'll use a more sophisticated approach to truncate while preserving structure
+  // Simple truncation that preserves the HTML structure
+  let truncated = '';
   let charCount = 0;
-  let truncatedHTML = '';
-  let isTruncated = false;
+  let done = false;
   
-  // Helper function to process nodes
-  function processNode(node) {
-    if (isTruncated) return;
+  function truncateNode(node) {
+    if (done) return;
     
-    // Text node
     if (node.nodeType === 3) { // Text node
       const remainingChars = maxLength - charCount;
       if (remainingChars <= 0) {
-        isTruncated = true;
+        done = true;
         return;
       }
       
       const text = node.textContent;
       if (charCount + text.length <= maxLength) {
-        truncatedHTML += text;
+        truncated += text;
         charCount += text.length;
       } else {
-        truncatedHTML += text.substr(0, remainingChars) + '...';
-        isTruncated = true;
+        truncated += text.substr(0, remainingChars) + '...';
+        done = true;
       }
-      return;
-    }
-    
-    // Element node
-    if (node.nodeType === 1) { // Element node
-      const tagName = node.tagName.toLowerCase();
+    } else if (node.nodeType === 1) { // Element node
+      const tag = node.tagName.toLowerCase();
       
-      // Skip style, script, etc.
-      if (['style', 'script', 'noscript', 'iframe', 'object', 'embed'].includes(tagName)) {
+      // Skip irrelevant tags
+      if (['script', 'style', 'iframe', 'object'].includes(tag)) {
         return;
       }
       
-      // Clone attributes if needed for elements we want to preserve
-      let attrs = '';
-      if (['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'a', 'strong', 'em', 'u', 'b', 'i', 'span', 'p', 'div'].includes(tagName)) {
-        Array.from(node.attributes).forEach(attr => {
-          attrs += ` ${attr.name}="${attr.value}"`;
-        });
+      truncated += `<${tag}>`;
+      
+      // Process children
+      for (let i = 0; i < node.childNodes.length && !done; i++) {
+        truncateNode(node.childNodes[i]);
       }
       
-      // Opening tag
-      truncatedHTML += `<${tagName}${attrs}>`;
-      
-      // Process child nodes
-      Array.from(node.childNodes).forEach(childNode => {
-        if (!isTruncated) {
-          processNode(childNode);
-        }
-      });
-      
-      // Closing tag
-      truncatedHTML += `</${tagName}>`;
+      truncated += `</${tag}>`;
     }
   }
   
-  // Process the top-level nodes
-  Array.from(tempDiv.childNodes).forEach(childNode => {
-    if (!isTruncated) {
-      processNode(childNode);
-    }
-  });
+  // Process top-level nodes
+  for (let i = 0; i < tempDiv.childNodes.length && !done; i++) {
+    truncateNode(tempDiv.childNodes[i]);
+  }
   
-  return truncatedHTML;
+  return truncated;
 }
 
-// FIXED: Enhanced VoteData component with direct blockchain data access and accurate vote counts
+// Memory-optimized VoteData component
 const VoteData = ({ proposalId, showDetailedInfo = false }) => {
   const { contracts, contractsReady } = useWeb3();
-  
   const [voteData, setVoteData] = useState({
     yesVotes: 0,
     noVotes: 0,
@@ -220,8 +238,12 @@ const VoteData = ({ proposalId, showDetailedInfo = false }) => {
     loading: true
   });
   
+  // Use a ref to track the active timer
+  const timerRef = useRef(null);
+  const mountedRef = useRef(true);
+  
   // Format numbers for display
-  const formatNumberDisplay = (value) => {
+  const formatNumberDisplay = useCallback((value) => {
     if (value === undefined || value === null) return "0";
     
     // Handle string inputs
@@ -240,10 +262,10 @@ const VoteData = ({ proposalId, showDetailedInfo = false }) => {
       minimumFractionDigits: 0,
       maximumFractionDigits: 2
     });
-  };
+  }, []);
   
   // Format token values to 5 decimal places
-  const formatToFiveDecimals = (value) => {
+  const formatToFiveDecimals = useCallback((value) => {
     if (value === undefined || value === null) return "0.00000";
     
     // Handle string inputs
@@ -254,30 +276,27 @@ const VoteData = ({ proposalId, showDetailedInfo = false }) => {
     
     // Return with exactly 5 decimal places
     return numValue.toFixed(5);
-  };
+  }, []);
   
-  // FIXED: Direct query method to get accurate votes from contract and events
+  // Optimized method to get accurate votes from contract and events
   const getAccurateVoteCounts = useCallback(async () => {
     if (!contractsReady || !contracts.governance) {
       return null;
     }
     
+    // Check cache first
+    const cacheKey = `vote-counts-${proposalId}`;
+    const cachedData = blockchainDataCache.get(cacheKey);
+    if (cachedData) {
+      return cachedData;
+    }
+    
     try {
-      console.log(`Getting accurate vote counts for proposal #${proposalId}`);
-      
-      // First get raw data from contract
+      // Get raw data from contract
       const [forVotes, againstVotes, abstainVotes, totalVotingPower, contractVoterCount] = 
         await contracts.governance.getProposalVoteTotals(proposalId);
       
-      console.log(`Contract data for proposal #${proposalId}:`, {
-        forVotes: forVotes.toString(),
-        againstVotes: againstVotes.toString(),
-        abstainVotes: abstainVotes.toString(),
-        totalVotingPower: totalVotingPower.toString(),
-        contractVoterCount: contractVoterCount.toString()
-      });
-      
-      // Use events to get accurate vote distribution
+      // Use events to get vote distribution
       const filter = contracts.governance.filters.VoteCast(proposalId);
       const events = await contracts.governance.queryFilter(filter);
       
@@ -305,30 +324,22 @@ const VoteData = ({ proposalId, showDetailedInfo = false }) => {
         else if (voteType === 2) abstainVoters++; // Abstain vote
       }
       
-      console.log(`Vote distribution from events for proposal #${proposalId}:`, {
-        yesVoters, noVoters, abstainVoters, 
-        totalFromEvents: voterMap.size,
-        totalFromContract: contractVoterCount.toNumber()
-      });
-      
       // If there's a discrepancy between contract voter count and event count,
-      // prioritize event-based counts but ensure the total matches contract count
+      // prioritize contract count but maintain proportions
       const eventTotalVoters = yesVoters + noVoters + abstainVoters;
+      const contractVoterCountNumber = contractVoterCount.toNumber();
       
-      if (contractVoterCount.toNumber() !== eventTotalVoters && eventTotalVoters > 0) {
-        console.warn(`Vote count discrepancy: contract=${contractVoterCount.toNumber()}, events=${eventTotalVoters}`);
-        
-        // Use event-based distribution but scale to match contract's total
-        if (contractVoterCount.toNumber() > 0) {
-          const scaleFactor = contractVoterCount.toNumber() / eventTotalVoters;
-          
+      if (contractVoterCountNumber !== eventTotalVoters && eventTotalVoters > 0) {
+        // Use event-based distribution but scale to match contract total
+        if (contractVoterCountNumber > 0) {
+          const scaleFactor = contractVoterCountNumber / eventTotalVoters;
           yesVoters = Math.round(yesVoters * scaleFactor);
           noVoters = Math.round(noVoters * scaleFactor);
           abstainVoters = Math.round(abstainVoters * scaleFactor);
           
-          // Ensure the sum matches by adjusting the largest count
+          // Ensure the sum matches contract total
           const sum = yesVoters + noVoters + abstainVoters;
-          const diff = contractVoterCount.toNumber() - sum;
+          const diff = contractVoterCountNumber - sum;
           
           if (diff !== 0) {
             if (yesVoters >= noVoters && yesVoters >= abstainVoters) {
@@ -340,11 +351,8 @@ const VoteData = ({ proposalId, showDetailedInfo = false }) => {
             }
           }
         }
-      } else if (eventTotalVoters === 0 && contractVoterCount.toNumber() > 0) {
-        // If we have no events but contract says there are voters,
-        // distribute based on voting power ratios
-        console.log(`No events found but contract reports ${contractVoterCount.toNumber()} voters`);
-        
+      } else if (eventTotalVoters === 0 && contractVoterCountNumber > 0) {
+        // If no events but contract reports voters, distribute based on voting power
         const totalPower = forVotes.add(againstVotes).add(abstainVotes);
         
         if (!totalPower.isZero()) {
@@ -352,9 +360,9 @@ const VoteData = ({ proposalId, showDetailedInfo = false }) => {
           const noRatio = againstVotes.mul(100).div(totalPower).toNumber() / 100;
           const abstainRatio = abstainVotes.mul(100).div(totalPower).toNumber() / 100;
           
-          yesVoters = Math.round(yesRatio * contractVoterCount.toNumber());
-          noVoters = Math.round(noRatio * contractVoterCount.toNumber());
-          abstainVoters = Math.round(abstainRatio * contractVoterCount.toNumber());
+          yesVoters = Math.round(yesRatio * contractVoterCountNumber);
+          noVoters = Math.round(noRatio * contractVoterCountNumber);
+          abstainVoters = Math.round(abstainRatio * contractVoterCountNumber);
           
           // Ensure at least 1 voter if there's voting power
           if (!forVotes.isZero() && yesVoters === 0) yesVoters = 1;
@@ -363,10 +371,10 @@ const VoteData = ({ proposalId, showDetailedInfo = false }) => {
           
           // Adjust to match total
           const sum = yesVoters + noVoters + abstainVoters;
-          if (sum !== contractVoterCount.toNumber()) {
-            const diff = contractVoterCount.toNumber() - sum;
+          if (sum !== contractVoterCountNumber) {
+            const diff = contractVoterCountNumber - sum;
             
-            // Add to the largest group or subtract from it
+            // Add to the largest group
             if (yesVoters >= noVoters && yesVoters >= abstainVoters) {
               yesVoters += diff;
             } else if (noVoters >= yesVoters && noVoters >= abstainVoters) {
@@ -390,7 +398,7 @@ const VoteData = ({ proposalId, showDetailedInfo = false }) => {
       }
       
       // Format and return the data
-      return {
+      const result = {
         // Vote power formatted
         yesVotes: ethers.utils.formatEther(forVotes),
         noVotes: ethers.utils.formatEther(againstVotes),
@@ -406,7 +414,7 @@ const VoteData = ({ proposalId, showDetailedInfo = false }) => {
         yesVoters,
         noVoters,
         abstainVoters,
-        totalVoters: contractVoterCount.toNumber(),
+        totalVoters: contractVoterCountNumber,
         
         // Percentages
         yesPercentage,
@@ -416,30 +424,55 @@ const VoteData = ({ proposalId, showDetailedInfo = false }) => {
         // Source
         source: 'direct-contract-with-events'
       };
+      
+      // Cache the result - use longer TTL for non-active proposals
+      const proposalState = await contracts.governance.getProposalState(proposalId);
+      const isActive = Number(proposalState) === PROPOSAL_STATES.ACTIVE;
+      const ttl = isActive ? 60 : 3600; // 1 minute for active, 1 hour for non-active
+      
+      blockchainDataCache.set(cacheKey, result, ttl);
+      
+      return result;
     } catch (error) {
       console.error(`Error getting vote data for proposal ${proposalId}:`, error);
       return null;
     }
   }, [contractsReady, contracts, proposalId]);
 
-  // FIXED: Removed the problematic cache handling and vote count distribution functions
-  // Now directly using blockchain data with accurate vote counts
+  // Check if a proposal is active
+  const isProposalActive = useCallback(async (proposalId) => {
+    try {
+      if (!contractsReady || !contracts.governance) return false;
+      
+      const state = await contracts.governance.getProposalState(proposalId);
+      return Number(state) === PROPOSAL_STATES.ACTIVE;
+    } catch (err) {
+      console.error(`Error checking if proposal ${proposalId} is active:`, err);
+      return false;
+    }
+  }, [contractsReady, contracts.governance]);
+
   useEffect(() => {
+    // Set the mounted ref
+    mountedRef.current = true;
+    
     const fetchVoteData = async () => {
       if (!proposalId || !contractsReady || !contracts.governance) return;
       
-      setVoteData(prev => ({ ...prev, loading: true }));
+      if (mountedRef.current) {
+        setVoteData(prev => ({ ...prev, loading: true }));
+      }
       
       try {
-        // Get accurate vote counts
+        // Get accurate vote counts with caching
         const result = await getAccurateVoteCounts();
         
-        if (result) {
+        if (result && mountedRef.current) {
           setVoteData({
             ...result,
             loading: false
           });
-        } else {
+        } else if (mountedRef.current) {
           // Fallback to empty data
           setVoteData({
             yesVotes: 0,
@@ -461,19 +494,44 @@ const VoteData = ({ proposalId, showDetailedInfo = false }) => {
         }
       } catch (error) {
         console.error(`Error fetching vote data for proposal ${proposalId}:`, error);
-        setVoteData(prev => ({ ...prev, loading: false }));
+        if (mountedRef.current) {
+          setVoteData(prev => ({ ...prev, loading: false }));
+        }
       }
     };
     
     fetchVoteData();
     
-    // Poll for updated data every 15 seconds
-    const interval = setInterval(fetchVoteData, 15000);
-    return () => clearInterval(interval);
-  }, [proposalId, getAccurateVoteCounts, contractsReady, contracts]);
+    // Set up polling with appropriate interval based on proposal state
+    const setupPolling = async () => {
+      const active = await isProposalActive(proposalId);
+      
+      // Clear any existing timer first to prevent duplicates
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      
+      // Only poll active proposals, with a much longer interval
+      if (active && mountedRef.current) {
+        timerRef.current = setInterval(fetchVoteData, 30000); // Poll every 30 seconds instead of 15
+      }
+    };
+    
+    setupPolling();
+    
+    // Clean up function
+    return () => {
+      mountedRef.current = false;
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [proposalId, getAccurateVoteCounts, contractsReady, contracts, isProposalActive]);
   
   // Render the vote bar
-  const renderVoteBar = () => {
+  const renderVoteBar = useCallback(() => {
     const { totalVotingPower } = voteData;
     
     if (totalVotingPower <= 0) {
@@ -504,7 +562,7 @@ const VoteData = ({ proposalId, showDetailedInfo = false }) => {
         </div>
       </div>
     );
-  };
+  }, [voteData]);
   
   if (voteData.loading) {
     return (
@@ -630,8 +688,12 @@ const QuorumProgress = ({ proposalId, quorum }) => {
   const [voteCount, setVoteCount] = useState("0");
   const [loading, setLoading] = useState(true);
   
+  // Reference to track if component is mounted
+  const mountedRef = useRef(true);
+  const timerRef = useRef(null);
+  
   // Define formatNumberDisplay locally within the component
-  const formatNumberDisplay = (value) => {
+  const formatNumberDisplay = useCallback((value) => {
     if (value === undefined || value === null) return "0";
     
     // Handle string inputs
@@ -650,52 +712,122 @@ const QuorumProgress = ({ proposalId, quorum }) => {
       minimumFractionDigits: 0,
       maximumFractionDigits: 2
     });
-  };
+  }, []);
   
-  // Fetch quorum data directly from the contract
-  useEffect(() => {
-    const fetchQuorumData = async () => {
-      if (!contractsReady || !contracts.governance || !proposalId) return;
+  // Use memoization to prevent unnecessary recalculations
+  const quorumValue = useMemo(() => {
+    return ethers.utils.parseEther(quorum?.toString() || "0");
+  }, [quorum]);
+  
+  // Check if a proposal is active
+  const isProposalActive = useCallback(async (proposalId) => {
+    try {
+      if (!contractsReady || !contracts.governance) return false;
       
-      try {
+      const state = await contracts.governance.getProposalState(proposalId);
+      return Number(state) === PROPOSAL_STATES.ACTIVE;
+    } catch (err) {
+      console.error(`Error checking if proposal ${proposalId} is active:`, err);
+      return false;
+    }
+  }, [contractsReady, contracts.governance]);
+  
+  // Fetch quorum data directly from the contract with caching
+  const fetchQuorumData = useCallback(async () => {
+    if (!contractsReady || !contracts.governance || !proposalId) return;
+      
+    // Check cache first
+    const cacheKey = `quorum-progress-${proposalId}`;
+    const cachedData = blockchainDataCache.get(cacheKey);
+    
+    if (cachedData && mountedRef.current) {
+      setProgress(cachedData.progress);
+      setVoteCount(cachedData.voteCount);
+      setLoading(false);
+      return;
+    }
+    
+    try {
+      if (mountedRef.current) {
         setLoading(true);
-        // Directly call the contract's getProposalVoteTotals function
-        const [forVotes, againstVotes, abstainVotes, totalVotingPower] = 
-          await contracts.governance.getProposalVoteTotals(proposalId);
-        
-        // Calculate total votes
-        const totalVotes = forVotes.add(againstVotes).add(abstainVotes);
-        
-        // Convert to readable format for display
-        const totalVotesFormatted = ethers.utils.formatEther(totalVotes);
-        
-        // Calculate progress
-        let quorumValue = ethers.utils.parseEther(quorum.toString());
-        if (quorumValue.isZero()) {
-          quorumValue = ethers.utils.parseEther('1'); // prevent division by zero
-        }
-        
-        // Calculate percentage with BigNumber to avoid float precision issues
-        let progressPercentage = totalVotes.mul(100).div(quorumValue);
-        if (progressPercentage.gt(100)) {
-          progressPercentage = ethers.BigNumber.from(100);
-        }
-        
-        setProgress(progressPercentage.toNumber());
+      }
+      
+      // Directly call the contract's getProposalVoteTotals function
+      const [forVotes, againstVotes, abstainVotes] = 
+        await contracts.governance.getProposalVoteTotals(proposalId);
+      
+      // Calculate total votes
+      const totalVotes = forVotes.add(againstVotes).add(abstainVotes);
+      
+      // Convert to readable format for display
+      const totalVotesFormatted = ethers.utils.formatEther(totalVotes);
+      
+      // Calculate progress
+      const localQuorumValue = quorumValue.isZero() ? 
+        ethers.utils.parseEther('1') : quorumValue; // prevent division by zero
+      
+      // Calculate percentage with BigNumber to avoid float precision issues
+      let progressPercentage = totalVotes.mul(100).div(localQuorumValue);
+      if (progressPercentage.gt(100)) {
+        progressPercentage = ethers.BigNumber.from(100);
+      }
+      
+      const progressValue = progressPercentage.toNumber();
+      
+      // Cache the result - shorter TTL for active proposals
+      const isActive = await isProposalActive(proposalId);
+      const ttl = isActive ? 60 : 3600; // 1 minute for active, 1 hour for inactive
+      blockchainDataCache.set(cacheKey, {
+        progress: progressValue,
+        voteCount: totalVotesFormatted
+      }, ttl);
+      
+      if (mountedRef.current) {
+        setProgress(progressValue);
         setVoteCount(totalVotesFormatted);
         setLoading(false);
-      } catch (err) {
-        console.error("Error fetching quorum data:", err);
+      }
+    } catch (err) {
+      console.error("Error fetching quorum data:", err);
+      if (mountedRef.current) {
         setLoading(false);
+      }
+    }
+  }, [contractsReady, contracts.governance, proposalId, quorumValue, isProposalActive]);
+  
+  useEffect(() => {
+    mountedRef.current = true;
+    
+    // Initial fetch
+    fetchQuorumData();
+    
+    // Set up polling with appropriate frequency
+    const setupPolling = async () => {
+      // Clear any existing timer first to prevent duplicates
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      
+      const isActive = await isProposalActive(proposalId);
+      
+      // Only poll active proposals, with a reduced frequency
+      if (isActive && mountedRef.current) {
+        timerRef.current = setInterval(fetchQuorumData, 60000); // 1 minute polling
       }
     };
     
-    fetchQuorumData();
+    setupPolling();
     
-    // Poll for active proposals
-    const interval = setInterval(fetchQuorumData, 30000);
-    return () => clearInterval(interval);
-  }, [contracts, contractsReady, proposalId, quorum]);
+    // Clean up function
+    return () => {
+      mountedRef.current = false;
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [proposalId, fetchQuorumData, isProposalActive]);
   
   return (
     <div>
@@ -725,7 +857,7 @@ const QuorumProgress = ({ proposalId, quorum }) => {
   );
 };
 
-// Proposal Card Component - Full featured version
+// Proposal Card Component - Full featured version with optimized performance
 const ProposalCard = ({ 
   proposal, 
   votingPower, 
@@ -751,22 +883,65 @@ const ProposalCard = ({
   const hasVotingPower = parseFloat(votingPower) > 0;
   const stateInfo = getProposalStateInfo(proposal);
   
-  // Check if the user has voted on this proposal
+  // Use a ref to track if component is mounted
+  const mountedRef = useRef(true);
+  
+  // Check if the user has voted on this proposal with caching
   useEffect(() => {
+    mountedRef.current = true;
+    
     const checkUserVote = async () => {
       try {
+        if (!mountedRef.current) return;
+        
         setCheckingVote(true);
+        
+        // Try to get from cache first
+        const cacheKey = `user-vote-${account}-${proposal.id}`;
+        const cachedResult = blockchainDataCache.get(cacheKey);
+        
+        if (cachedResult) {
+          setUserHasVoted(cachedResult.hasVoted);
+          if (cachedResult.hasVoted) {
+            setUserVoteType(cachedResult.voteType);
+          }
+          setCheckingVote(false);
+          return;
+        }
+        
+        // Not in cache, check from contract
         const hasVoted = await hasUserVoted(proposal.id);
+        
+        if (!mountedRef.current) return;
+        
         setUserHasVoted(hasVoted);
         
         if (hasVoted) {
           const voteType = await getUserVoteType(proposal.id);
+          
+          if (!mountedRef.current) return;
+          
           setUserVoteType(voteType);
+          
+          // Cache the result to prevent future blockchain queries
+          // Cache for a longer time since votes can't be changed
+          blockchainDataCache.set(cacheKey, { 
+            hasVoted: true, 
+            voteType 
+          }, 3600); // Cache for 1 hour
+        } else {
+          // Cache negative result for a shorter time
+          blockchainDataCache.set(cacheKey, { 
+            hasVoted: false, 
+            voteType: null 
+          }, 300); // 5 minutes
         }
       } catch (err) {
         console.error(`Error checking vote for proposal ${proposal.id}:`, err);
       } finally {
-        setCheckingVote(false);
+        if (mountedRef.current) {
+          setCheckingVote(false);
+        }
       }
     };
     
@@ -775,6 +950,10 @@ const ProposalCard = ({
     } else {
       setCheckingVote(false);
     }
+    
+    return () => {
+      mountedRef.current = false;
+    };
   }, [proposal.id, isConnected, account, hasUserVoted, getUserVoteType]);
   
   return (
@@ -799,7 +978,7 @@ const ProposalCard = ({
       {/* Render proposal description with HTML support */}
       {renderProposalDescription(proposal, true, 200)}
       
-      {/* Vote data display using the FIXED VoteData component */}
+      {/* Vote data display using the optimized VoteData component */}
       <div className="mb-6">
         <VoteData proposalId={proposal.id} />
       </div>
@@ -886,7 +1065,7 @@ const ProposalCard = ({
   );
 };
 
-// Main VoteTab component
+// Main VoteTab component with performance optimizations
 const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, account }) => {
   const { contracts, contractsReady, isConnected } = useWeb3();
   
@@ -895,11 +1074,10 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
   const [loading, setLoading] = useState(true);
   const [selectedProposal, setSelectedProposal] = useState(null);
   const [showModal, setShowModal] = useState(false);
-  const [quorum, setQuorum] = useState(null);
   
   // Add pagination state
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(5);
+  const [itemsPerPage] = useState(5);
   
   // Replace govParams state with the hook
   const govParams = useGovernanceParams();
@@ -914,17 +1092,13 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
   
   const [isGovExpanded, setIsGovExpanded] = useState(true);
   
-  // Debug logging for proposals
-  useEffect(() => {
-    console.log('VoteTab received proposals:', proposals?.length || 0);
-    if (proposals?.length > 0) {
-      const proposalIds = proposals.map(p => Number(p.id));
-      console.log('Proposal ID range:', Math.min(...proposalIds), 'to', Math.max(...proposalIds));
-    }
-  }, [proposals]);
+  // Use refs to track timers and mounted state
+  const threatLevelTimerRef = useRef(null);
+  const mountedRef = useRef(true);
+  const votingPowersLoadingRef = useRef(false);
   
-  // Function to cycle through threat levels
-  const cycleThreatLevel = (direction) => {
+  // Function to cycle through threat levels - using useCallback
+  const cycleThreatLevel = useCallback((direction) => {
     setCurrentThreatLevel(prevLevel => {
       const levels = Object.values(THREAT_LEVELS);
       const currentIndex = levels.indexOf(prevLevel);
@@ -935,124 +1109,197 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
         return levels[(currentIndex - 1 + levels.length) % levels.length];
       }
     });
-  };
+  }, []);
   
-  // Set up automatic scrolling through threat levels
+  // Set up automatic scrolling through threat levels - optimized
   useEffect(() => {
-    if (!autoScroll) return;
+    // Clean up any existing timer
+    if (threatLevelTimerRef.current) {
+      clearInterval(threatLevelTimerRef.current);
+      threatLevelTimerRef.current = null;
+    }
     
-    const interval = setInterval(() => {
-      cycleThreatLevel('next');
-    }, 10000); // Change every 10 seconds
+    // Only set up timer if auto scroll is enabled
+    if (autoScroll) {
+      threatLevelTimerRef.current = setInterval(() => {
+        cycleThreatLevel('next');
+      }, 10000); // Change every 10 seconds
+    }
     
-    return () => clearInterval(interval); // Clean up on unmount
-  }, [autoScroll]);
+    // Cleanup function
+    return () => {
+      if (threatLevelTimerRef.current) {
+        clearInterval(threatLevelTimerRef.current);
+        threatLevelTimerRef.current = null;
+      }
+    };
+  }, [autoScroll, cycleThreatLevel]);
   
-  // Get threat level name from value
-  const getThreatLevelName = (level) => {
+  // Get threat level name from value - memoized
+  const getThreatLevelName = useCallback((level) => {
     const keys = Object.keys(THREAT_LEVELS);
     const values = Object.values(THREAT_LEVELS);
     const index = values.indexOf(level);
     return keys[index];
-  };
+  }, []);
   
-  // Fetch threat level delays from the contract
+  // Fetch threat level delays from the contract - with caching
   useEffect(() => {
+    mountedRef.current = true;
+    
     const fetchThreatLevelDelays = async () => {
       if (!contractsReady || !contracts.governance || !contracts.timelock) return;
+      
+      // Try to get from cache first
+      const cacheKey = 'threat-level-delays';
+      const cachedDelays = blockchainDataCache.get(cacheKey);
+      
+      if (cachedDelays && mountedRef.current) {
+        setThreatLevelDelays(cachedDelays);
+        return;
+      }
       
       try {
         const delays = {};
         
-        // Threat level delays are stored in the timelock contract, not governance
+        // Fetch delays for each threat level
         for (const [name, level] of Object.entries(THREAT_LEVELS)) {
           try {
             const delay = await contracts.timelock.getDelayForThreatLevel(level);
             delays[level] = delay ? delay.toNumber() : 0;
-            console.log(`Fetched ${name} threat level delay: ${delays[level]} seconds`);
           } catch (error) {
             console.warn(`Couldn't fetch delay for threat level ${name}:`, error);
           }
         }
         
-        setThreatLevelDelays(delays);
+        // Cache the result - this data rarely changes
+        blockchainDataCache.set(cacheKey, delays, 3600); // 1 hour cache
+        
+        if (mountedRef.current) {
+          setThreatLevelDelays(delays);
+        }
       } catch (error) {
         console.error("Error fetching threat level delays:", error);
       }
     };
     
     fetchThreatLevelDelays();
+    
+    return () => {
+      mountedRef.current = false;
+    };
   }, [contracts, contractsReady]);
 
-  // Fetch voting powers for each proposal
-  useEffect(() => {
-    const fetchVotingPowers = async () => {
-      if (!getVotingPower || !proposals.length || !account) return;
+  // Fetch voting powers for each proposal with optimized loading - using useCallback
+  const fetchVotingPowers = useCallback(async () => {
+    if (!getVotingPower || !proposals.length || !account || votingPowersLoadingRef.current) {
+      return;
+    }
+    
+    try {
+      votingPowersLoadingRef.current = true;
       
-      try {
+      if (mountedRef.current) {
         setLoading(true);
-        const powers = {};
+      }
+      
+      // Use a local copy of the current state to avoid dependency
+      const currentPowers = {};
+      const newPowers = {};
+      
+      // Check which proposals need their voting power fetched
+      const proposalsToFetch = proposals.filter(proposal => {
+        // Try to get from cache first
+        const cacheKey = `votingPower-${account}-${proposal.snapshotId || "unknown"}`;
+        const cachedPower = blockchainDataCache.get(cacheKey);
         
-        // Process proposals in batches to avoid overwhelming the network
-        const batchSize = 5;
-        const batches = [];
-        
-        for (let i = 0; i < proposals.length; i += batchSize) {
-          batches.push(proposals.slice(i, i + batchSize));
+        if (cachedPower !== null) {
+          currentPowers[proposal.id] = cachedPower;
+          return false;
         }
         
-        for (const batch of batches) {
-          const batchResults = await Promise.all(
-            batch.map(async (proposal) => {
-              try {
-                if (proposal.snapshotId) {
-                  // Try to get from cache first
-                  const cacheKey = `votingPower-${account}-${proposal.snapshotId}`;
-                  const cachedPower = blockchainDataCache.get(cacheKey);
-                  if (cachedPower !== null) {
-                    return { id: proposal.id, power: cachedPower };
-                  }
-                  
-                  const power = await getVotingPower(proposal.snapshotId);
-                  
-                  // Cache the result with long TTL since snapshot data is historical
-                  const ttl = 86400 * 7; // 7 days
-                  blockchainDataCache.set(cacheKey, power, ttl);
-                  
-                  return { id: proposal.id, power };
-                }
-                return { id: proposal.id, power: "0" };
-              } catch (err) {
-                console.error(`Error getting voting power for proposal ${proposal.id}:`, err);
-                return { id: proposal.id, power: "0" };
+        return true;
+      });
+      
+      // Process proposals in smaller batches
+      const batchSize = 3;
+      
+      for (let i = 0; i < proposalsToFetch.length; i += batchSize) {
+        if (!mountedRef.current) break;
+        
+        const batch = proposalsToFetch.slice(i, i + batchSize);
+        
+        // Process each proposal in the batch
+        const batchResults = await Promise.all(
+          batch.map(async (proposal) => {
+            try {
+              // Ensure we have a valid snapshot ID before attempting to get voting power
+              if (proposal.snapshotId && proposal.snapshotId !== undefined) {
+                const power = await getVotingPower(proposal.snapshotId);
+                
+                // Cache the result with long TTL since snapshot data is historical
+                const ttl = 86400 * 7; // 7 days
+                blockchainDataCache.set(`votingPower-${account}-${proposal.snapshotId}`, power, ttl);
+                
+                return { id: proposal.id, power };
+              } else {
+                // Handle missing snapshot ID - try to get current voting power as fallback
+                console.warn(`Proposal ${proposal.id} has no snapshot ID, using fallback`);
+                const power = await getVotingPower(null); // Will use current snapshot
+                return { id: proposal.id, power };
               }
-            })
-          );
-          
-          // Update powers object with batch results
-          batchResults.forEach(({ id, power }) => {
-            powers[id] = power;
-          });
-          
-          // Small delay between batches
-          await new Promise(resolve => setTimeout(resolve, 100));
-        }
+            } catch (err) {
+              console.error(`Error getting voting power for proposal ${proposal.id}:`, err);
+              return { id: proposal.id, power: "0" };
+            }
+          })
+        );
         
-        setVotingPowers(powers);
-      } catch (err) {
-        console.error("Error fetching voting powers:", err);
-      } finally {
+        // Update powers object with batch results
+        batchResults.forEach(({ id, power }) => {
+          newPowers[id] = power;
+        });
+        
+        // Add a small delay between batches
+        if (i + batchSize < proposalsToFetch.length) {
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
+      }
+      
+      // Update state with both cached and newly fetched powers
+      if (mountedRef.current) {
+        setVotingPowers(prev => ({
+          ...prev,
+          ...currentPowers,
+          ...newPowers
+        }));
         setLoading(false);
       }
-    };
-    
-    fetchVotingPowers();
-  }, [getVotingPower, proposals, account]);
+    } catch (err) {
+      console.error("Error fetching voting powers:", err);
+      if (mountedRef.current) {
+        setLoading(false);
+      }
+    } finally {
+      votingPowersLoadingRef.current = false;
+    }
+  }, [getVotingPower, account]); 
 
-  // Initialize votedProposals from the proposals data
+  // Initialize votedProposals from the proposals data - with optimization
   useEffect(() => {
+    // Only process if needed
+    if (!proposals.length) return;
+    
     const voted = {};
+    let hasChanges = false;
+    
     proposals.forEach(proposal => {
+      // Skip if we already have this proposal's vote
+      if (votedProposals[proposal.id] !== undefined) {
+        voted[proposal.id] = votedProposals[proposal.id];
+        return;
+      }
+      
       if (proposal.hasVoted) {
         // Set default vote type to abstain if not specified
         let voteType = VOTE_TYPES.ABSTAIN;
@@ -1060,18 +1307,21 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
         if (proposal.votedNo) voteType = VOTE_TYPES.AGAINST;
         
         voted[proposal.id] = voteType;
+        hasChanges = true;
       }
     });
-    setVotedProposals(voted);
-  }, [proposals, VOTE_TYPES]);
-  
-  // When govParams changes, update the quorum state for backward compatibility
-  useEffect(() => {
-    setQuorum(govParams.quorum?.toString());
-  }, [govParams.quorum]);
+    
+    // Only update state if there are actually changes
+    if (hasChanges) {
+      setVotedProposals(prev => ({
+        ...prev,
+        ...voted
+      }));
+    }
+  }, [proposals, VOTE_TYPES, votedProposals]);
 
   // Helper function to format time durations in a human-readable way
-  const formatTimeDuration = (seconds) => {
+  const formatTimeDuration = useCallback((seconds) => {
     if (!seconds || isNaN(seconds)) return "0 minutes";
     
     const days = Math.floor(seconds / 86400);
@@ -1085,61 +1335,89 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
     } else {
       return `${minutes} minute${minutes !== 1 ? 's' : ''}`;
     }
-  };
+  }, []);
 
-  // Filter proposals based on vote status
-  const filteredProposals = proposals.filter(p => {
-    // Safety check for null/undefined proposal
-    if (!p) return false;
+  // Use memoization for filtered and sorted proposals
+  const { filteredProposals, sortedProposals } = useMemo(() => {
+    // Filter proposals based on vote status
+    const filtered = proposals.filter(p => {
+      // Safety check for null/undefined proposal
+      if (!p) return false;
+      
+      // Check if we've locally voted on this proposal
+      const locallyVoted = votedProposals[p.id] !== undefined;
+      
+      if (voteFilter === 'active') {
+        // Only check if proposal is active, don't exclude based on vote status
+        return p.state === PROPOSAL_STATES.ACTIVE;
+      } else if (voteFilter === 'voted') {
+        return p.hasVoted || locallyVoted;
+      }
+      return true; // 'all' filter
+    });
     
-    // Check if we've locally voted on this proposal
-    const locallyVoted = votedProposals[p.id] !== undefined;
+    // Sort by ID in descending order (newest first)
+    const sorted = [...filtered].sort((a, b) => Number(b.id) - Number(a.id));
     
-    if (voteFilter === 'active') {
-      // Only check if proposal is active, don't exclude based on vote status
-      return p.state === PROPOSAL_STATES.ACTIVE;
-    } else if (voteFilter === 'voted') {
-      return p.hasVoted || locallyVoted;
-    }
-    return true; // 'all' filter
-  });
+    return { filteredProposals: filtered, sortedProposals: sorted };
+  }, [proposals, voteFilter, votedProposals, PROPOSAL_STATES.ACTIVE]);
+
+  // Use memoization for pagination
+  const { currentProposals, totalPages, indexOfFirstItem, indexOfLastItem } = useMemo(() => {
+    // Calculate pagination
+    const indexOfLastItem = currentPage * itemsPerPage;
+    const indexOfFirstItem = indexOfLastItem - itemsPerPage;
+    const current = sortedProposals.slice(indexOfFirstItem, indexOfLastItem);
+    const total = Math.ceil(sortedProposals.length / itemsPerPage);
+    
+    return { 
+      currentProposals: current, 
+      totalPages: total, 
+      indexOfFirstItem, 
+      indexOfLastItem 
+    };
+  }, [sortedProposals, currentPage, itemsPerPage]);
   
-  // Sort proposals by ID in descending order (newest first)
-  const sortedProposals = [...filteredProposals].sort((a, b) => Number(b.id) - Number(a.id));
-  
-  // Calculate pagination
-  const indexOfLastItem = currentPage * itemsPerPage;
-  const indexOfFirstItem = indexOfLastItem - itemsPerPage;
-  const currentProposals = sortedProposals.slice(indexOfFirstItem, indexOfLastItem);
-  const totalPages = Math.ceil(sortedProposals.length / itemsPerPage);
-  
-  // Pagination navigation functions
-  const goToPage = (pageNumber) => {
+  // Pagination navigation functions - using useCallback
+  const goToPage = useCallback((pageNumber) => {
     if (pageNumber > 0 && pageNumber <= totalPages) {
       setCurrentPage(pageNumber);
     }
-  };
+  }, [totalPages]);
   
-  const goToNextPage = () => {
+  const goToNextPage = useCallback(() => {
     if (currentPage < totalPages) {
       setCurrentPage(currentPage + 1);
     }
-  };
+  }, [currentPage, totalPages]);
   
-  const goToPreviousPage = () => {
+  const goToPreviousPage = useCallback(() => {
     if (currentPage > 1) {
       setCurrentPage(currentPage - 1);
     }
-  };
+  }, [currentPage]);
 
-  // Check if user has voted on the proposal (directly check contract)
+  // Check if user has voted on the proposal (directly check contract) - with caching
   const hasUserVoted = useCallback(async (proposalId) => {
     if (!isConnected || !account || !contractsReady || !contracts.governance) return false;
     
     try {
-      // Check directly from contract - this is the correct method
+      // Try to get from cache first
+      const cacheKey = `hasVoted-${account}-${proposalId}`;
+      const cachedResult = blockchainDataCache.get(cacheKey);
+      
+      if (cachedResult !== null) {
+        return cachedResult;
+      }
+      
+      // Check directly from contract
       const voterInfo = await contracts.governance.proposalVoterInfo(proposalId, account);
-      return !voterInfo.isZero(); // If non-zero, user has voted
+      const hasVoted = !voterInfo.isZero();
+      
+      // Cache the result
+      blockchainDataCache.set(cacheKey, hasVoted, 3600); // 1 hour cache
+      
+      return hasVoted;
     } catch (err) {
       console.error(`Error checking if user has voted on proposal ${proposalId}:`, err);
       
@@ -1148,7 +1426,7 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
     }
   }, [isConnected, account, contractsReady, contracts, votedProposals]);
   
-  // Get the vote type (directly check from events)
+  // Get the vote type (directly check from events) - with caching
   const getUserVoteType = useCallback(async (proposalId) => {
     // First check our local state
     if (votedProposals[proposalId] !== undefined) {
@@ -1160,6 +1438,14 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
     }
     
     try {
+      // Try to get from cache first
+      const cacheKey = `voteType-${account}-${proposalId}`;
+      const cachedType = blockchainDataCache.get(cacheKey);
+      
+      if (cachedType !== null) {
+        return cachedType;
+      }
+      
       // Try to find vote cast events for this user on this proposal
       const filter = contracts.governance.filters.VoteCast(proposalId, account);
       const events = await contracts.governance.queryFilter(filter);
@@ -1167,7 +1453,12 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
       if (events.length > 0) {
         // Use the most recent vote
         const latestVote = events[events.length - 1];
-        return Number(latestVote.args.support);
+        const voteType = Number(latestVote.args.support);
+        
+        // Cache the result
+        blockchainDataCache.set(cacheKey, voteType, 86400); // 24 hour cache (votes don't change)
+        
+        return voteType;
       }
     } catch (err) {
       console.error(`Error getting vote type for proposal ${proposalId}:`, err);
@@ -1177,7 +1468,7 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
   }, [votedProposals, isConnected, account, contractsReady, contracts]);
 
   // Enhanced function to render proposal description with proper rich text support
-  const renderProposalDescription = (proposal, truncate = true, maxLength = 200) => {
+  const renderProposalDescription = useCallback((proposal, truncate = true, maxLength = 200) => {
     // Direct extraction of HTML content - don't rely on previous processing
     let descriptionHtml = null;
     let descriptionText = proposal.description || '';
@@ -1187,7 +1478,7 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
     if (htmlMarkerIndex !== -1) {
       // Extract HTML content directly
       descriptionHtml = descriptionText.substring(htmlMarkerIndex + 8);
-      // Get the plain text part
+      // Get the plain text portion
       descriptionText = descriptionText.substring(0, htmlMarkerIndex).trim();
     }
     
@@ -1228,10 +1519,10 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
         );
       }
     }
-  };
+  }, []);
 
-  // Function to submit a vote
-  const submitVote = async (proposalId, support) => {
+  // Submit vote with optimized error handling
+  const submitVote = useCallback(async (proposalId, support) => {
     try {
       // Find the proposal in the list
       const proposal = proposals.find(p => p.id === proposalId);
@@ -1240,35 +1531,37 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
         return;
       }
       
-      console.log(`Submitting vote for proposal #${proposalId} with type ${support}`);
-      
       // Actually send the vote transaction to the blockchain
       const result = await castVote(proposalId, support);
-      console.log("Vote transaction confirmed:", result);
       
-      // Update the voted proposals state
+      // Update the voted proposals state if successful
       setVotedProposals(prev => ({
         ...prev,
         [proposalId]: support
       }));
+      
+      // Clear user vote caches to force refresh
+      blockchainDataCache.delete(`hasVoted-${account}-${proposalId}`);
+      blockchainDataCache.delete(`voteType-${account}-${proposalId}`);
+      blockchainDataCache.delete(`user-vote-${account}-${proposalId}`);
       
       return result;
     } catch (err) {
       console.error("Error submitting vote:", err);
       throw err;
     }
-  };
+  }, [proposals, castVote, account]);
 
   // Helper to convert vote type to text
-  const getVoteTypeText = (voteType) => {
+  const getVoteTypeText = useCallback((voteType) => {
     if (voteType === VOTE_TYPES.FOR) return 'Yes';
     if (voteType === VOTE_TYPES.AGAINST) return 'No';
     if (voteType === VOTE_TYPES.ABSTAIN) return 'Abstain';
     return '';
-  };
+  }, [VOTE_TYPES]);
   
   // Updated helper to get proposal type label with improved names
-  const getProposalTypeLabel = (proposal) => {
+  const getProposalTypeLabel = useCallback((proposal) => {
     // Check if proposal has a typeLabel property
     if (proposal.typeLabel) {
       return proposal.typeLabel;
@@ -1288,10 +1581,10 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
     
     // Return the type label based on the proposal type
     return typeLabels[proposal.type] || "Binding Community Vote";
-  };
+  }, [PROPOSAL_TYPES]);
   
   // Helper to get proposal state label and color
-  const getProposalStateInfo = (proposal) => {
+  const getProposalStateInfo = useCallback((proposal) => {
     // Get actual state instead of relying on deadline
     const state = proposal.state;
     
@@ -1306,10 +1599,10 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
     };
     
     return stateLabels[parseInt(state)] || { label: "Unknown", color: "bg-gray-100 text-gray-800" };
-  };
+  }, [PROPOSAL_STATES]);
 
   // Format numbers for display
-  const formatNumberDisplay = (value) => {
+  const formatNumberDisplay = useCallback((value) => {
     if (value === undefined || value === null) return "0";
     
     // Handle string inputs
@@ -1328,10 +1621,10 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
       minimumFractionDigits: 0,
       maximumFractionDigits: 2
     });
-  };
+  }, []);
   
   // Format token values to 5 decimal places
-  const formatToFiveDecimals = (value) => {
+  const formatToFiveDecimals = useCallback((value) => {
     if (value === undefined || value === null) return "0.00000";
     
     // Handle string inputs
@@ -1342,10 +1635,10 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
     
     // Return with exactly 5 decimal places
     return numValue.toFixed(5);
-  };
+  }, []);
   
   // Format date correctly
-  const formatDate = (timestamp) => {
+  const formatDate = useCallback((timestamp) => {
     if (!timestamp) return "Unknown";
     
     // Convert seconds to milliseconds if needed
@@ -1357,7 +1650,29 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
       console.error("Error formatting date:", error);
       return "Invalid Date";
     }
-  };
+  }, []);
+
+  // Clean up on unmount
+  useEffect(() => {
+    mountedRef.current = true;
+    
+    return () => {
+      mountedRef.current = false;
+      
+      // Clean up timers
+      if (threatLevelTimerRef.current) {
+        clearInterval(threatLevelTimerRef.current);
+        threatLevelTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  // Effect to load voting powers when proposals change
+  useEffect(() => {
+    if (isConnected && contractsReady && proposals.length > 0 && account) {
+      fetchVotingPowers();
+    }
+  }, [isConnected, contractsReady, proposals, account, fetchVotingPowers]);
 
   return (
     <div>
@@ -1631,9 +1946,9 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
                   {getProposalStateInfo(selectedProposal).label}
                 </span>
               </div>
-              
-              {/* Proposal metadata */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+             
+             {/* Proposal metadata */}
+             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                 <div className="flex items-center text-sm">
                   <Calendar className="w-4 h-4 mr-2 text-gray-500 dark:text-gray-400" />
                   <div className="dark:text-gray-300">
@@ -1669,7 +1984,7 @@ const VoteTab = ({ proposals, castVote, hasVoted, getVotingPower, voting, accoun
                 </div>
               </div>
               
-              {/* Vote results - Using our FIXED VoteData component for accurate vote counts */}
+              {/* Vote results */}
               <div className="mb-6">
                 <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Voting Results</h4>
                 <div className="bg-gray-50 dark:bg-gray-900/50 p-4 rounded border dark:border-gray-700">

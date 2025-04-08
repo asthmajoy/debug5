@@ -284,9 +284,9 @@ const getProposalVoteTotals = useCallback(async (proposalId) => {
     try {
       console.log(`Fetching vote totals for proposal ${proposalId}`);
   
-      // Try to get votes using getProposalVotes method - this is the new contract function
+      // Try to get votes using getProposalVoteTotals method - this is the new contract function
       const [yesVotes, noVotes, abstainVotes, totalVotingPower, totalVoters] = 
-        await contracts.governance.getProposalVotes(proposalId);
+        await contracts.governance.getProposalVoteTotals(proposalId);
         
       // Calculate percentages
       const totalVotes = yesVotes.add(noVotes).add(abstainVotes);
@@ -335,7 +335,7 @@ const getProposalVoteTotals = useCallback(async (proposalId) => {
         source: 'contract'
       };
     } catch (error) {
-      console.error(`Error getting proposal vote totals using getProposalVotes:`, error);
+      console.error(`Error getting proposal vote totals using getProposalVoteTotals:`, error);
       
       // Fallback: Use events to calculate vote totals if the direct call fails
       // (kept the fallback mechanism, but with improved formatting)
@@ -823,7 +823,409 @@ const getProposalVoteTotals = useCallback(async (proposalId) => {
     </BlockchainDataContext.Provider>
   );
 };
-
+export function createBlockchainDataService(web3Context) {
+  const { contracts, isConnected, account, networkId, refreshCounter } = web3Context;
+  
+  // Cache for data to avoid re-fetching
+  let proposalsCache = [];
+  let tokenInfoCache = null;
+  let delegationCache = {};
+  
+  /**
+   * Safely execute contract calls with fallback
+   */
+  const safeExecute = async (fn, fallbackValue = null) => {
+    try {
+      return await fn();
+    } catch (error) {
+      console.error("Contract call error:", error.message);
+      return fallbackValue;
+    }
+  };
+  
+  /**
+   * Format token amount safely
+   */
+  const formatTokenAmount = (amount, decimals = 18) => {
+    if (!amount) return "0";
+    
+    try {
+      // If it's a BigNumber, format it
+      if (amount._isBigNumber) {
+        // Validate the amount - if it's unreasonably large, return 0
+        if (amount.gt(ethers.utils.parseUnits("1000000000", decimals))) {
+          console.warn("Potentially invalid token amount:", amount.toString());
+          return "0"; // Return 0 for clearly invalid amounts
+        }
+        
+        const formatted = ethers.utils.formatUnits(amount, decimals);
+        const num = parseFloat(formatted);
+        return num.toLocaleString(undefined, { maximumFractionDigits: 2 });
+      }
+      
+      // For strings that might be numbers
+      if (typeof amount === 'string') {
+        const num = parseFloat(amount);
+        if (!isNaN(num)) {
+          return num.toLocaleString(undefined, { maximumFractionDigits: 2 });
+        }
+      }
+      
+      // For direct numbers
+      if (typeof amount === 'number') {
+        return amount.toLocaleString(undefined, { maximumFractionDigits: 2 });
+      }
+      
+      return "0";
+    } catch (error) {
+      console.error("Error formatting token amount:", error);
+      return "0";
+    }
+  };
+  
+  /**
+   * Check if contract is properly initialized
+   */
+  const isContractAvailable = (name) => {
+    const contract = contracts[name];
+    return contract && contract.address && contract.provider;
+  };
+  
+  /**
+   * Get token information
+   */
+  const getTokenInfo = async () => {
+    // Return cached data if available
+    if (tokenInfoCache) return tokenInfoCache;
+    
+    // Initialize with defaults
+    const defaultInfo = {
+      name: "JustToken",
+      symbol: "JST",
+      decimals: 18,
+      totalSupply: "0",
+      formattedTotalSupply: "0"
+    };
+    
+    if (!isConnected || !isContractAvailable('justToken')) {
+      return defaultInfo;
+    }
+    
+    try {
+      const token = contracts.justToken;
+      
+      // Safely get token info
+      const name = await safeExecute(() => token.name(), "JustToken");
+      const symbol = await safeExecute(() => token.symbol(), "JST");
+      const decimals = await safeExecute(() => token.decimals(), 18);
+      const totalSupply = await safeExecute(() => token.totalSupply(), ethers.BigNumber.from(0));
+      
+      const info = {
+        name,
+        symbol,
+        decimals,
+        totalSupply: totalSupply.toString(),
+        formattedTotalSupply: formatTokenAmount(totalSupply, decimals)
+      };
+      
+      // Cache the results
+      tokenInfoCache = info;
+      return info;
+    } catch (error) {
+      console.error("Error loading token info:", error);
+      return defaultInfo;
+    }
+  };
+  
+  /**
+   * Get account balance and voting power
+   */
+  const getAccountBalance = async () => {
+    if (!isConnected || !account || !isContractAvailable('justToken')) {
+      return {
+        balance: "0",
+        formattedBalance: "0",
+        votingPower: "0",
+        formattedVotingPower: "0"
+      };
+    }
+    
+    try {
+      const token = contracts.justToken;
+      const decimals = (await getTokenInfo()).decimals;
+      
+      // Get balance
+      const balance = await safeExecute(
+        () => token.balanceOf(account),
+        ethers.BigNumber.from(0)
+      );
+      
+      // Try different methods to get voting power
+      let votingPower = balance; // Default to balance
+      
+      // Try different methods based on what's available
+      if (typeof token.getVotes === 'function') {
+        votingPower = await safeExecute(
+          () => token.getVotes(account), 
+          balance
+        );
+      } else if (typeof token.getCurrentDelegatedVotes === 'function') {
+        votingPower = await safeExecute(
+          () => token.getCurrentDelegatedVotes(account),
+          balance
+        );
+      } else if (typeof token.getEffectiveVotingPower === 'function') {
+        // This function might need a snapshot ID
+        const latestSnapshot = await safeExecute(
+          () => token.getCurrentSnapshotId ? token.getCurrentSnapshotId() : 0,
+          0
+        );
+        
+        votingPower = await safeExecute(
+          () => token.getEffectiveVotingPower(account, latestSnapshot),
+          balance
+        );
+      }
+      
+      return {
+        balance: balance.toString(),
+        formattedBalance: formatTokenAmount(balance, decimals),
+        votingPower: votingPower.toString(),
+        formattedVotingPower: formatTokenAmount(votingPower, decimals)
+      };
+    } catch (error) {
+      console.error("Error getting account balance:", error);
+      return {
+        balance: "0",
+        formattedBalance: "0",
+        votingPower: "0",
+        formattedVotingPower: "0"
+      };
+    }
+  };
+  
+  /**
+   * Get delegation information
+   */
+  const getDelegationInfo = async () => {
+    // Use cached data if available
+    if (delegationCache.account === account && delegationCache.data) {
+      return delegationCache.data;
+    }
+    
+    // Default data
+    const defaultInfo = {
+      delegate: ethers.constants.AddressZero,
+      isDelegating: false,
+      isSelfDelegated: false,
+      delegatedAmount: "0",
+      formattedDelegatedAmount: "0",
+      delegators: [],
+      delegatorsCount: 0
+    };
+    
+    if (!isConnected || !account || !isContractAvailable('justToken')) {
+      return defaultInfo;
+    }
+    
+    try {
+      const token = contracts.justToken;
+      const { decimals } = await getTokenInfo();
+      
+      // Check if delegation methods exist
+      if (typeof token.getDelegate !== 'function') {
+        return defaultInfo;
+      }
+      
+      // Get current delegate
+      const delegate = await safeExecute(
+        () => token.getDelegate(account),
+        ethers.constants.AddressZero
+      );
+      
+      // Determine delegation status
+      const isDelegating = delegate !== ethers.constants.AddressZero;
+      const isSelfDelegated = isDelegating && delegate === account;
+      
+      // Get delegated amount
+      let delegatedAmount = ethers.BigNumber.from(0);
+      
+      if (isDelegating && !isSelfDelegated) {
+        // Try different methods to get locked tokens
+        if (typeof token.getLockedTokens === 'function') {
+          delegatedAmount = await safeExecute(
+            () => token.getLockedTokens(account),
+            ethers.BigNumber.from(0)
+          );
+        } else {
+          // Fallback to balance
+          delegatedAmount = await safeExecute(
+            () => token.balanceOf(account),
+            ethers.BigNumber.from(0)
+          );
+        }
+      }
+      
+      // Get delegators if method exists
+      let delegators = [];
+      
+      if (typeof token.getDelegatorsOf === 'function') {
+        delegators = await safeExecute(
+          () => token.getDelegatorsOf(account),
+          []
+        );
+      }
+      
+      const result = {
+        delegate,
+        isDelegating,
+        isSelfDelegated,
+        delegatedAmount: delegatedAmount.toString(),
+        formattedDelegatedAmount: formatTokenAmount(delegatedAmount, decimals),
+        delegators,
+        delegatorsCount: delegators.length
+      };
+      
+      // Cache result
+      delegationCache = {
+        account,
+        data: result
+      };
+      
+      return result;
+    } catch (error) {
+      console.error("Error getting delegation info:", error);
+      return defaultInfo;
+    }
+  };
+  
+  /**
+   * Load proposals with caching
+   */
+  const loadProposals = async () => {
+    // Use cached data if available and refresh counter hasn't changed
+    if (proposalsCache.length > 0 && proposalsCache._refreshCounter === refreshCounter) {
+      return proposalsCache;
+    }
+    
+    // If not connected or contracts not available, return empty array
+    if (!isConnected || !isContractAvailable('governance')) {
+      return [];
+    }
+    
+    try {
+      // Modified to avoid the queueTransactionWithThreatLevel call
+      // We'll wrap this in a more robust error handler
+      const proposals = await safeExecute(
+        async () => {
+          // This removes the problematic call to timelock.queueTransactionWithThreatLevel
+          // by modifying the ProposalLoader's behavior without changing its interface
+          const originalQueueTransaction = contracts.timelock?.queueTransactionWithThreatLevel;
+          
+          // Temporarily replace the function to prevent it from being called
+          if (contracts.timelock) {
+            contracts.timelock.queueTransactionWithThreatLevel = async (...args) => {
+              console.warn("Preventing call to queueTransactionWithThreatLevel", args);
+              // Return a mock transaction hash instead
+              return ethers.utils.keccak256(ethers.utils.toUtf8Bytes("mock_tx_hash"));
+            };
+          }
+          
+          try {
+            // Call the proposal loader with the modified contracts
+            return await loadProposalsFromBlockchain(contracts);
+          } finally {
+            // Restore the original function
+            if (contracts.timelock && originalQueueTransaction) {
+              contracts.timelock.queueTransactionWithThreatLevel = originalQueueTransaction;
+            }
+          }
+        },
+        []
+      );
+      
+      // Add refresh counter to cache
+      proposals._refreshCounter = refreshCounter;
+      
+      // Update cache
+      proposalsCache = proposals;
+      return proposals;
+    } catch (error) {
+      console.error("Error loading proposals:", error);
+      return [];
+    }
+  };
+  
+  /**
+   * Get governance parameters
+   */
+  const getGovernanceParams = async () => {
+    if (!isConnected || !isContractAvailable('governance')) {
+      return {
+        votingDuration: "0",
+        quorum: "0",
+        proposalThreshold: "0",
+        proposalStake: "0"
+      };
+    }
+    
+    try {
+      const governance = contracts.governance;
+      
+      // Check if govParams method exists
+      if (typeof governance.govParams !== 'function') {
+        return {
+          votingDuration: "0",
+          quorum: "0",
+          proposalThreshold: "0",
+          proposalStake: "0"
+        };
+      }
+      
+      // Get governance parameters
+      const params = await safeExecute(
+        () => governance.govParams(),
+        null
+      );
+      
+      // If no params returned, return defaults
+      if (!params) {
+        return {
+          votingDuration: "0",
+          quorum: "0",
+          proposalThreshold: "0",
+          proposalStake: "0"
+        };
+      }
+      
+      // Format and return parameters
+      return {
+        votingDuration: params.votingDuration ? params.votingDuration.toString() : "0",
+        quorum: params.quorum ? formatTokenAmount(params.quorum) : "0",
+        proposalThreshold: params.proposalCreationThreshold ? 
+          formatTokenAmount(params.proposalCreationThreshold) : "0",
+        proposalStake: params.proposalStake ? formatTokenAmount(params.proposalStake) : "0"
+      };
+    } catch (error) {
+      console.error("Error getting governance parameters:", error);
+      return {
+        votingDuration: "0",
+        quorum: "0",
+        proposalThreshold: "0",
+        proposalStake: "0"
+      };
+    }
+  };
+  
+  // Return the service functions
+  return {
+    getTokenInfo,
+    getAccountBalance,
+    getDelegationInfo,
+    loadProposals,
+    getGovernanceParams
+  };
+}
 // Custom hook to use the context
 export const useBlockchainData = () => {
   const context = useContext(BlockchainDataContext);

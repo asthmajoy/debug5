@@ -11,6 +11,7 @@ import { CONTRACT_ADDRESSES } from '../utils/constants.js';
 
 const Web3Context = createContext();
  
+// Make sure this is exported as a named export
 export function useWeb3() {
   return useContext(Web3Context);
 }
@@ -46,6 +47,89 @@ export function Web3Provider({ children }) {
   // Initialize contracts function
   functionsRef.current.initializeContracts = async (provider, signer) => {
     try {
+
+      // Add this to your Web3Context.jsx file, inside the Web3Provider component
+
+// Add this function to debug contract addresses and ABIs
+function debugContractsInfo() {
+  console.log("CONTRACT_ADDRESSES from constants:", CONTRACT_ADDRESSES);
+  
+  // Log ABI signatures for governance contract
+  console.log("Governance ABI Methods:", 
+    JustGovernanceABI.abi
+      .filter(item => item.type === "function")
+      .map(fn => `${fn.name}(${fn.inputs.map(i => i.type).join(',')}): ${fn.stateMutability}`)
+  );
+  
+  // Log ABI signatures for DAOHelper contract
+  console.log("DAOHelper ABI Methods:", 
+    JustDAOHelperABI.abi
+      .filter(item => item.type === "function")
+      .map(fn => `${fn.name}(${fn.inputs.map(i => i.type).join(',')}): ${fn.stateMutability}`)
+  );
+  
+  // Log current contract instances
+  console.log("Current contract instances:", {
+    governance: contracts.governance ? {
+      address: contracts.governance.address,
+      hasGetProposalState: typeof contracts.governance.getProposalState === 'function',
+      hasGovParams: typeof contracts.governance.govParams === 'function'
+    } : 'Not initialized',
+    
+    daoHelper: contracts.daoHelper ? {
+      address: contracts.daoHelper.address,
+      hasJustToken: typeof contracts.daoHelper.justToken === 'function',
+      hasAdminRole: typeof contracts.daoHelper.ADMIN_ROLE === 'function'
+    } : 'Not initialized',
+    
+    token: contracts.justToken ? {
+      address: contracts.justToken.address,
+      hasName: typeof contracts.justToken.name === 'function',
+      hasBalance: typeof contracts.justToken.balanceOf === 'function'
+    } : 'Not initialized',
+    
+    timelock: contracts.timelock ? {
+      address: contracts.timelock.address,
+      hasMinDelay: typeof contracts.timelock.minDelay === 'function'
+    } : 'Not initialized'
+  });
+  
+  // Check network information
+  if (provider) {
+    provider.getNetwork().then(network => {
+      console.log("Connected to network:", {
+        name: network.name,
+        chainId: network.chainId
+      });
+    }).catch(error => {
+      console.error("Error getting network:", error);
+    });
+  }
+}
+
+// Call this function after initializing contracts
+functionsRef.current.initializeContracts = async (provider, signer) => {
+  try {
+    // Existing initializeContracts code...
+    
+    // After setting contracts but before returning
+    setContracts(newContracts);
+    setContractErrors(newContractErrors);
+    
+    // Debug logging
+    console.log("Contracts ready status:", isReady);
+    if (!isReady) {
+      console.warn("Some contracts failed to initialize:", newContractErrors);
+    } else {
+      // Call debug function
+      debugContractsInfo();
+    }
+    
+    // Rest of the function...
+  } catch (error) {
+    // Error handling...
+  }
+};
       setContractsReady(false);
       const newContractErrors = {};
       const newContracts = {};
@@ -118,6 +202,27 @@ export function Web3Provider({ children }) {
           JustDAOHelperABI.abi,
           signer
         );
+        
+        // Verify contract works by calling a view function
+        try {
+          // Call justToken() which is a public variable in the contract
+          await daoHelperContract.justToken();
+          // Alternative check if justToken fails
+          if (!await daoHelperContract.justToken()) {
+            // Try another view function as backup verification
+            await daoHelperContract.ADMIN_ROLE();
+          }
+        } catch (verifyError) {
+          console.error("Error verifying DAO helper contract:", verifyError);
+          // Try a different function to verify if the first one failed
+          try {
+            await daoHelperContract.ADMIN_ROLE();
+          } catch (secondVerifyError) {
+            console.error("Failed secondary verification of DAO helper contract:", secondVerifyError);
+            throw verifyError;
+          }
+        }
+        
         newContracts.daoHelper = daoHelperContract;
         console.log("DAO helper contract initialized successfully");
       } catch (error) {
@@ -132,9 +237,15 @@ export function Web3Provider({ children }) {
       setContracts(newContracts);
       setContractErrors(newContractErrors);
       
-      // Mark as ready if at least token and governance are available
-      const isReady = newContracts.justToken && newContracts.governance;
+      // Mark as ready if key contracts are available
+      const isReady = newContracts.justToken && newContracts.governance && 
+                      (newContracts.daoHelper || newContracts.timelock);
       setContractsReady(isReady);
+      
+      console.log("Contracts ready status:", isReady);
+      if (!isReady) {
+        console.warn("Some contracts failed to initialize:", newContractErrors);
+      }
       
       // Set a refresh flag to trigger data reloads
       setRefreshCounter(prev => prev + 1);
@@ -185,7 +296,7 @@ export function Web3Provider({ children }) {
 
   // Check if wallet is already connected on page load
   useEffect(() => {
-    const checkConnection = async () => {
+    const CheckConnection = async () => {
       if (window.ethereum) {
         try {
           // Check if already connected
@@ -222,7 +333,7 @@ export function Web3Provider({ children }) {
       }
     };
     
-    checkConnection();
+    CheckConnection();
     
     // Cleanup function
     return () => {

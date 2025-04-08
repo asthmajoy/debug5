@@ -569,27 +569,6 @@ contract JustGovernanceUpgradeable is
         return votingPower;
     }
 
-    function getProposalVotes(uint256 proposalId) external view returns (
-        uint256 yesVotes,
-        uint256 noVotes, 
-        uint256 abstainVotes,
-        uint256 totalVotingPower,
-        uint256 totalVoters
-    ) {
-        if (proposalId >= _proposals.length) revert InvPId();
-        ProposalData storage proposal = _proposals[proposalId];
-        
-        yesVotes = proposal.yesVotes;
-        noVotes = proposal.noVotes;
-        abstainVotes = proposal.abstainVotes;
-        
-        totalVotingPower = yesVotes + noVotes + abstainVotes;
-        
-        totalVoters = _proposalVoters[proposalId].length;
-        
-        return (yesVotes, noVotes, abstainVotes, totalVotingPower, totalVoters);
-    }
-    
    function queueProposal(uint256 proposalId) external
     whenNotPaused
     validActiveProposal(proposalId)

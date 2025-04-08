@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ArrowRight, AlertTriangle, RefreshCw, Clock, Info, Shield, Calendar } from 'lucide-react';
 import { ethers } from 'ethers';
 import { formatRelativeTime, formatAddress } from '../utils/formatters';
@@ -49,6 +49,16 @@ const PendingTransactionsTab = ({ contracts, account }) => {
     isCanceller: false,
     isGovernance: false
   });
+  
+  // Add mounted ref to track component mount state
+  const isMounted = useRef(true);
+
+  // Set up cleanup when component unmounts
+  useEffect(() => {
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
 
   // Check user roles
   useEffect(() => {
@@ -77,15 +87,18 @@ const PendingTransactionsTab = ({ contracts, account }) => {
           )
         ]);
         
-        setUserRoles({
-          isAdmin,
-          isGuardian,
-          isProposer,
-          isCanceller,
-          isGovernance
-        });
-        
-        console.log("User roles:", { isAdmin, isGuardian, isProposer, isCanceller, isGovernance });
+        // Check if component is still mounted before updating state
+        if (isMounted.current) {
+          setUserRoles({
+            isAdmin,
+            isGuardian,
+            isProposer,
+            isCanceller,
+            isGovernance
+          });
+          
+          console.log("User roles:", { isAdmin, isGuardian, isProposer, isCanceller, isGovernance });
+        }
       } catch (error) {
         console.error("Error checking user roles:", error);
       }
@@ -97,14 +110,18 @@ const PendingTransactionsTab = ({ contracts, account }) => {
   // Memoize loadAllTransactions to avoid dependency issues
   const loadAllTransactions = useCallback(async () => {
     if (!contracts.timelock || !contracts.governance) {
-      setLoading(false);
-      console.error("Missing timelock or governance contracts");
-      setErrorMessage("Contract connections not available. Please check your network connection.");
+      if (isMounted.current) {
+        setLoading(false);
+        console.error("Missing timelock or governance contracts");
+        setErrorMessage("Contract connections not available. Please check your network connection.");
+      }
       return;
     }
     
-    setLoading(true);
-    setErrorMessage('');
+    if (isMounted.current) {
+      setLoading(true);
+      setErrorMessage('');
+    }
     console.log("Loading all pending transactions...");
     
     try {
@@ -113,7 +130,9 @@ const PendingTransactionsTab = ({ contracts, account }) => {
       try {
         const gracePeriodBN = await contracts.timelock.gracePeriod();
         gracePeriodValue = gracePeriodBN.toNumber();
-        setGracePeriod(gracePeriodValue);
+        if (isMounted.current) {
+          setGracePeriod(gracePeriodValue);
+        }
         console.log("Grace period loaded:", gracePeriodValue);
       } catch (error) {
         console.error("Error getting grace period:", error);
@@ -143,13 +162,20 @@ const PendingTransactionsTab = ({ contracts, account }) => {
         }
       }
       
-      setPendingTransactions(combinedTxs);
+      // Check if component is still mounted before updating state
+      if (isMounted.current) {
+        setPendingTransactions(combinedTxs);
+      }
       console.log("Loaded transactions:", combinedTxs.length);
     } catch (error) {
       console.error("Error loading transaction data:", error);
-      setErrorMessage("Failed to load transaction data: " + error.message);
+      if (isMounted.current) {
+        setErrorMessage("Failed to load transaction data: " + error.message);
+      }
     } finally {
-      setLoading(false);
+      if (isMounted.current) {
+        setLoading(false);
+      }
     }
   }, [contracts.timelock, contracts.governance]);
 
@@ -159,9 +185,13 @@ const PendingTransactionsTab = ({ contracts, account }) => {
     
     // Set up a refresh interval
     const refreshInterval = setInterval(() => {
-      loadAllTransactions();
+      // Only refresh if component is still mounted
+      if (isMounted.current) {
+        loadAllTransactions();
+      }
     }, 30000); // Refresh every 30 seconds
     
+    // Clean up interval when component unmounts
     return () => clearInterval(refreshInterval);
   }, [loadAllTransactions]);
 
@@ -190,8 +220,6 @@ const PendingTransactionsTab = ({ contracts, account }) => {
     };
     return names[state] || "Queued"; // Default to "Queued" for unknown states
   };
-
-
 
   // Load timelock transactions directly
   const loadTimelockTransactions = async (gracePeriodValue) => {
@@ -423,18 +451,9 @@ const PendingTransactionsTab = ({ contracts, account }) => {
   const enhanceProposalData = async (proposalData) => {
     const id = proposalData.id;
     
-    // Try to get vote information
-    try {
-      // Try using getProposalVotes function
-      let voteResult;
-      try {
-        voteResult = await contracts.governance.getProposalVotes(id);
-      } catch (e) {
-        // Fallback to getProposalVoteTotals if available
-        if (typeof contracts.governance.getProposalVoteTotals === 'function') {
-          voteResult = await contracts.governance.getProposalVoteTotals(id);
-        }
-      }
+    try { 
+      // Directly use getProposalVoteTotals
+      const voteResult = await contracts.governance.getProposalVoteTotals(id);
       
       if (voteResult) {
         // Handle different return formats
@@ -874,7 +893,9 @@ const PendingTransactionsTab = ({ contracts, account }) => {
 
   // Analyze why a cancellation might fail
   const analyzeProposalCancellation = async (transaction) => {
-    setDebugInfo(null);
+    if (isMounted.current) {
+      setDebugInfo(null);
+    }
     
     const proposalId = transaction.proposalId;
     try {
@@ -899,7 +920,9 @@ const PendingTransactionsTab = ({ contracts, account }) => {
         const isQueued = await timelock.queuedTransactions(txHash);
         if (!isQueued) {
           report.push(`❌ CRITICAL ERROR: Transaction is not queued in the timelock`);
-          setDebugInfo(report);
+          if (isMounted.current) {
+            setDebugInfo(report);
+          }
           return "FAILURE REASON: Transaction is not in the timelock queue";
         }
         
@@ -919,7 +942,9 @@ const PendingTransactionsTab = ({ contracts, account }) => {
         
         if (!isGuardian && !isCanceller && !isProposer && !isGovernance) {
           report.push(`❌ CRITICAL ERROR: You need one of these roles to cancel timelock transactions`);
-          setDebugInfo(report);
+          if (isMounted.current) {
+            setDebugInfo(report);
+          }
           return "FAILURE REASON: Not authorized to cancel timelock transactions";
         }
         
@@ -928,7 +953,9 @@ const PendingTransactionsTab = ({ contracts, account }) => {
           report.push("Simulating timelock cancellation...");
           await timelock.callStatic.cancelTransaction(txHash, { from: userAddress });
           report.push("✅ Simulation successful - transaction should be cancellable");
-          setDebugInfo(report);
+          if (isMounted.current) {
+            setDebugInfo(report);
+          }
           return "SUCCESS: Transaction should be cancellable";
         } catch (e) {
           // Extract error message
@@ -955,7 +982,9 @@ const PendingTransactionsTab = ({ contracts, account }) => {
           }
           
           report.push(`❌ CRITICAL ERROR: ${reason}`);
-          setDebugInfo(report);
+          if (isMounted.current) {
+            setDebugInfo(report);
+          }
           return `FAILURE REASON: ${reason}`;
         }
       } else {
@@ -970,13 +999,17 @@ const PendingTransactionsTab = ({ contracts, account }) => {
         
         if (stateName === "Executed") {
           report.push("❌ CRITICAL ERROR: Proposal is already executed");
-          setDebugInfo(report);
+          if (isMounted.current) {
+            setDebugInfo(report);
+          }
           return "FAILURE REASON: Proposal is already executed";
         }
         
         if (stateName === "Canceled") {
           report.push("❌ CRITICAL ERROR: Proposal is already canceled");
-          setDebugInfo(report);
+          if (isMounted.current) {
+            setDebugInfo(report);
+          }
           return "FAILURE REASON: Proposal is already canceled";
         }
         
@@ -994,14 +1027,16 @@ const PendingTransactionsTab = ({ contracts, account }) => {
           
           if (!isProposer) {
             report.push("❌ CRITICAL ERROR: Not the proposer or a guardian");
-            setDebugInfo(report);
+            if (isMounted.current) {
+              setDebugInfo(report);
+            }
             return "FAILURE REASON: Not authorized to cancel this proposal";
           }
           
           // 4. Check if votes have been cast
           let hasVotes = false;
           try {
-            const votesInfo = await governance.getProposalVotes(proposalId);
+            const votesInfo = await governance.getProposalVoteTotals(proposalId);
             let yesVotes, noVotes, abstainVotes;
             
             if (Array.isArray(votesInfo)) {
@@ -1021,7 +1056,9 @@ const PendingTransactionsTab = ({ contracts, account }) => {
             
             if (hasVotes) {
               report.push("❌ CRITICAL ERROR: Votes have been cast - only guardians can cancel now");
-              setDebugInfo(report);
+              if (isMounted.current) {
+                setDebugInfo(report);
+              }
               return "FAILURE REASON: Votes have been cast";
             }
           } catch (e) {
@@ -1049,7 +1086,9 @@ const PendingTransactionsTab = ({ contracts, account }) => {
               
               if (currentTime >= deadline) {
                 report.push("❌ CRITICAL ERROR: Voting deadline has passed - only guardians can cancel now");
-                setDebugInfo(report);
+                if (isMounted.current) {
+                  setDebugInfo(report);
+                }
                 return "FAILURE REASON: Voting deadline has passed";
               }
             }
@@ -1063,7 +1102,9 @@ const PendingTransactionsTab = ({ contracts, account }) => {
           report.push("Simulating proposal cancellation...");
           await governance.callStatic.cancelProposal(proposalId, { from: userAddress });
           report.push("✅ Simulation successful - proposal should be cancellable");
-          setDebugInfo(report);
+          if (isMounted.current) {
+            setDebugInfo(report);
+          }
           return "SUCCESS: Proposal should be cancellable";
         } catch (e) {
           // Extract error message
@@ -1097,13 +1138,17 @@ const PendingTransactionsTab = ({ contracts, account }) => {
           }
           
           report.push(`❌ CRITICAL ERROR: ${reason}`);
-          setDebugInfo(report);
+          if (isMounted.current) {
+            setDebugInfo(report);
+          }
           return `FAILURE REASON: ${reason}`;
         }
       }
     } catch (error) {
       console.error("Analysis error:", error);
-      setDebugInfo([`Error during analysis: ${error.message}`]);
+      if (isMounted.current) {
+        setDebugInfo([`Error during analysis: ${error.message}`]);
+      }
       return "Error during analysis: " + error.message;
     }
   };
@@ -1114,9 +1159,11 @@ const PendingTransactionsTab = ({ contracts, account }) => {
       return;
     }
     
-    setErrorMessage('');
-    setSuccessMessage('');
-    setTxLoading(true);
+    if (isMounted.current) {
+      setErrorMessage('');
+      setSuccessMessage('');
+      setTxLoading(true);
+    }
     
     try {
       const provider = new ethers.providers.Web3Provider(window.ethereum);
@@ -1143,7 +1190,9 @@ const PendingTransactionsTab = ({ contracts, account }) => {
         const tx = await timelock.cancelTransaction(txHash, { gasLimit, gasPrice });
         await tx.wait();
         
-        setSuccessMessage("Timelock transaction cancelled successfully");
+        if (isMounted.current) {
+          setSuccessMessage("Timelock transaction cancelled successfully");
+        }
       } else {
         // Cancel governance proposal
         const governance = contracts.governance.connect(signer);
@@ -1159,30 +1208,50 @@ const PendingTransactionsTab = ({ contracts, account }) => {
         const tx = await governance.cancelProposal(proposalId, { gasLimit, gasPrice });
         await tx.wait();
         
-        setSuccessMessage("Proposal cancelled successfully");
+        if (isMounted.current) {
+          setSuccessMessage("Proposal cancelled successfully");
+        }
       }
       
-      // Remove from local state
-      setPendingTransactions(pendingTransactions.filter(t => t.id !== transaction.id));
+      // Remove from local state if component is still mounted
+      if (isMounted.current) {
+        setPendingTransactions(pendingTransactions.filter(t => t.id !== transaction.id));
+      }
       
-      // Reload after short delay
-      setTimeout(() => loadAllTransactions(), 2000);
-      
-      // Clear success message
-      setTimeout(() => setSuccessMessage(''), 3000);
+      // Reload after short delay only if component is still mounted
+      if (isMounted.current) {
+        setTimeout(() => {
+          if (isMounted.current) {
+            loadAllTransactions();
+          }
+        }, 2000);
+        
+        // Clear success message
+        setTimeout(() => {
+          if (isMounted.current) {
+            setSuccessMessage('');
+          }
+        }, 3000);
+      }
     } catch (error) {
       console.error("Error cancelling transaction:", error);
-      setErrorMessage(error.message || 'Failed to cancel transaction');
+      if (isMounted.current) {
+        setErrorMessage(error.message || 'Failed to cancel transaction');
+      }
     } finally {
-      setTxLoading(false);
+      if (isMounted.current) {
+        setTxLoading(false);
+      }
     }
   };
 
   // Execute a transaction
   const executeTransaction = async (transaction) => {
-    setErrorMessage('');
-    setSuccessMessage('');
-    setTxLoading(true);
+    if (isMounted.current) {
+      setErrorMessage('');
+      setSuccessMessage('');
+      setTxLoading(true);
+    }
     
     try {
       const provider = new ethers.providers.Web3Provider(window.ethereum);
@@ -1209,7 +1278,9 @@ const PendingTransactionsTab = ({ contracts, account }) => {
         const tx = await timelock.executeTransaction(txHash, { gasLimit, gasPrice });
         await tx.wait();
         
-        setSuccessMessage("Timelock transaction executed successfully");
+        if (isMounted.current) {
+          setSuccessMessage("Timelock transaction executed successfully");
+        }
       } else {
         // Execute governance proposal
         const governance = contracts.governance.connect(signer);
@@ -1225,35 +1296,57 @@ const PendingTransactionsTab = ({ contracts, account }) => {
         const tx = await governance.executeProposal(proposalId, { gasLimit, gasPrice });
         await tx.wait();
         
-        setSuccessMessage("Proposal executed successfully");
+        if (isMounted.current) {
+          setSuccessMessage("Proposal executed successfully");
+        }
       }
       
-      // Remove from local state
-      setPendingTransactions(pendingTransactions.filter(t => t.id !== transaction.id));
+      // Remove from local state if component is still mounted
+      if (isMounted.current) {
+        setPendingTransactions(pendingTransactions.filter(t => t.id !== transaction.id));
+      }
       
-      // Reload after short delay
-      setTimeout(() => loadAllTransactions(), 2000);
-      
-      // Clear success message
-      setTimeout(() => setSuccessMessage(''), 3000);
+      // Reload after short delay only if component is still mounted
+      if (isMounted.current) {
+        setTimeout(() => {
+          if (isMounted.current) {
+            loadAllTransactions();
+          }
+        }, 2000);
+        
+        // Clear success message
+        setTimeout(() => {
+          if (isMounted.current) {
+            setSuccessMessage('');
+          }
+        }, 3000);
+      }
     } catch (error) {
       console.error("Error executing transaction:", error);
-      setErrorMessage(error.message || 'Failed to execute transaction');
+      if (isMounted.current) {
+        setErrorMessage(error.message || 'Failed to execute transaction');
+      }
     } finally {
-      setTxLoading(false);
+      if (isMounted.current) {
+        setTxLoading(false);
+      }
     }
   };
 
   // Execute expired transaction
   const executeExpiredTransaction = async (transaction) => {
     if (transaction.idType !== 'timelock') {
-      setErrorMessage('Only timelock transactions can be executed as expired');
+      if (isMounted.current) {
+        setErrorMessage('Only timelock transactions can be executed as expired');
+      }
       return;
     }
     
-    setErrorMessage('');
-    setSuccessMessage('');
-    setTxLoading(true);
+    if (isMounted.current) {
+      setErrorMessage('');
+      setSuccessMessage('');
+      setTxLoading(true);
+    }
     
     try {
       const provider = new ethers.providers.Web3Provider(window.ethereum);
@@ -1280,28 +1373,46 @@ const PendingTransactionsTab = ({ contracts, account }) => {
       const tx = await timelock.executeExpiredTransaction(txHash, { gasLimit, gasPrice });
       await tx.wait();
       
-      // Remove from local state
-      setPendingTransactions(pendingTransactions.filter(t => t.id !== transaction.id));
-      setSuccessMessage("Expired transaction executed successfully");
+      // Remove from local state if component is still mounted
+      if (isMounted.current) {
+        setPendingTransactions(pendingTransactions.filter(t => t.id !== transaction.id));
+        setSuccessMessage("Expired transaction executed successfully");
+      }
       
-      // Reload after short delay
-      setTimeout(() => loadAllTransactions(), 2000);
-      
-      // Clear success message
-      setTimeout(() => setSuccessMessage(''), 3000);
+      // Reload after short delay only if component is still mounted
+      if (isMounted.current) {
+        setTimeout(() => {
+          if (isMounted.current) {
+            loadAllTransactions();
+          }
+        }, 2000);
+        
+        // Clear success message
+        setTimeout(() => {
+          if (isMounted.current) {
+            setSuccessMessage('');
+          }
+        }, 3000);
+      }
     } catch (error) {
       console.error("Error executing expired transaction:", error);
-      setErrorMessage(error.message || 'Failed to execute expired transaction');
+      if (isMounted.current) {
+        setErrorMessage(error.message || 'Failed to execute expired transaction');
+      }
     } finally {
-      setTxLoading(false);
+      if (isMounted.current) {
+        setTxLoading(false);
+      }
     }
   };
 
   // Queue a proposal
   const queueProposal = async (proposalId) => {
-    setErrorMessage('');
-    setSuccessMessage('');
-    setTxLoading(true);
+    if (isMounted.current) {
+      setErrorMessage('');
+      setSuccessMessage('');
+      setTxLoading(true);
+    }
     
     try {
       const provider = new ethers.providers.Web3Provider(window.ethereum);
@@ -1324,18 +1435,30 @@ const PendingTransactionsTab = ({ contracts, account }) => {
       const tx = await governance.queueProposal(proposalId, { gasLimit, gasPrice });
       await tx.wait();
       
-      setSuccessMessage(`Proposal #${proposalId} queued successfully`);
+      if (isMounted.current) {
+        setSuccessMessage(`Proposal #${proposalId} queued successfully`);
+      }
       
-      // Reload transactions
-      loadAllTransactions();
+      // Reload transactions if component is still mounted
+      if (isMounted.current) {
+        loadAllTransactions();
       
-      // Clear success message
-      setTimeout(() => setSuccessMessage(''), 3000);
+        // Clear success message
+        setTimeout(() => {
+          if (isMounted.current) {
+            setSuccessMessage('');
+          }
+        }, 3000);
+      }
     } catch (error) {
       console.error("Error queueing proposal:", error);
-      setErrorMessage(error.message || 'Failed to queue proposal');
+      if (isMounted.current) {
+        setErrorMessage(error.message || 'Failed to queue proposal');
+      }
     } finally {
-      setTxLoading(false);
+      if (isMounted.current) {
+        setTxLoading(false);
+      }
     }
   };
 

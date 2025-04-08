@@ -508,7 +508,7 @@ const JustDAOLandingPage = ({ onNavigateToMain }) => {
         </button>
       </div>
       <div className="p-6 overflow-y-auto flex-grow text-gray-800 dark:text-gray-200 space-y-4">
-  <p className="text-lg font-extrabold text-red-700 dark:text-red-400">
+  <p className="text-lg font-extrabold text-red-700 dark:text-red-500">
     <strong>JustDAO</strong> is not a law firm and does not provide legal services directly.
   </p>
 
@@ -522,7 +522,7 @@ const JustDAOLandingPage = ({ onNavigateToMain }) => {
 
   <ol className="list-decimal pl-5 space-y-3 text-sm md:text-base">
     <li>
-      <span className="font-bold text-red-700 dark:text-red-400">
+      <span className="font-bold text-red-700 dark:text-red-500">
         JustDAO does not establish an attorney-client relationship with token holders, voters, or other governance participants.
       </span>
     </li>
@@ -539,7 +539,7 @@ const JustDAOLandingPage = ({ onNavigateToMain }) => {
       The DAO is structured to maintain a clear separation between governance decisions and the independent legal work performed by service providers.
     </li>
     <li>
-      <span className="font-semibold text-red-700 dark:text-red-400">
+      <span className="font-semibold text-red-700 dark:text-red-500">
         JustDAO provides no warranties or guarantees
       </span> regarding the quality, accuracy, or outcomes of services offered by funded providers.
     </li>
@@ -552,7 +552,7 @@ const JustDAOLandingPage = ({ onNavigateToMain }) => {
   </ol>
 
   <p className="font-medium text-sm md:text-base">
-    By participating in <strong className="text-indigo-600 dark:text-indigo-400">JustDAO</strong>, you acknowledge and accept these risks and limitations. If you require legal advice regarding your personal situation, please consult directly with a <span className="font-bold text-red-700 dark:text-red-400">licensed attorney</span>.
+    By participating in <strong className="text-indigo-600 dark:text-indigo-400">JustDAO</strong>, you acknowledge and accept these risks and limitations. If you require legal advice regarding your personal situation, please consult directly with a <span className="font-bold text-red-700 dark:text-red-500">licensed attorney</span>.
   </p>
 </div>
 
@@ -654,11 +654,10 @@ const JustDAOLandingPage = ({ onNavigateToMain }) => {
             {/* Mission Tab */}
             {activeTab === 'mission' && (
               <div className="space-y-8">
-              <div>
-                <h2 className="text-3xl font-bold text-gray-900 dark:text-white">Our Mission</h2>
-                <p className="mt-4 text-lg text-gray-600 dark:text-gray-300">
-                JustDAO's mission is to enhance access to legal aid through decentralized governance, enabling token holders to directly fund and support initiatives that make a meaningful impact.                  </p>
-              </div>
+              <div className="mt-4">
+                <p className="text-gray-600 dark:text-gray-300 mb-4 text-base leading-relaxed">
+    JustDAO seeks to pioneer a transformative approach to legal aid, leveraging blockchain technology to democratize access to justice. Empowering individuals through community-driven funding and governance, we aim to break down barriers that prevent marginalized communities from receiving critical legal support.
+</p>                  </div>
               
               <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
                 <div className="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg border border-gray-100 dark:border-gray-700">
@@ -860,7 +859,7 @@ const JustDAOLandingPage = ({ onNavigateToMain }) => {
                             <dd className="mt-1 text-sm text-gray-900 dark:text-white sm:mt-0 sm:col-span-2 relative">
                               <div className="flex flex-col space-y-1">
                                 <div className="flex items-center">
-                                  <span className="font-mono text-xs sm:text-sm break-all">0x051B5e728BD7d77707DE7e7Eb41D32fCd7Eb3df1</span>
+                                  <span className="font-mono text-xs sm:text-sm break-all">0xdbEbf634B4Ba8b8ba8DB670ef666dee3C69d0E39</span>
                                   {/* Force the status to green by using hardcoded bg-green-500 instead of conditional styling */}
                                   <span className="ml-2 inline-flex h-2 w-2 rounded-full bg-green-500"></span>
                                 </div>
@@ -1307,96 +1306,136 @@ const JustDAOLandingPage = ({ onNavigateToMain }) => {
                 <div>
                   <h2 className="text-3xl font-bold text-gray-900 dark:text-white">JST Token: <span className="text-indigo-600 dark:text-indigo-300">Democratizing Legal Access</span></h2>
                   <p className="mt-4 text-lg text-gray-600 dark:text-gray-300">
-                    The <strong>JustToken (JST)</strong> is more than a governance token—it's a <em className="text-gray-700 dark:text-gray-300">catalyst for systemic legal empowerment</em>. By participating in the JustDAO ecosystem, token holders directly contribute to breaking down barriers in legal aid, enabling community-driven justice through transparent and accountable mechanisms.
+                    The <strong>JustToken (JST)</strong> is more than a governance token—it <em className="text-gray-700 dark:text-gray-300">drives legal empowerment</em>. By participating in the JustDAO ecosystem, token holders directly contribute to breaking down barriers in legal aid, enabling community-driven justice through accountable mechanisms.
                   </p>
                 </div>
-                
-                {/* Mint JST section */}
-                <div className="bg-gradient-to-r from-indigo-700 to-purple-700 dark:from-indigo-900 dark:to-purple-900 rounded-lg shadow-lg overflow-hidden">
-                  <div className="px-6 py-8 text-gray-100 dark:text-gray-200">
-                    <div className="flex items-center space-x-3">
-                      <CoinsIcon className="h-10 w-10 text-yellow-300" />
-                      <h3 className="text-2xl font-bold"><em>Democratize Justice, One Token at a Time</em></h3>
-                    </div>
-                    <div className="mt-4 space-y-4">
-                      <p className="text-lg">
-                        <strong>Instant Impact:</strong> Send ETH directly to our token contract and instantly mint JST tokens. Each contribution becomes a <em>powerful vehicle for legal aid</em>, supporting individuals who lack traditional access to justice.
-                      </p>
-                      <div className="pt-4 border-t border-white/30">
-                        <h4 className="font-semibold mb-2 flex items-center">
-                          <svg className="h-5 w-5 mr-2 text-yellow-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                          </svg>
-                          Transparent Minting Process:
-                        </h4>
-                        <ul className="ml-6 list-disc space-y-1 text-indigo-100">
-                          <li><strong>Direct Contribution:</strong> Send ETH to our dedicated token contract</li>
-                          <li><strong>Instant Conversion:</strong> Receive JST tokens at a transparent 1:1 ratio</li>
-                          <li><strong>Zero Overhead:</strong> No gas-intensive processes, just pure impact</li>
-                          <li><strong>Immediate Support:</strong> Your contribution directly funds <em>critical legal aid initiatives</em></li>
-                        </ul>
-                      </div>
-                      <div className="pt-2">
-                        <div className="font-mono text-sm bg-indigo-900/50 p-2 rounded-md flex items-center justify-between">
-                          <div className="flex items-center">
-                            <span className="mr-2">Contract:</span>
-                            <span className="text-yellow-200 mr-2">0x051B5e728BD7d77707DE7e7Eb41D32fCd7Eb3df1</span>
-                            <button className="bg-indigo-800 p-1 rounded hover:bg-indigo-700">
-                              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                              </svg>
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="bg-indigo-800 dark:bg-indigo-900 px-6 py-4">
-                    <div className="flex justify-between items-center text-white">
-                      <span className="text-sm px-2 py-1 bg-indigo-600 rounded-full">1 ETH = 1 JST</span>
-                    </div>
-                  </div>
-                </div>
-                
+           {/* Mint JST section */}
+<div className="bg-gradient-to-r from-indigo-700 to-purple-700 dark:from-indigo-900 dark:to-purple-900 rounded-lg shadow-lg overflow-hidden">
+  <div className="px-6 py-8 text-gray-100 dark:text-gray-200">
+    <div className="flex items-center space-x-3">
+      <CoinsIcon className="h-10 w-10 text-yellow-300" />
+      <h3 className="text-2xl font-bold"><em>Democratize Justice, One Token at a Time</em></h3>
+    </div>
+    <div className="mt-4 space-y-4">
+      <p className="text-lg">
+        <strong>Instant Impact:</strong> Send ETH directly to our token contract and instantly mint JST tokens. Each contribution becomes a <em>catalyst for positive change</em>, supporting individuals who lack traditional access to legal resources.
+      </p>
+      <div className="pt-4 border-t border-white/30">
+        <h4 className="font-semibold mb-2 flex items-center">
+          <svg className="h-5 w-5 mr-2 text-yellow-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+          Transparent Minting Process:
+        </h4>
+        <ul className="ml-6 list-disc space-y-1 text-indigo-100">
+          <li><strong>Direct Contribution:</strong> Send any amount of ETH to our token contract</li>
+          <li><strong>Instant Conversion:</strong> Receive JST tokens at a 1:1 ratio instantly</li>
+          <li><strong>Zero Overhead:</strong> No gas-intensive minting process, just a simple transfer</li>
+          <li> <strong>Immediate Support:</strong> Your contribution immediately helps fund legal aid initiatives</li>
+        </ul>
+      </div>
+      <div className="pt-2">
+        <div className="font-mono text-sm bg-indigo-900/50 p-2 rounded-md inline-flex items-center">
+          <div className="flex items-center">
+            <span className="mr-2">Contract:</span>
+            <span className="text-yellow-200 mr-2">0xdbEbf634B4Ba8b8ba8DB670ef666dee3C69d0E39</span>
+            <button 
+              onClick={(e) => {
+                const copyContract = (address) => {
+                  navigator.clipboard.writeText(address)
+                    .then(() => {
+                      const button = e.currentTarget;
+                      const originalIcon = button.querySelector('svg');
+                      const checkmarkIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+                      checkmarkIcon.setAttribute('class', 'h-4 w-4 text-yellow-300');
+                      checkmarkIcon.setAttribute('fill', 'none');
+                      checkmarkIcon.setAttribute('viewBox', '0 0 24 24');
+                      checkmarkIcon.setAttribute('stroke', 'currentColor');
+                      
+                      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                      path.setAttribute('strokeLinecap', 'round');
+                      path.setAttribute('strokeLinejoin', 'round');
+                      path.setAttribute('strokeWidth', '2');
+                      path.setAttribute('d', 'M5 13l4 4L19 7');
+                      
+                      checkmarkIcon.appendChild(path);
+                      
+                      originalIcon.replaceWith(checkmarkIcon);
+                      
+                      setTimeout(() => {
+                        checkmarkIcon.replaceWith(originalIcon);
+                      }, 2000);
+                    })
+                    .catch(err => {
+                      console.error('Failed to copy: ', err);
+                    });
+                };
+
+                copyContract('0xdbEbf634B4Ba8b8ba8DB670ef666dee3C69d0E39');
+              }}
+              className="bg-indigo-800 p-1 rounded hover:bg-indigo-700"
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div className="bg-indigo-800 dark:bg-indigo-900 px-6 py-4">
+    <div className="flex justify-between items-center text-white">
+      <span className="text-sm px-2 py-1 bg-indigo-600 rounded-full">1 ETH = 1 JST</span>
+    </div>
+  </div>
+</div>
                 {/* Existing token supply and delegation sections remain unchanged */}
-                
                 <div className="bg-white dark:bg-gray-800 rounded-lg p-6 border border-gray-200 dark:border-gray-700 shadow-sm">
-                  <h3 className="text-xl font-semibold text-gray-900 dark:text-white">Token <strong className="text-indigo-600 dark:text-indigo-400">Ecosystem Utilities</strong></h3>
-                  <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div className="bg-gray-50 dark:bg-gray-900 rounded-md p-4 border border-gray-200 dark:border-gray-700">
-                      <h4 className="font-medium text-gray-800 dark:text-gray-200 text-lg">
-                        <span className="text-gray-800 dark:text-gray-200 font-bold"><b>Collective Governance</b></span>
-                      </h4>
-                      <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
-                        Participate in <strong className="text-indigo-600 dark:text-indigo-400">proposal voting</strong> to directly influence fund allocation and DAO operations, embodying true decentralized decision-making.
-                      </p>
-                    </div>
-                    <div className="bg-gray-50 dark:bg-gray-900 rounded-md p-4 border border-gray-200 dark:border-gray-700">
-                      <h4 className="font-medium text-gray-800 dark:text-gray-200 text-lg">
-                        <span className="text-gray-800 dark:text-gray-200"><b>Proposal Creation</b></span>
-                      </h4>
-                      <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
-                        <em className="text-gray-700 dark:text-gray-300">Engage with systemic change</em> by creating proposals to fund legal aid initiatives with a stake of <strong className="text-indigo-600 dark:text-indigo-400">0.25 JST</strong>.
-                      </p>
-                    </div>
-                    <div className="bg-gray-50 dark:bg-gray-900 rounded-md p-4 border border-gray-200 dark:border-gray-700">
-                      <h4 className="font-medium text-gray-800 dark:text-gray-200 text-lg">
-                        <span className="text-gray-800 dark:text-gray-200 font-bold"><b>Community Representation</b></span>
-                      </h4>
-                      <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
-                        Delegate your <strong className="text-indigo-600 dark:text-indigo-400">voting power</strong> to active community representatives who can advocate on your behalf.
-                      </p>
-                    </div>
-                    <div className="bg-gray-50 dark:bg-gray-900 rounded-md p-4 border border-gray-200 dark:border-gray-700">
-                      <h4 className="font-medium text-gray-800 dark:text-gray-200 text-lg">
-                        <span className="text-gray-800 dark:text-gray-200 font-bold"><b>Direct Impact</b></span>
-                      </h4>
-                      <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
-                        Beyond funding—<strong className="text-indigo-600 dark:text-indigo-400">empowering individuals</strong> and communities through a transparent, accountable legal aid ecosystem.
-                      </p>
-                    </div>
-                  </div>
-                </div>
+ <h3 className="text-xl font-semibold text-gray-900 dark:text-white">Token <strong className="text-indigo-600 dark:text-indigo-400">Ecosystem Utilities</strong></h3>
+ <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+   <div className="bg-gray-50 dark:bg-gray-900 rounded-md p-4 border border-gray-200 dark:border-gray-700">
+     <h4 className="font-medium text-gray-800 dark:text-gray-200 text-lg">
+       <span className="text-gray-800 dark:text-gray-200 font-bold"><b>Governance Mechanics</b></span>
+     </h4>
+     <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
+       Use <strong className="text-indigo-600 dark:text-indigo-400">multi-tiered voting</strong> to participate in legal aid strategy and case selection. 
+       <br className="hidden sm:block"/>
+       Proposals require a minimal stake to ensure meaningful community engagement.
+     </p>
+   </div>
+   <div className="bg-gray-50 dark:bg-gray-900 rounded-md p-4 border border-gray-200 dark:border-gray-700">
+     <h4 className="font-medium text-gray-800 dark:text-gray-200 text-lg">
+       <span className="text-gray-800 dark:text-gray-200"><b>Expert Delegation</b></span>
+     </h4>
+     <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
+       <em className="text-indigo-600 dark:text-indigo-400">Delegate voting power</em> to legal experts with specialized knowledge. 
+       <br className="hidden sm:block"/>
+       Your tokens remain in your wallet while amplifying impact through strategic representation.
+     </p>
+   </div>
+   <div className="bg-gray-50 dark:bg-gray-900 rounded-md p-4 border border-gray-200 dark:border-gray-700">
+     <h4 className="font-medium text-gray-800 dark:text-gray-200 text-lg">
+       <span className="text-gray-800 dark:text-gray-200 font-bold"><b>Community Voice</b></span>
+     </h4>
+     <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
+       Empower <strong className="text-indigo-600 dark:text-indigo-400">community representatives</strong> to drive legal innovations. 
+       <br className="hidden sm:block"/>
+       On-chain tracking ensures accountability for community-driven inititives.
+     </p>
+   </div>
+   <div className="bg-gray-50 dark:bg-gray-900 rounded-md p-4 border border-gray-200 dark:border-gray-700">
+     <h4 className="font-medium text-gray-800 dark:text-gray-200 text-lg">
+       <span className="text-gray-800 dark:text-gray-200 font-bold"><b>Legal Empowerment</b></span>
+     </h4>
+     <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
+       Transform legal access through <strong className="text-indigo-600 dark:text-indigo-400">decentralized governance</strong>. 
+       <br className="hidden sm:block"/>
+       Each token represents a step towards more equitable and accessible legal support.
+     </p>
+   </div>
+ </div>
+</div>
               </div>
             )}
             {/* Governance Tab */}
@@ -2131,26 +2170,7 @@ const JustDAOLandingPage = ({ onNavigateToMain }) => {
         </div>
       </footer>
 
-      {/* Add a bit of CSS for the pulse animation */}
-      <style jsx>{`
-        .pulse-animation {
-          animation: pulse 2s infinite;
-        }
-        @keyframes pulse {
-          0% {
-            transform: scale(0.95);
-            box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.7);
-          }
-          70% {
-            transform: scale(1);
-            box-shadow: 0 0 0 6px rgba(74, 222, 128, 0);
-          }
-          100% {
-            transform: scale(0.95);
-            box-shadow: 0 0 0 0 rgba(74, 222, 128, 0);
-          }
-        }
-      `}</style>
+      
     </div>
   );
 };

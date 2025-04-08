@@ -8,21 +8,6 @@ import { ethers } from 'ethers';
 const manualVoteOverrides = {
   // Replace these IDs with your actual proposal IDs that need fixing
   // Format: 'proposalId': { voteData }
-  // Example:
-  // '1': {
-  //   yesVotes: "1.0",
-  //   noVotes: "0.0",
-  //   abstainVotes: "0.0",
-  //   totalVoters: 1,
-  //   yesPercentage: 100,
-  //   noPercentage: 0,
-  //   abstainPercentage: 0,
-  //   yesVotingPower: "1.0",
-  //   noVotingPower: "0.0",
-  //   abstainVotingPower: "0.0",
-  //   totalVotingPower: "1.0",
-  //   source: 'manual-override'
-  // },
 };
 
 // Create the context
@@ -143,7 +128,7 @@ export const BlockchainDataProvider = ({ children }) => {
     }
   }, [contractsReady, contracts, getTokenBalance]);
 
-  // Enhanced getVotingPower function to fetch directly from blockchain
+  // FIX: Enhanced getVotingPower function to fetch directly from blockchain and handle delegation correctly
   const getVotingPower = useCallback(async (address) => {
     if (!address || !contractsReady || !contracts.justToken) {
       return "0";
@@ -156,7 +141,20 @@ export const BlockchainDataProvider = ({ children }) => {
       // Get on-chain voting power directly from the contract
       const votingPower = await contracts.justToken.getEffectiveVotingPower(address, snapshotId);
       
-      // Format and return
+      // Get delegation info to check if user has delegated
+      const delegationInfo = await getDelegationInfo(address);
+      
+      // Check if the user has delegated to someone else (not self or zero address)
+      const isSelfDelegated = delegationInfo.currentDelegate === address || 
+                              delegationInfo.currentDelegate === ethers.constants.AddressZero;
+      
+      // If user has delegated to someone else, voting power should be 0
+      if (!isSelfDelegated) {
+        console.log(`User ${address} has delegated to ${delegationInfo.currentDelegate}, voting power is 0`);
+        return "0";
+      }
+      
+      // Format and return voting power for self-delegated users
       return ethers.utils.formatEther(votingPower);
     } catch (error) {
       console.error("Error getting on-chain voting power:", error);
@@ -169,19 +167,24 @@ export const BlockchainDataProvider = ({ children }) => {
         // Get user balance
         const balance = await getTokenBalance(address);
         
+        // Check if self-delegated
+        const isSelfDelegated = 
+          delegationInfo.currentDelegate === address || 
+          delegationInfo.currentDelegate === ethers.constants.AddressZero ||
+          delegationInfo.currentDelegate === null;
+        
         // If self-delegated, add delegated tokens to voting power
         // Otherwise, voting power is 0 (delegated away)
         let votingPower = "0";
         
-        if (delegationInfo.currentDelegate === address || 
-            delegationInfo.currentDelegate === ethers.constants.AddressZero ||
-            delegationInfo.currentDelegate === null) {
+        if (isSelfDelegated) {
           // Self-delegated - voting power is own balance + delegated to you
           const ownBalance = ethers.utils.parseEther(balance);
           const delegated = ethers.utils.parseEther(delegationInfo.delegatedToYou || "0");
           votingPower = ethers.utils.formatEther(ownBalance.add(delegated));
         } else {
           console.log(`User ${address} has delegated to ${delegationInfo.currentDelegate}, voting power is 0`);
+          // Keep voting power as 0 since the user has delegated away
         }
         
         return votingPower;
@@ -191,6 +194,133 @@ export const BlockchainDataProvider = ({ children }) => {
       }
     }
   }, [contractsReady, contracts, getDelegationInfo, getTokenBalance]);
+
+  // ENHANCED: Improved function to handle getting all delegates in a transitive chain
+  const getTransitiveDelegationChain = useCallback(async (startAddress, maxDepth = 10) => {
+    if (!startAddress || !contractsReady || !contracts.justToken) {
+      return [];
+    }
+    
+    try {
+      // Initialize chain and addresses we've seen to avoid cycles
+      const chain = [];
+      const seen = new Set();
+      seen.add(startAddress.toLowerCase());
+      
+      let currentAddress = startAddress;
+      let depth = 0;
+      
+      // Follow the delegation chain
+      while (depth < maxDepth) {
+        console.log(`Checking delegate for address: ${currentAddress} at depth ${depth}`);
+        const delegate = await contracts.justToken.getDelegate(currentAddress);
+        const delegateNormalized = delegate.toLowerCase();
+        
+        // If zero address or self-delegation, chain ends
+        if (delegate === ethers.constants.AddressZero || 
+            delegateNormalized === currentAddress.toLowerCase()) {
+          console.log(`Chain ends at ${currentAddress} (self-delegated or zero address)`);
+          break;
+        }
+        
+        // Get balance for this step to track voting power flow
+        const balance = await getTokenBalance(currentAddress);
+        
+        // Record this delegation step with balance information
+        chain.push({
+          from: currentAddress,
+          to: delegate,
+          fromBalance: balance,
+          depth: depth
+        });
+        
+        console.log(`Delegation link found: ${currentAddress} -> ${delegate} with balance ${balance}`);
+        
+        // Prevent cycles - if we've seen this address before, stop
+        if (seen.has(delegateNormalized)) {
+          console.log(`Delegation cycle detected at depth ${depth}:`, delegate);
+          break;
+        }
+        
+        // Mark as seen and continue to the next delegate
+        seen.add(delegateNormalized);
+        currentAddress = delegate;
+        depth++;
+      }
+      
+      console.log(`Complete delegation chain for ${startAddress}:`, chain);
+      return chain;
+    } catch (error) {
+      console.error("Error getting transitive delegation chain:", error);
+      return [];
+    }
+  }, [contractsReady, contracts, getTokenBalance]);
+  
+  // NEW: Function to calculate the total transitive voting power flowing through an address
+  const calculateTransitiveVotingPower = useCallback(async (address) => {
+    if (!address || !contractsReady || !contracts.justToken) {
+      return "0";
+    }
+    
+    try {
+      // First, check if the address is self-delegated
+      const delegate = await contracts.justToken.getDelegate(address);
+      const isSelfDelegated = 
+        delegate === address || 
+        delegate === ethers.constants.AddressZero;
+      
+      // If not self-delegated, no voting power flows through this address
+      if (!isSelfDelegated) {
+        console.log(`Address ${address} is delegated to ${delegate}, no transitive power flows through`);
+        return "0";
+      }
+      
+      // Get direct delegators and their balances
+      const delegatorAddresses = await contracts.justToken.getDelegatorsOf(address);
+      let totalTransitiveVotingPower = ethers.BigNumber.from(0);
+      
+      // Get own balance
+      const ownBalance = await contracts.justToken.balanceOf(address);
+      totalTransitiveVotingPower = totalTransitiveVotingPower.add(ownBalance);
+      
+      console.log(`Own balance of ${address}: ${ethers.utils.formatEther(ownBalance)}`);
+      
+      // For each delegator, check if they're receiving delegations themselves (transitive flow)
+      for (const delegator of delegatorAddresses) {
+        const delegatorBalance = await contracts.justToken.balanceOf(delegator);
+        
+        // Include direct delegation
+        totalTransitiveVotingPower = totalTransitiveVotingPower.add(delegatorBalance);
+        console.log(`Direct delegator ${delegator} adds ${ethers.utils.formatEther(delegatorBalance)}`);
+        
+        // Check if this delegator receives delegations (transitive)
+        const subDelegators = await contracts.justToken.getDelegatorsOf(delegator);
+        
+        // Only consider delegations from self-delegated accounts
+        for (const subDelegator of subDelegators) {
+          const subDelegate = await contracts.justToken.getDelegate(subDelegator);
+          
+          // Skip if the sub-delegator is delegated to someone other than the delegator
+          // This prevents counting voting power that doesn't flow through the proper chain
+          if (subDelegate.toLowerCase() !== delegator.toLowerCase()) {
+            console.log(`Sub-delegator ${subDelegator} is delegated to ${subDelegate}, not to ${delegator}`);
+            continue;
+          }
+          
+          const subDelegatorBalance = await contracts.justToken.balanceOf(subDelegator);
+          totalTransitiveVotingPower = totalTransitiveVotingPower.add(subDelegatorBalance);
+          console.log(`Transitive delegator ${subDelegator} -> ${delegator} -> ${address} adds ${ethers.utils.formatEther(subDelegatorBalance)}`);
+        }
+      }
+      
+      const totalPower = ethers.utils.formatEther(totalTransitiveVotingPower);
+      console.log(`Total transitive voting power for ${address}: ${totalPower}`);
+      return totalPower;
+    } catch (error) {
+      console.error("Error calculating transitive voting power:", error);
+      return "0";
+    }
+  }, [contractsReady, contracts]);
 
   // New function to get detailed voting power information
   const getVotingPowerDetails = useCallback(async (address) => {
@@ -219,6 +349,10 @@ export const BlockchainDataProvider = ({ children }) => {
       // Get on-chain voting power
       const votingPower = await contracts.justToken.getEffectiveVotingPower(address, snapshotId);
       
+      // Get the transitive delegation chain to check if power flows correctly
+      const delegationChain = await getTransitiveDelegationChain(address);
+      console.log("Delegation chain for", address, ":", delegationChain);
+      
       // Check if self-delegated
       const isSelfDelegated = 
         delegationInfo.currentDelegate === address || 
@@ -230,13 +364,18 @@ export const BlockchainDataProvider = ({ children }) => {
         delegatedAway = balance; // if delegated, all tokens are delegated away
       }
       
+      // Adjusted voting power - if not self-delegated, should be 0
+      const adjustedVotingPower = isSelfDelegated ? 
+        ethers.utils.formatEther(votingPower) : "0";
+      
       return {
-        onChainVotingPower: ethers.utils.formatEther(votingPower),
+        onChainVotingPower: adjustedVotingPower,
         ownBalance: balance,
         delegatedToYou: delegationInfo.delegatedToYou,
         delegatedAway,
         currentDelegate: delegationInfo.currentDelegate,
         isSelfDelegated,
+        delegationChain,
         source: "blockchain"
       };
     } catch (error) {
@@ -251,7 +390,7 @@ export const BlockchainDataProvider = ({ children }) => {
         source: "error"
       };
     }
-  }, [contractsReady, contracts, getDelegationInfo, getTokenBalance]);
+  }, [contractsReady, contracts, getDelegationInfo, getTokenBalance, getTransitiveDelegationChain]);
 
   // Get user's voted proposals directly from blockchain events
   const getVotedProposals = useCallback(async () => {
@@ -677,10 +816,10 @@ export const BlockchainDataProvider = ({ children }) => {
       }
       
       // Try different methods to get the most reliable data
-      // Method 1: Direct contract call to getProposalVotes if available
+      // Method 1: Direct contract call to getProposalVoteTotalss if available
       try {
         const [yesVotes, noVotes, abstainVotes, totalVotingPower, totalVotersCount] = 
-          await contracts.governance.getProposalVotes(proposalId);
+          await contracts.governance.getProposalVoteTotalss(proposalId);
         
         // Get quorum value for comparison
         const govParams = await contracts.governance.govParams();
@@ -723,7 +862,7 @@ export const BlockchainDataProvider = ({ children }) => {
           totalVotingPower: formattedTotalVotes
         };
       } catch (directError) {
-        console.warn(`Direct getProposalVotes call failed for proposal ${proposalId}:`, directError);
+        console.warn(`Direct getProposalVoteTotalss call failed for proposal ${proposalId}:`, directError);
       }
       
       // Continue with fallbacks as in the original code...
@@ -1077,12 +1216,12 @@ export const BlockchainDataProvider = ({ children }) => {
     }
   }, [contractsReady, isConnected, contracts, provider]);
 
-  // Enhanced fetchUserData function that includes on-chain voting power
-  const fetchUserData = useCallback(async () => {
+  // FIX: Enhanced fetchUserData function to properly handle delegation status and unmounting
+  const fetchUserData = useCallback(async (isMountedCheck = () => true) => {
     if (!contractsReady || !isConnected || !account) return;
     
     try {
-      setIsLoading(true);
+      if (isMountedCheck()) setIsLoading(true);
       
       // Get balance
       const balance = await getTokenBalance(account);
@@ -1090,12 +1229,28 @@ export const BlockchainDataProvider = ({ children }) => {
       // Get delegation info
       const delegationInfo = await getDelegationInfo(account);
       
+      // Get the transitive delegation chain
+      const delegationChain = await getTransitiveDelegationChain(account);
+      console.log("User's delegation chain:", delegationChain);
+      
       // Get on-chain voting power directly from contract
       let onChainVotingPower = "0";
       try {
-        const snapshotId = await contracts.justToken.getCurrentSnapshotId();
-        const votingPowerBN = await contracts.justToken.getEffectiveVotingPower(account, snapshotId);
-        onChainVotingPower = ethers.utils.formatEther(votingPowerBN);
+        // Check if the user is self-delegated first
+        const isSelfDelegated = 
+          delegationInfo.currentDelegate === account || 
+          delegationInfo.currentDelegate === ethers.constants.AddressZero;
+          
+        if (isSelfDelegated) {
+          // Only get effective voting power if self-delegated
+          const snapshotId = await contracts.justToken.getCurrentSnapshotId();
+          const votingPowerBN = await contracts.justToken.getEffectiveVotingPower(account, snapshotId);
+          onChainVotingPower = ethers.utils.formatEther(votingPowerBN);
+        } else {
+          // If delegated to someone else, voting power is 0
+          console.log(`User ${account} has delegated to ${delegationInfo.currentDelegate}, voting power is 0`);
+          onChainVotingPower = "0";
+        }
       } catch (vpError) {
         console.error("Error getting on-chain voting power:", vpError);
         // Fall back to calculated voting power
@@ -1105,6 +1260,9 @@ export const BlockchainDataProvider = ({ children }) => {
           const ownBalanceBN = ethers.utils.parseEther(balance);
           const delegatedBN = ethers.utils.parseEther(delegationInfo.delegatedToYou);
           onChainVotingPower = ethers.utils.formatEther(ownBalanceBN.add(delegatedBN));
+        } else {
+          // If delegated to someone else, voting power is 0
+          onChainVotingPower = "0";
         }
       }
       
@@ -1114,6 +1272,7 @@ export const BlockchainDataProvider = ({ children }) => {
         delegationInfo.currentDelegate === ethers.constants.AddressZero ||
         !delegationInfo.currentDelegate;
       
+      // FIX: If not self-delegated, voting power should be 0
       const localVotingPower = isSelfDelegated ? 
         (parseFloat(balance) + parseFloat(delegationInfo.delegatedToYou)).toString() : 
         "0";
@@ -1121,25 +1280,28 @@ export const BlockchainDataProvider = ({ children }) => {
       // Get voted proposals
       const votedProposals = await getVotedProposals();
       
-      // Update user data state
-      setUserData({
-        address: account,
-        balance,
-        votingPower: localVotingPower,      // Local calculation
-        onChainVotingPower,                 // Direct from contract
-        delegate: delegationInfo.currentDelegate,
-        lockedTokens: delegationInfo.lockedTokens,
-        delegatedToYou: delegationInfo.delegatedToYou,
-        delegators: delegationInfo.delegators,
-        hasVotedProposals: votedProposals,
-        isSelfDelegated
-      });
+      // Update user data state only if component is still mounted
+      if (isMountedCheck()) {
+        setUserData({
+          address: account,
+          balance,
+          votingPower: localVotingPower,      // Local calculation
+          onChainVotingPower,                 // Direct from contract
+          delegate: delegationInfo.currentDelegate,
+          lockedTokens: delegationInfo.lockedTokens,
+          delegatedToYou: delegationInfo.delegatedToYou,
+          delegators: delegationInfo.delegators,
+          hasVotedProposals: votedProposals,
+          isSelfDelegated,
+          delegationChain // Add the delegation chain for transitive delegation tracking
+        });
+      }
       
     } catch (error) {
       console.error("Error fetching user data:", error);
-      setError("Failed to load user data from blockchain");
+      if (isMountedCheck()) setError("Failed to load user data from blockchain");
     } finally {
-      setIsLoading(false);
+      if (isMountedCheck()) setIsLoading(false);
     }
   }, [
     contractsReady, 
@@ -1148,6 +1310,7 @@ export const BlockchainDataProvider = ({ children }) => {
     getTokenBalance, 
     getDelegationInfo, 
     getVotedProposals,
+    getTransitiveDelegationChain,
     contracts
   ]);
 
@@ -1156,36 +1319,43 @@ export const BlockchainDataProvider = ({ children }) => {
     setManualRefreshCounter(prev => prev + 1);
   }, []);
 
-  // Load all data when connected and contracts ready
+  // FIX: Load all data when connected and contracts ready with proper cleanup
   useEffect(() => {
+    let isMounted = true; // Flag to track if component is mounted
+    
     if (isConnected && contractsReady) {
       console.log("Loading blockchain data...");
       
       // Load all data with slight staggered timing to avoid overwhelming RPC
       const loadData = async () => {
         try {
-          setIsLoading(true);
+          if (isMounted) setIsLoading(true);
           
-          // Fetch user data first
-          await fetchUserData();
+          // Fetch user data first - passing isMounted check function
+          if (isMounted) await fetchUserData(() => isMounted);
           
           // Small delay
           await new Promise(resolve => setTimeout(resolve, 100));
           
-          // Fetch DAO stats
+          // Fetch DAO stats and only update state if still mounted
           const stats = await fetchDAOStats();
-          setDaoStats(stats);
+          if (isMounted) setDaoStats(stats);
           
         } catch (error) {
           console.error("Error loading blockchain data:", error);
-          setError("Failed to load data from blockchain");
+          if (isMounted) setError("Failed to load data from blockchain");
         } finally {
-          setIsLoading(false);
+          if (isMounted) setIsLoading(false);
         }
       };
       
       loadData();
     }
+    
+    // Cleanup function to prevent state updates after unmounting
+    return () => {
+      isMounted = false;
+    };
   }, [
     isConnected, 
     contractsReady, 
@@ -1196,7 +1366,7 @@ export const BlockchainDataProvider = ({ children }) => {
     account
   ]);
 
-  // Context value
+  // Context value with added transitive delegation functions
   const value = {
     userData,
     daoStats,
@@ -1205,9 +1375,11 @@ export const BlockchainDataProvider = ({ children }) => {
     refreshData,
     hasVoted,
     getVotingPower,
-    getVotingPowerDetails,  // Make sure to expose the new function
+    getVotingPowerDetails,
     getProposalVoteTotals, 
-    getDetailedProposalVotes
+    getDetailedProposalVotes,
+    getTransitiveDelegationChain, // Export the chain function to help with delegation tracking
+    calculateTransitiveVotingPower // NEW: Export the transitive voting power calculation
   };
 
   return (

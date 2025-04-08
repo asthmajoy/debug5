@@ -1,4 +1,4 @@
-// src/hooks/useProposals.js - Updated with direct blockchain loading
+// src/hooks/useProposals.js
 import { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
 import { useWeb3 } from '../contexts/Web3Context';
@@ -106,7 +106,7 @@ export function useProposals() {
     return typeLabels[type] || "Unknown";
   }, []);
 
-  // UPDATED: Fetch proposals directly from blockchain
+  // Updated: Fetch proposals directly from blockchain using the ProposalLoader service
   const fetchProposals = useCallback(async () => {
     if (!isConnected || !contractsReady || !contracts.governance) {
       setLoading(false);
@@ -120,12 +120,12 @@ export function useProposals() {
       
       console.log("Fetching proposals directly from blockchain...");
       
-      // Use our new direct blockchain loading method
+      // Use our direct blockchain loading method from the service
       const proposalData = await loadProposalsFromBlockchain(contracts);
       
       console.log(`Successfully loaded ${proposalData.length} proposals from blockchain`);
       
-      // Process proposals to ensure they have all required fields
+      // Process proposals to ensure they have all required fields with defaults
       const processedProposals = proposalData.map(proposal => {
         // Ensure the proposal has all required fields with defaults
         return {
@@ -263,7 +263,8 @@ export function useProposals() {
           "TxNotReady": "Timelock delay has not passed yet. The proposal is not ready for execution.",
           "TxExpired": "This proposal has expired. The grace period has passed.",
           "TxAlreadyExecuted": "This proposal has already been executed.",
-          "NotAuthorized": "You are not authorized to perform this action."
+          "NotAuthorized": "You are not authorized to perform this action.",
+          "InvPId": "Invalid proposal ID. This proposal does not exist."
         };
         
         return errorMessages[errorName] || `Smart contract error: ${errorName}`;
